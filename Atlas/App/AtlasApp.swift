@@ -1,10 +1,11 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
+import AppIntents
 
 @main
 struct AtlasApp: App {
-    @State private var app = AppModel()
+    @State private var app: AppModel
     @State private var downloads: DownloadManager
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let modelContainer: ModelContainer
@@ -13,8 +14,18 @@ struct AtlasApp: App {
         Self.configureURLCache()
         let container = Self.makeModelContainer()
         modelContainer = container
-        _downloads = State(initialValue: DownloadManager(modelContext: container.mainContext))
+        let appModel = AppModel()
+        let downloadManager = DownloadManager(modelContext: container.mainContext)
+        _app = State(initialValue: appModel)
+        _downloads = State(initialValue: downloadManager)
         configureAudioSession()
+
+        // Wire Siri / App Intents: give intents access to the store and the live
+        // app + download manager, then publish downloads & history to Spotlight.
+        IntentDataStore.container = container
+        AppDependencyManager.shared.add(dependency: appModel)
+        AppDependencyManager.shared.add(dependency: downloadManager)
+        Task { @MainActor in SpotlightIndexer.reindexAll() }
     }
 
     /// Give the shared cache (used by `AsyncImage` and the thumbnail prefetcher)
@@ -39,7 +50,8 @@ struct AtlasApp: App {
     /// data — all of it is re-fetchable, so this can never brick the app.
     private static func makeModelContainer() -> ModelContainer {
         let schema = Schema([SubscribedChannel.self, HistoryEntry.self, Playlist.self,
-                             PlaylistVideo.self, DownloadedVideo.self, Feedback.self])
+                             PlaylistVideo.self, DownloadedVideo.self, Feedback.self,
+                             SearchEntry.self])
         let config = ModelConfiguration(schema: schema)
         do {
             return try ModelContainer(for: schema, configurations: [config])

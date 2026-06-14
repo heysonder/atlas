@@ -1,9 +1,11 @@
 import SwiftUI
+import SwiftData
 import UIKit
 import PipedKit
 
 struct SearchView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.modelContext) private var modelContext
 
     struct Results { var channels: [StreamItem]; var videos: [StreamItem] }
 
@@ -36,6 +38,18 @@ struct SearchView: View {
         .onChange(of: query) { _, newValue in scheduleSuggestions(newValue) }
         .onSubmit(of: .search) { submit() }
         .onChange(of: app.searchRetapToken) { _, _ in focusForFreshSearch() }
+        .onAppear { applyPendingSearch() }
+        .onChange(of: app.pendingSearchQuery) { _, _ in applyPendingSearch() }
+    }
+
+    /// Runs a query handed to us by Siri / the "Search Atlas" intent: fill the
+    /// field, run it, and clear the request so it doesn't re-fire.
+    private func applyPendingSearch() {
+        guard let pending = app.pendingSearchQuery,
+              !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        app.pendingSearchQuery = nil
+        query = pending
+        Task { await runSearch() }
     }
 
     /// Re-tapping the search tab while already here: clear any existing query
@@ -117,6 +131,7 @@ struct SearchView: View {
         suggestions = []
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { phase = .idle; return }
+        recordSearch(q)
         phase = .loading
         do {
             let all = try await app.client.search(q, filter: "all")
@@ -126,6 +141,21 @@ struct SearchView: View {
             await ThumbnailPrefetcher.shared.prefetch(videos.prefix(12).map { Thumbnail.upgraded($0.thumbnail) })
         } catch {
             phase = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Persist the query as a personalization signal: upsert so repeats bump a
+    /// counter + the timestamp rather than duplicating. Mirrors how the player
+    /// records watch history.
+    private func recordSearch(_ raw: String) {
+        let key = SearchEntry.normalize(raw)
+        guard !key.isEmpty else { return }
+        let descriptor = FetchDescriptor<SearchEntry>(predicate: #Predicate { $0.query == key })
+        if let existing = try? modelContext.fetch(descriptor).first {
+            existing.count += 1
+            existing.lastSearchedAt = .now
+        } else {
+            modelContext.insert(SearchEntry(query: key))
         }
     }
 
