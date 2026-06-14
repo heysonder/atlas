@@ -247,6 +247,48 @@ public struct Channel: Codable, Sendable {
     public let relatedStreams: [StreamItem]?
 }
 
+// MARK: - Comments (/comments/{id} and /nextpage/comments/{id})
+
+/// One comment (or, when fetched via a parent's `repliesPage`, one reply).
+/// `commentText` is HTML, like descriptions — render through `plainText`.
+public struct Comment: Codable, Identifiable, Sendable {
+    public let author: String?
+    public let thumbnail: String?       // commenter avatar URL
+    public let commentId: String?
+    public let commentText: String?     // HTML
+    public let commentedTime: String?   // already human-readable, e.g. "2 days ago"
+    public let commentorUrl: String?    // "/channel/ID"
+    public let repliesPage: String?     // nextpage token for this comment's replies
+    public let hearted: Bool?           // hearted by the creator
+    public let likeCount: Int?
+    public let pinned: Bool?
+    public let verified: Bool?          // commenter is verified
+    public let replyCount: Int?
+    public let creatorReplied: Bool?
+
+    /// Stable identity for `ForEach`; `commentId` is reliably present in practice.
+    public var id: String {
+        commentId ?? "\(author ?? "")|\(commentedTime ?? "")|\(likeCount ?? 0)"
+    }
+    /// The commenter's "/channel/ID", when known.
+    public var channelID: String? { PipedID.channel(fromURL: commentorUrl) }
+    /// HTML-stripped comment body.
+    public var plainText: String { HTMLText.plain(commentText ?? "") }
+    /// True when there are replies that can be fetched via `repliesPage`.
+    public var hasReplies: Bool { (replyCount ?? 0) > 0 && repliesPage != nil }
+}
+
+/// The `/comments/{id}` envelope. `disabled` is true when the uploader turned
+/// comments off; `nextpage` paginates further comments (or, for a reply fetch,
+/// further replies).
+public struct CommentsPage: Codable, Sendable {
+    public let comments: [Comment]?
+    public let nextpage: String?
+    public let disabled: Bool?
+    /// Total comment count, or -1 when the instance couldn't determine it.
+    public let commentCount: Int?
+}
+
 // MARK: - Search response (/search)
 public struct SearchResponse: Codable, Sendable {
     public let items: [StreamItem]?

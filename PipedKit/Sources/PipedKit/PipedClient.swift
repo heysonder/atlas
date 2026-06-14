@@ -60,6 +60,18 @@ public struct PipedClient: Sendable {
         try await get("channel/\(id)")
     }
 
+    /// First page of a video's comments. `CommentsPage.disabled` is true when the
+    /// uploader has turned comments off.
+    public func comments(videoID: String) async throws -> CommentsPage {
+        try await get("comments/\(videoID)")
+    }
+
+    /// Continues paging comments (or replies) with a `nextpage` / `repliesPage`
+    /// token returned by a previous `comments(videoID:)` call.
+    public func commentsNextPage(videoID: String, nextpage: String) async throws -> CommentsPage {
+        try await get("nextpage/comments/\(videoID)", query: ["nextpage": nextpage])
+    }
+
     /// Crowdsourced SponsorBlock skip segments for a video, proxied by the
     /// instance. `categories` are SponsorBlock category ids (see `SponsorCategory`).
     /// Returns an empty array when none are requested or the video has no data.
