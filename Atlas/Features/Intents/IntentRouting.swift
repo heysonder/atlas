@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import PipedKit
 
 /// A deferred action requested by Siri or an App Shortcut. The intent sets one of
 /// these on `AppModel`; `RootView` consumes it once the UI is alive and clears it.
@@ -25,10 +26,31 @@ enum LibraryTarget: Equatable, Sendable {
 /// Set once at launch in `AtlasApp.init`.
 @MainActor
 enum IntentDataStore {
-    static var container: ModelContainer?
-    /// The live app model, so intents/queries can run a network search via its
-    /// `PipedClient`. Set at launch in `AtlasApp.init`.
+    /// Set by the app at launch. When an intent runs *headless* (Siri/Shortcuts
+    /// without opening the app), this is nil — so `container` and `client` below
+    /// fall back to building their own against the same store / saved instance.
+    static var injectedContainer: ModelContainer?
     static var app: AppModel?
+
+    /// The app's container if it launched, else a private one over the same store
+    /// so playlists/downloads/history are reachable from a background intent.
+    static var container: ModelContainer? {
+        if let injectedContainer { return injectedContainer }
+        injectedContainer = try? ModelContainer(
+            for: SubscribedChannel.self, HistoryEntry.self, Playlist.self,
+            PlaylistVideo.self, DownloadedVideo.self, Feedback.self, SearchEntry.self)
+        return injectedContainer
+    }
+
+    /// A Piped client for network search that works without the app process:
+    /// reads the selected instance straight from defaults (mirrors `AppModel`).
+    static var client: PipedClient {
+        if let app { return app.client }
+        let raw = UserDefaults.standard.string(forKey: AppModel.instanceKey)
+        let normalized = raw.map(AppModel.normalize) ?? AppModel.defaultInstance
+        return PipedClient(instanceString: normalized)
+            ?? PipedClient(baseURL: URL(string: AppModel.defaultInstance)!)
+    }
 
     private static var context: ModelContext? { container?.mainContext }
 
@@ -67,8 +89,8 @@ enum IntentDataStore {
     /// "add to playlist").
     static func searchVideos(_ query: String, limit: Int = 10) async -> [VideoEntity] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let app else { return [] }
-        let videos = ((try? await app.client.search(trimmed, filter: "videos")) ?? [])
+        guard !trimmed.isEmpty else { return [] }
+        let videos = ((try? await client.search(trimmed, filter: "videos")) ?? [])
             .filter(\.isVideo)
             .prefix(limit)
         let items = Array(videos)
