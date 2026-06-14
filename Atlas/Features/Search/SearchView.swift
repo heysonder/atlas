@@ -19,13 +19,12 @@ struct SearchView: View {
         NavigationStack {
             content
                 .navigationTitle("Search")
-                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.large)
                 .navigationDestination(for: String.self) { id in
                     ChannelDetailView(channelID: id)
                 }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
-                    prompt: "Search YouTube")
+        .searchable(text: $query, placement: .automatic, prompt: "Search YouTube")
         .searchFocused($searchFocused)
         .searchSuggestions {
             ForEach(suggestions, id: \.self) { suggestion in
