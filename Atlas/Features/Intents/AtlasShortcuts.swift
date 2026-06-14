@@ -5,9 +5,8 @@ import AppIntents
 /// the app to) without us hardcoding it.
 struct AtlasShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        // A ShowInAppSearchResultsIntent: Siri recognizes "search for … in Atlas"
-        // natively and fills the term, so these phrases are just for discovery in
-        // Spotlight / the Shortcuts app.
+        // Opens the app to search and asks for the query when the phrase does not
+        // include one.
         AppShortcut(
             intent: ShowSearchResultsIntent(),
             phrases: [
