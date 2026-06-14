@@ -1,0 +1,62 @@
+name: Atlas
+options:
+  bundleIdPrefix: com.chasemarshall
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  PipedKit:
+    path: PipedKit
+
+targets:
+  Atlas:
+    type: application
+    platform: iOS
+    sources:
+      - path: Atlas
+    dependencies:
+      - package: PipedKit
+    info:
+      path: Atlas/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Atlas
+        UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes: [audio]
+        # DEV ONLY: allow http instances during local development.
+        # Tighten to your instance's domain (or move it to HTTPS) before App Store submission.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        # iPhone: portrait while browsing; the player adds landscape at runtime
+        # (see OrientationGate). Upside-down is intentionally omitted on iPhone.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # iPad: all four orientations are required for multitasking (Split View /
+        # Slide Over) unless the app is full-screen-only. OrientationGate returns
+        # .all on iPad, so runtime behavior already matches this declaration.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasemarshall.atlas
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: 3TKR2M3626
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        # 1 = iPhone, 2 = iPad → Universal. Mac is delivered via Catalyst below.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: YES
+        # Keep one bundle id across iPhone/iPad/Mac (enables universal purchase).
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
