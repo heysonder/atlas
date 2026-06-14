@@ -26,6 +26,9 @@ enum LibraryTarget: Equatable, Sendable {
 @MainActor
 enum IntentDataStore {
     static var container: ModelContainer?
+    /// The live app model, so intents/queries can run a network search via its
+    /// `PipedClient`. Set at launch in `AtlasApp.init`.
+    static var app: AppModel?
 
     private static var context: ModelContext? { container?.mainContext }
 
@@ -54,6 +57,23 @@ enum IntentDataStore {
     /// The single most recent watch — what "Resume watching" plays.
     static func mostRecentWatch() -> HistoryEntry? {
         recentHistory(limit: 1).first
+    }
+
+    // MARK: Network search (for Siri entity resolution + the Find Videos intent)
+
+    /// Runs a YouTube search through the selected instance and returns matching
+    /// videos as entities. Results are also recorded in the on-screen registry so
+    /// a later `entities(for:)` can resolve them by id (e.g. when chained into
+    /// "add to playlist").
+    static func searchVideos(_ query: String, limit: Int = 10) async -> [VideoEntity] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let app else { return [] }
+        let videos = ((try? await app.client.search(trimmed, filter: "videos")) ?? [])
+            .filter(\.isVideo)
+            .prefix(limit)
+        let items = Array(videos)
+        VisibleVideoRegistry.shared.record(items)
+        return items.map(VideoEntity.init)
     }
 
     // MARK: Playlists

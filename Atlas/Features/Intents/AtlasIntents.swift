@@ -54,6 +54,23 @@ struct OpenDownloadsIntent: AppIntent {
     }
 }
 
+/// "Find videos about …" — returns matching videos as a value, so a Shortcut can
+/// chain them: Find Videos → Get First Item → Add to Playlist / Play. (The search
+/// schema above only *shows* results in-app; this one hands them back.)
+struct FindVideosIntent: AppIntent {
+    static let title: LocalizedStringResource = "Find Videos"
+    static let description = IntentDescription(
+        "Search Atlas and return matching videos to use in a Shortcut.")
+
+    @Parameter(title: "Search", requestValueDialog: "What do you want to find?")
+    var query: String
+
+    func perform() async throws -> some IntentResult & ReturnsValue<[VideoEntity]> {
+        let results = await IntentDataStore.searchVideos(query, limit: 10)
+        return .result(value: results)
+    }
+}
+
 // MARK: - Resume watching (with a spoken reply + a snippet card)
 
 /// "Resume watching" — picks up the most recent video. Replies with a Siri
