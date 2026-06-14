@@ -80,34 +80,107 @@ struct GroupedVideoList: View {
     /// How Shorts are arranged. Only the feed opts into `.carousel`; everything
     /// else keeps the inline paired layout.
     var shortsLayout: ShortsLayout = .inline
+    /// Video ids the user has already watched. Surfaces that show the full catalog
+    /// (e.g. a channel page) pass this so watched items get a "Watched" badge; the
+    /// Home feed hides watched videos instead, so it leaves this empty.
+    var watchedIDs: Set<String> = []
     /// Called as each item scrolls on (e.g. to warm the stream extraction).
     var onAppearItem: ((StreamItem) -> Void)? = nil
     let onPlay: (StreamItem) -> Void
 
+    /// iPhone (compact) stays a single column; iPad and larger (regular) break the
+    /// feed into a 2–4 column grid sized to the available width.
+    @Environment(\.horizontalSizeClass) private var hSize
+    /// Measured width of the list, used to pick the grid's column count.
+    @State private var gridWidth: CGFloat = 0
+
     var body: some View {
+        if hSize == .regular {
+            gridLayout
+        } else {
+            stackLayout
+        }
+    }
+
+    /// Single-column feed (iPhone): full-width videos with Shorts paired 2-up or
+    /// pulled into a shelf, per `shortsLayout`.
+    private var stackLayout: some View {
         LazyVStack(spacing: spacing) {
             ForEach(groupedFeedRows(items, layout: shortsLayout)) { row in
                 switch row {
                 case .video(let item):
-                    VideoRow(item: item,
-                             avatarFallback: avatarFallback,
-                             channelIDFallback: channelIDFallback) { onPlay(item) }
-                        .videoContextMenu(item)
-                        .onAppear { appeared(item) }
+                    videoCell(item)
                 case .shorts(let pair):
                     HStack(alignment: .top, spacing: 12) {
                         ForEach(pair) { short in
-                            ShortPoster(item: short) { onPlay(short) }
+                            ShortPoster(item: short, watched: isWatched(short)) { onPlay(short) }
                                 .videoContextMenu(short)
                         }
                         if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
                     }
                     .onAppear { pair.forEach(appeared) }
                 case .shelf(let shorts):
-                    ShortsShelf(items: shorts, onAppearItem: onAppearItem, onPlay: onPlay)
+                    ShortsShelf(items: shorts, watchedIDs: watchedIDs,
+                                onAppearItem: onAppearItem, onPlay: onPlay)
                 }
             }
         }
+    }
+
+    /// Multi-column feed (iPad and larger): regular videos flow into an adaptive
+    /// grid; Shorts collapse into a single horizontal shelf placed after the first
+    /// row (their tall 9:16 posters don't tile cleanly beside wide 16:9 cards).
+    private var gridLayout: some View {
+        let columns = columnCount(for: gridWidth)
+        let track = Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
+                          count: columns)
+        let shorts = items.filter { $0.isShort == true }
+        let videos = items.filter { $0.isShort != true }
+        // Lead with one full row of videos, then the shelf, then the rest — so the
+        // feed opens on real videos rather than a wall of Shorts.
+        let leadCount = shorts.isEmpty ? videos.count : min(columns, videos.count)
+        let lead = videos.prefix(leadCount)
+        let rest = videos.dropFirst(leadCount)
+
+        return LazyVStack(spacing: spacing) {
+            if !lead.isEmpty {
+                LazyVGrid(columns: track, spacing: spacing) {
+                    ForEach(lead) { videoCell($0) }
+                }
+            }
+            if !shorts.isEmpty {
+                ShortsShelf(items: shorts, watchedIDs: watchedIDs,
+                            onAppearItem: onAppearItem, onPlay: onPlay)
+            }
+            if !rest.isEmpty {
+                LazyVGrid(columns: track, spacing: spacing) {
+                    ForEach(rest) { videoCell($0) }
+                }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { gridWidth = $0 }
+    }
+
+    /// One video card, shared by the stack and grid layouts.
+    private func videoCell(_ item: StreamItem) -> some View {
+        VideoRow(item: item,
+                 avatarFallback: avatarFallback,
+                 channelIDFallback: channelIDFallback,
+                 watched: isWatched(item)) { onPlay(item) }
+            .videoContextMenu(item)
+            .onAppear { appeared(item) }
+    }
+
+    /// Columns scale with width: ~one card per 300pt, capped at 4. Defaults to 2
+    /// before the first width measurement (we're already at regular width here).
+    private func columnCount(for width: CGFloat) -> Int {
+        guard width > 0 else { return 2 }
+        return min(4, max(1, Int(width / 300)))
+    }
+
+    private func isWatched(_ item: StreamItem) -> Bool {
+        guard let id = item.videoID else { return false }
+        return watchedIDs.contains(id)
     }
 
     /// Notify + warm the thumbnails of the next handful of items so they're ready
@@ -126,6 +199,7 @@ struct GroupedVideoList: View {
 /// loads posters so a long shelf doesn't fetch every thumbnail up front.
 private struct ShortsShelf: View {
     let items: [StreamItem]
+    var watchedIDs: Set<String> = []
     var onAppearItem: ((StreamItem) -> Void)? = nil
     let onPlay: (StreamItem) -> Void
 
@@ -138,7 +212,8 @@ private struct ShortsShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(items) { short in
-                        ShortPoster(item: short) { onPlay(short) }
+                        ShortPoster(item: short,
+                                    watched: short.videoID.map(watchedIDs.contains) ?? false) { onPlay(short) }
                             .videoContextMenu(short)
                             .frame(width: cardWidth)
                             .onAppear { onAppearItem?(short) }
