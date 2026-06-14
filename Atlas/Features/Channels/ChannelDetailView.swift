@@ -19,7 +19,9 @@ struct ChannelDetailView: View {
 
     /// A channel page shows the full catalog (watched videos stay visible), so we
     /// badge what's been seen rather than hiding it the way the Home feed does.
-    private var watchedIDs: Set<String> { Set(history.map(\.videoID)) }
+    /// Only videos watched ≥80% earn the badge — opening one and bailing early
+    /// doesn't count as watched.
+    private var watchedIDs: Set<String> { Set(history.filter(\.isWatched).map(\.videoID)) }
 
     var body: some View {
         Group {

@@ -59,11 +59,19 @@ final class DownloadManager {
     // MARK: Actions
 
     func download(_ item: StreamItem, using app: AppModel) {
-        guard let videoID = item.videoID, !isDownloaded(videoID), tasks[videoID] == nil else { return }
+        guard let videoID = item.videoID else { return }
+        download(videoID: videoID, title: item.displayTitle, uploader: item.uploaderName,
+                 thumbnail: item.thumbnail, using: app)
+    }
+
+    /// Core entry point used by the UI (via the `StreamItem` overload) and by the
+    /// "Download this" App Intent, which only has the bare video fields to hand.
+    func download(videoID: String, title: String, uploader: String?,
+                  thumbnail: String?, using app: AppModel) {
+        guard !isDownloaded(videoID), tasks[videoID] == nil else { return }
         active[videoID] = ActiveDownload(
-            id: videoID, title: item.displayTitle, uploader: item.uploaderName,
-            thumbnail: item.thumbnail, state: .preparing, fraction: 0)
-        let title = item.displayTitle, uploader = item.uploaderName, thumbnail = item.thumbnail
+            id: videoID, title: title, uploader: uploader,
+            thumbnail: thumbnail, state: .preparing, fraction: 0)
         tasks[videoID] = Task { [weak self] in
             await self?.perform(videoID: videoID, title: title, uploader: uploader,
                                 thumbnail: thumbnail, app: app)
@@ -87,6 +95,7 @@ final class DownloadManager {
         try? FileManager.default.removeItem(at: row.fileURL)
         if let thumb = row.thumbnailURL { try? FileManager.default.removeItem(at: thumb) }
         modelContext.delete(row)
+        SpotlightIndexer.remove(videoID: videoID)
     }
 
     /// Dismisses a failed entry from the list without touching the store.
@@ -113,8 +122,11 @@ final class DownloadManager {
                 // Best path: high-quality H.264 video-only + AAC audio, merged locally.
                 quality = "\(source.height)p"
                 NSLog("Atlas.download: composing \(source.height)p (video-only + audio)")
-                let videoTmp = DownloadStore.fileURL(videoID + ".video.tmp")
-                let audioTmp = DownloadStore.fileURL(videoID + ".audio.tmp")
+                // Keep mp4-family extensions: AVFoundation infers a file's
+                // container from its path extension, and a `.tmp` extension makes
+                // the merge fail to open the asset ("Cannot Open").
+                let videoTmp = DownloadStore.fileURL(videoID + ".video.mp4")
+                let audioTmp = DownloadStore.fileURL(videoID + ".audio.m4a")
                 try await downloadPair(source.video, source.audio,
                                        videoDest: videoTmp, audioDest: audioTmp, videoID: videoID)
                 try Task.checkCancellation()
@@ -143,6 +155,7 @@ final class DownloadManager {
                 durationSeconds: detail.duration ?? 0, qualityLabel: quality,
                 byteCount: DownloadStore.byteCount(of: output))
             modelContext.insert(row)
+            SpotlightIndexer.index(download: row)
             NSLog("Atlas.download: ✅ done \(videoID) — \(DownloadStore.byteCount(of: output)) bytes")
 
             active[videoID] = nil
@@ -197,7 +210,7 @@ final class DownloadManager {
     }
 
     private func cleanupTemp(_ videoID: String) {
-        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".video.tmp"))
-        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".audio.tmp"))
+        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".video.mp4"))
+        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".audio.m4a"))
     }
 }

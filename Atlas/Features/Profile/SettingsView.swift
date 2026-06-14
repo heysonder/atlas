@@ -45,6 +45,16 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("Player", selection: $app.playerStyle) {
+                    ForEach(PlayerStyle.allCases) { Text($0.label).tag($0) }
+                }
+            } header: {
+                Text("Playback")
+            } footer: {
+                Text(app.playerStyle.blurb)
+            }
+
+            Section {
                 NavigationLink(value: SettingsRoute.instances) {
                     settingRow("Instance", systemImage: "server.rack", detail: currentHost)
                 }

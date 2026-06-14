@@ -2,8 +2,10 @@ import SwiftUI
 import SwiftData
 
 struct ProfileView: View {
+    @Environment(AppModel.self) private var app
     @Query private var subscriptions: [SubscribedChannel]
     @Query private var downloads: [DownloadedVideo]
+    @State private var path: [Route] = []
 
     /// Value-based routes for the Library menu. Keeping navigation entirely
     /// value-based (rather than mixing in destination-based `NavigationLink`s)
@@ -15,7 +17,7 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section {
                     NavigationLink(value: Route.channels) {
@@ -77,6 +79,21 @@ struct ProfileView: View {
             .navigationDestination(for: String.self) { id in
                 ChannelDetailView(channelID: id)
             }
+        }
+        // Deep-link from Siri / "Open Downloads": push the requested sub-screen.
+        .onAppear { applyLibraryTarget() }
+        .onChange(of: app.libraryTarget) { _, _ in applyLibraryTarget() }
+    }
+
+    /// Honors a pending `AppModel.libraryTarget` by pushing its route, then clears
+    /// it. Handles both the warm case (onChange) and a cold launch (onAppear).
+    private func applyLibraryTarget() {
+        guard let target = app.libraryTarget else { return }
+        app.libraryTarget = nil
+        switch target {
+        case .downloads: path = [.downloads]
+        case .history: path = [.history]
+        case .playlists: path = [.playlists]
         }
     }
 }

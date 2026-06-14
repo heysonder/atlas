@@ -26,4 +26,14 @@ final class HistoryEntry {
         self.positionSeconds = positionSeconds
         self.durationSeconds = durationSeconds
     }
+
+    /// Whether this counts as "watched" for the badge: at least 80% seen. End
+    /// cards, outros and ads mean people stop in the last 10–20%, so near the end
+    /// already counts as finished — matching where `RecommendationEngine.watchWeight`
+    /// tops out. Unknown-length videos don't qualify; we can't confirm how much was
+    /// seen. (Distinct from mere history membership, which drives resume.)
+    var isWatched: Bool {
+        guard durationSeconds > 0 else { return false }
+        return positionSeconds / durationSeconds >= 0.8
+    }
 }

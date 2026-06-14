@@ -9,14 +9,18 @@ struct FeedView: View {
     private var subscriptions: [SubscribedChannel]
     @Query(sort: \HistoryEntry.watchedAt, order: .reverse) private var history: [HistoryEntry]
     @Query private var feedback: [Feedback]
+    @Query(sort: \PlaylistVideo.addedAt, order: .reverse) private var savedVideos: [PlaylistVideo]
+    @Query(sort: \SearchEntry.lastSearchedAt, order: .reverse) private var searchEntries: [SearchEntry]
 
     @State private var phase: LoadPhase<[StreamItem]> = .idle
     /// The `loadKey` the current results were built for. Lets us tell a genuine
     /// reload (mode / subscription change) apart from a bare view reappearance.
     @State private var loadedKey: String?
 
-    /// Hide videos already in watch history.
-    private var watchedIDs: Set<String> { Set(history.map(\.videoID)) }
+    /// Videos that count as watched (≥80% seen) — hidden from the feed. Opening
+    /// one and bailing early doesn't count, so it stays/reappears until you
+    /// actually get through it.
+    private var watchedIDs: Set<String> { Set(history.filter(\.isWatched).map(\.videoID)) }
     private func unwatched(_ videos: [StreamItem]) -> [StreamItem] {
         videos.filter { item in
             guard let id = item.videoID else { return true }
@@ -70,6 +74,7 @@ struct FeedView: View {
                 GroupedVideoList(items: videos,
                                  shortsLayout: app.shortsLayout,
                                  onAppearItem: { app.prefetchStream($0.videoID) }) { app.play($0) }
+                    .onScreenVideos(videos)
                     .padding(.horizontal)
                     .padding(.top, 8)
             }
@@ -80,7 +85,7 @@ struct FeedView: View {
     @ViewBuilder private var emptyState: some View {
         if feedMode.isForYou {
             ContentUnavailableView("Watch something first", systemImage: "sparkles",
-                description: Text("Your For You feed is built from your watch history — all on-device."))
+                description: Text("Your For You feed learns from what you watch, search, and save — all on-device."))
         } else {
             ContentUnavailableView {
                 Label("No subscriptions yet", systemImage: "play.rectangle.on.rectangle")
@@ -95,6 +100,13 @@ struct FeedView: View {
 
     private var subscriptionKey: String {
         subscriptions.map(\.channelID).joined(separator: ",")
+    }
+
+    /// Recent searches used as a For You signal — windowed so stale intent ages
+    /// out, capped so the ranking math stays cheap. Newest first.
+    private var recentSearches: [String] {
+        let cutoff = Date().addingTimeInterval(-30 * 86_400)
+        return searchEntries.filter { $0.lastSearchedAt >= cutoff }.prefix(15).map(\.query)
     }
 
     /// `.task(id:)` re-runs every time this view reappears — and because the
@@ -135,34 +147,68 @@ struct FeedView: View {
         }
     }
 
-    /// For You: rank a candidate pool built from your watch history (and feedback),
-    /// either Piped-related or our personalized topic match.
+    /// For You: rank a candidate pool drawn from your watch history, searches,
+    /// saves and subscriptions (plus feedback) — either Piped-related or our
+    /// personalized topic match.
     private func loadForYou() async {
         guard !history.isEmpty else { phase = .loaded([]); return }
-        let watched = Set(history.map(\.videoID))
         let disliked = Set(feedback.filter { $0.signal < 0 }.map(\.videoID))
+        let exclude = watchedIDs.union(disliked)
         let signals = feedback.map {
             FeedbackSignal(signal: $0.signal, title: $0.title, uploader: $0.uploader,
                            category: $0.category, tags: $0.tags ?? [])
         }
+        // Personalization signals beyond watch history. Pull the Sendable bits the
+        // concurrent seeds need (plain strings) out here, so the child tasks below
+        // never capture the non-Sendable @Model arrays themselves.
+        let saved = Array(savedVideos.prefix(40))
+        let queries = recentSearches
+        let seedQueries = Array(queries.prefix(3))
+        let savedSeedIDs = saved.prefix(6).map(\.videoID)
+        // Channels you follow — the most explicit interest signal. Both a candidate
+        // source (their recent uploads) and a ranking boost below.
+        let subIDs = subscriptions.map(\.channelID)
+        let subscribedIDs = Set(subIDs)
+
         let engine = RecommendationEngine(app: app)
-        let (candidates, frequency) = await engine.candidates(
-            from: Array(history.prefix(6)), excluding: watched.union(disliked))
+        // Kick off the search/playlist/subscription seeds first, then await the
+        // history pass directly — they all overlap their network I/O on the main
+        // actor, so total latency is the slowest source, not the sum.
+        async let searched = engine.searchCandidates(seedQueries, excluding: exclude)
+        async let savedSeeds = engine.playlistCandidates(savedSeedIDs, excluding: exclude)
+        async let subbed = engine.subscriptionCandidates(subIDs, excluding: exclude)
+        let (historyCandidates, frequency) = await engine.candidates(
+            from: Array(history.prefix(6)), excluding: exclude)
+        let extras = await searched + savedSeeds + subbed
+
+        // Merge into one pool, de-duped by video ID. History candidates keep their
+        // place (and frequency count); search/playlist/subscription seeds fill in
+        // behind them.
+        var candidates = historyCandidates
+        var seen = Set(historyCandidates.compactMap(\.videoID))
+        for item in extras {
+            guard let id = item.videoID, !seen.contains(id) else { continue }
+            seen.insert(id)
+            candidates.append(item)
+        }
 
         switch feedMode {
         case .forYouRelated:
             let ranked = RecommendationEngine.rankRelated(
-                candidates, frequency: frequency, history: history)
+                candidates, frequency: frequency, history: history, saved: saved,
+                subscribedIDs: subscribedIDs)
             phase = .loaded(Array(ranked.prefix(40)))
             await prefetch(visible(ranked))
         case .forYouCustom:
             // Instant on-device pass, then upgrade with YouTube category/tags.
             let coarse = RecommendationEngine.rankByTopic(
-                candidates, history: history, feedback: signals)
+                candidates, history: history, feedback: signals, saved: saved,
+                searches: queries, subscribedIDs: subscribedIDs)
             phase = .loaded(Array(coarse.prefix(40)))
             await prefetch(visible(coarse))
             let refined = await engine.refineWithSignals(
-                Array(coarse.prefix(50)), history: history, feedback: signals)
+                Array(coarse.prefix(50)), history: history, feedback: signals,
+                saved: saved, searches: queries, subscribedIDs: subscribedIDs)
             phase = .loaded(Array(refined.prefix(40)))
             await prefetch(visible(refined))
         case .subscriptions:

@@ -42,6 +42,57 @@ struct RecommendationEngine {
         return (Array(byID.values), frequency)
     }
 
+    /// Fresh candidates from the user's recent searches: run each query and take
+    /// its top video results. Unlike related-streams (bounded by what you've
+    /// already watched), this injects genuinely new content matching explicit
+    /// intent — "I searched X, now my feed has more X."
+    func searchCandidates(_ queries: [String], excluding watched: Set<String>,
+                          perQuery: Int = 10) async -> [StreamItem] {
+        var byID: [String: StreamItem] = [:]
+        for query in queries {
+            let results = (try? await app.client.search(query, filter: "videos")) ?? []
+            for item in results.prefix(perQuery) where item.isVideo {
+                guard let id = item.videoID, !watched.contains(id) else { continue }
+                if byID[id] == nil { byID[id] = item }
+            }
+        }
+        return Array(byID.values)
+    }
+
+    /// Candidates from the related-streams of saved (playlist) videos —
+    /// "more like what you saved." Same shape as `candidates(from:)`, seeded by
+    /// deliberate keeps instead of passive watches.
+    func playlistCandidates(_ videoIDs: [String], excluding watched: Set<String>)
+    async -> [StreamItem] {
+        var byID: [String: StreamItem] = [:]
+        for videoID in videoIDs {
+            let related = (try? await app.resolveStream(videoID))?.relatedStreams ?? []
+            for item in related where item.isVideo {
+                guard let id = item.videoID, !watched.contains(id) else { continue }
+                if byID[id] == nil { byID[id] = item }
+            }
+        }
+        return Array(byID.values)
+    }
+
+    /// Recent uploads from the channels the user subscribes to — the most explicit
+    /// "I like this channel" signal there is. One `/feed` request for all of them;
+    /// capped so a prolific sub can't swamp the pool (ranking still orders them by
+    /// taste). These let For You surface your channels' new videos, not just
+    /// whatever related-streams happen to bubble up.
+    func subscriptionCandidates(_ channelIDs: [String], excluding watched: Set<String>,
+                                limit: Int = 40) async -> [StreamItem] {
+        guard !channelIDs.isEmpty else { return [] }
+        let videos = (try? await app.client.feed(channelIDs: channelIDs)) ?? []
+        var byID: [String: StreamItem] = [:]
+        for item in videos where item.isVideo {
+            guard let id = item.videoID, !watched.contains(id), byID[id] == nil else { continue }
+            byID[id] = item
+            if byID.count >= limit { break }
+        }
+        return Array(byID.values)
+    }
+
     // MARK: Per-video enrichment (YouTube category + tags)
 
     /// Re-rank a shortlist using YouTube's own category + tags, fetched per video.
@@ -49,10 +100,14 @@ struct RecommendationEngine {
     /// clean creator tags into the topic match. Runs after the instant on-device
     /// pass so the user sees results immediately, then an upgrade once it returns.
     func refineWithSignals(_ shortlist: [StreamItem], history: [HistoryEntry],
-                           feedback: [FeedbackSignal] = []) async -> [StreamItem] {
+                           feedback: [FeedbackSignal] = [],
+                           saved: [PlaylistVideo] = [],
+                           searches: [String] = [],
+                           subscribedIDs: Set<String> = []) async -> [StreamItem] {
         let signals = await fetchSignals(shortlist)
-        return Self.rankByTopic(shortlist, history: history,
-                                feedback: feedback, enrichment: signals)
+        return Self.rankByTopic(shortlist, history: history, feedback: feedback,
+                                saved: saved, searches: searches,
+                                subscribedIDs: subscribedIDs, enrichment: signals)
     }
 
     /// Fetch `/streams` for the shortlist with bounded concurrency, so we never
@@ -79,14 +134,39 @@ struct RecommendationEngine {
         return out
     }
 
+    // MARK: Watch weighting
+
+    /// How strongly a watch counts, from how much of it you actually saw.
+    /// Reaching the end is a strong "I really like this — suggest more"; bailing
+    /// early is weak. Anchored so ~50% watched returns 1.0 — the original flat
+    /// weight, so half-watches behave exactly as before. It then ramps up hard,
+    /// hitting the 4× ceiling by 80%: you don't have to reach 100%, because end
+    /// cards, outros and ads mean people routinely stop within the last 10–20%, so
+    /// "near the end" already counts as finished. Unknown duration stays neutral.
+    static func watchWeight(position: Double, duration: Double) -> Double {
+        guard duration > 0 else { return 1 }
+        let ratio = min(position / duration, 1)
+        if ratio <= 0.5 { return 0.5 + ratio }            // 0 → 0.5, 0.5 → 1.0
+        return min(4, 1 + (ratio - 0.5) * 10)             // 0.5 → 1.0, ≥0.8 → 4.0
+    }
+
     // MARK: Strategy A — heuristic
 
     static func rankRelated(_ items: [StreamItem], frequency: [String: Int],
-                            history: [HistoryEntry]) -> [StreamItem] {
-        // Channel affinity: how much you watch each channel.
+                            history: [HistoryEntry], saved: [PlaylistVideo] = [],
+                            subscribedIDs: Set<String> = []) -> [StreamItem] {
+        // Channel affinity: how much you watch each channel, weighted by how much
+        // of each video you actually finished.
         var affinity: [String: Double] = [:]
         for entry in history {
-            if let u = entry.uploader { affinity[u, default: 0] += 1 }
+            if let u = entry.uploader {
+                affinity[u, default: 0] += watchWeight(position: entry.positionSeconds,
+                                                       duration: entry.durationSeconds)
+            }
+        }
+        // Saving a video is a deliberate keep — count its channel a notch extra.
+        for video in saved {
+            if let u = video.uploader { affinity[u, default: 0] += 1.5 }
         }
         let maxAff = max(affinity.values.max() ?? 1, 1)
         let now = Date().timeIntervalSince1970
@@ -99,7 +179,10 @@ struct RecommendationEngine {
         func score(_ item: StreamItem) -> Double {
             let freq = Double(frequency[item.videoID ?? ""] ?? 0)
             let aff = (affinity[item.uploaderName ?? ""] ?? 0) / maxAff
-            return freq * 2.0 + aff * 1.5 + freshness(item.uploaded) * 0.5
+            // A channel you follow is an explicit "I want this" — bump it like a
+            // strong affinity hit on top of whatever the watch counts already gave.
+            let sub = subscribedIDs.contains(item.uploaderChannelID ?? "") ? 1.5 : 0
+            return freq * 2.0 + aff * 1.5 + sub + freshness(item.uploaded) * 0.5
         }
         return items.sorted { score($0) > score($1) }
     }
@@ -108,6 +191,9 @@ struct RecommendationEngine {
 
     static func rankByTopic(_ items: [StreamItem], history: [HistoryEntry],
                             feedback: [FeedbackSignal] = [],
+                            saved: [PlaylistVideo] = [],
+                            searches: [String] = [],
+                            subscribedIDs: Set<String> = [],
                             enrichment: [String: VideoSignals] = [:]) -> [StreamItem] {
         guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return items }
 
@@ -189,7 +275,16 @@ struct RecommendationEngine {
         if recent.count < 15 { recent = Array(history.prefix(30)) }
         recent = Array(recent.prefix(60))
 
-        let tasteDocs = recent.map { docTokens(title: $0.title, channel: $0.uploader) }
+        // Weight each watch by how much of it you finished: a video you watched to
+        // the end joins your taste up to 4×, a half-watch once (as before). Repeating
+        // the doc lets the "top-3 nearest" scoring below lean hard toward the topics
+        // you actually finish — "suggest more like the things I watch all the way."
+        let tasteDocs = recent.flatMap { entry -> [[String]] in
+            let doc = docTokens(title: entry.title, channel: entry.uploader)
+            let copies = max(1, Int(watchWeight(position: entry.positionSeconds,
+                                                duration: entry.durationSeconds).rounded()))
+            return Array(repeating: doc, count: copies)
+        }
         // Fold creator tags (when enriched) into the candidate's text — clean topical
         // keywords that sharpen both the similarity and the category classification.
         let candDocs = items.map { item -> [String] in
@@ -210,12 +305,18 @@ struct RecommendationEngine {
         let likedDocs = feedback.filter { $0.signal > 0 }.map(feedbackDoc)
         let dislikedDocs = feedback.filter { $0.signal < 0 }.map(feedbackDoc)
 
+        // Deliberate signals beyond a passive watch: a playlist save is a strong
+        // "keep this" — its title+channel joins your taste like a like. A recent
+        // search is pure topical intent — the query string itself is the doc.
+        let savedDocs = saved.map { docTokens(title: $0.title, channel: $0.uploader) }
+        let searchDocs = searches.map(tokens).filter { !$0.isEmpty }
+
         // Your category distribution, learned from history + likes — no hardcoded
         // "news is bad". A candidate whose category you never watch gets gated; a
         // like on that category raises its share and lifts the gate.
         var catCount: [String: Int] = [:]
         var classified = 0
-        for doc in tasteDocs + likedDocs { if let c = classify(doc) { catCount[c, default: 0] += 1; classified += 1 } }
+        for doc in tasteDocs + likedDocs + savedDocs + searchDocs { if let c = classify(doc) { catCount[c, default: 0] += 1; classified += 1 } }
         func categoryFit(_ doc: [String]) -> Double {
             guard classified > 0, let c = classify(doc) else { return 1 }  // no signal → don't gate
             return Double(catCount[c] ?? 0) / Double(classified)
@@ -231,8 +332,9 @@ struct RecommendationEngine {
         // IDF over the live pool: a word in every title (incl. "new"/"best"/"video")
         // earns weight ~1; a distinctive word earns more. Down-weight, never drop.
         var df: [String: Int] = [:]
-        for doc in tasteDocs + candDocs + likedDocs + dislikedDocs { for w in Set(doc) { df[w, default: 0] += 1 } }
-        let total = Double(tasteDocs.count + candDocs.count + likedDocs.count + dislikedDocs.count)
+        for doc in tasteDocs + candDocs + likedDocs + dislikedDocs + savedDocs + searchDocs { for w in Set(doc) { df[w, default: 0] += 1 } }
+        let total = Double(tasteDocs.count + candDocs.count + likedDocs.count + dislikedDocs.count
+                           + savedDocs.count + searchDocs.count)
         func idf(_ w: String) -> Double { log((total + 1) / Double((df[w] ?? 0) + 1)) + 1 }
 
         func vector(_ doc: [String]) -> [Double]? {
@@ -249,16 +351,23 @@ struct RecommendationEngine {
             return sum.map { $0 / wsum }
         }
 
-        // A like is a strong interest signal — it joins your taste so similar videos
-        // rank up. A dislike forms a separate "anti-taste" used to push down lookalikes.
-        let tasteVectors = (tasteDocs + likedDocs).compactMap(vector)
+        // Likes, playlist saves, and recent searches are all interest signals — they
+        // join your taste so similar videos rank up. A dislike forms a separate
+        // "anti-taste" used to push down lookalikes.
+        let tasteVectors = (tasteDocs + likedDocs + savedDocs + searchDocs).compactMap(vector)
         let dislikedVectors = dislikedDocs.compactMap(vector)
         guard !tasteVectors.isEmpty else { return items }
 
-        // Channel affinity: a candidate from a channel you actually watch gets a nudge.
-        var affinity: [String: Int] = [:]
-        for entry in history { if let u = entry.uploader { affinity[u, default: 0] += 1 } }
-        let maxAff = Double(max(affinity.values.max() ?? 1, 1))
+        // Channel affinity: a candidate from a channel you actually watch gets a
+        // nudge — weighted, like taste, by how much of each video you finished.
+        var affinity: [String: Double] = [:]
+        for entry in history {
+            if let u = entry.uploader {
+                affinity[u, default: 0] += watchWeight(position: entry.positionSeconds,
+                                                       duration: entry.durationSeconds)
+            }
+        }
+        let maxAff = max(affinity.values.max() ?? 1, 1)
 
         func score(_ item: StreamItem, _ doc: [String]) -> Double {
             guard let v = vector(doc) else { return -1 }
@@ -270,8 +379,11 @@ struct RecommendationEngine {
             // essentially never watch (e.g. war/news for an all-tech history). The
             // 0.15 floor keeps it soft, so a misclassification can't fully erase it.
             let gated = topicSim * (0.15 + 0.85 * categoryFit(doc))
-            let aff = Double(affinity[item.uploaderName ?? ""] ?? 0) / maxAff
-            var s = gated + aff * 0.25   // affinity weight: tunable knob
+            let aff = (affinity[item.uploaderName ?? ""] ?? 0) / maxAff
+            // Following a channel is an explicit interest — lift its uploads on top
+            // of the topic match, so your subs surface even on a quieter topic day.
+            let sub = subscribedIDs.contains(item.uploaderChannelID ?? "") ? 0.2 : 0
+            var s = gated + aff * 0.25 + sub   // affinity / subscription weights: tunable knobs
             // YouTube's own category is authoritative: if it says News & politics and
             // you don't watch news, bury it regardless of what the title words imply.
             if newsShare < 0.15,

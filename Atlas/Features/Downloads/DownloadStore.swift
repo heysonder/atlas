@@ -166,8 +166,10 @@ nonisolated enum DownloadStore {
     /// `.mp4` using a passthrough export — no re-encode, so it's fast and keeps the
     /// original H.264/AAC quality.
     nonisolated static func mergeToMP4(video: URL, audio: URL, output: URL) async throws {
-        let videoAsset = AVURLAsset(url: video)
-        let audioAsset = AVURLAsset(url: audio)
+        // Hint the container type so the parse doesn't depend solely on the file
+        // extension — a wrong/unknown extension otherwise fails with "Cannot Open".
+        let videoAsset = AVURLAsset(url: video, options: [AVURLAssetOverrideMIMETypeKey: "video/mp4"])
+        let audioAsset = AVURLAsset(url: audio, options: [AVURLAssetOverrideMIMETypeKey: "audio/mp4"])
         let composition = AVMutableComposition()
 
         guard let vTrack = try await videoAsset.loadTracks(withMediaType: .video).first,

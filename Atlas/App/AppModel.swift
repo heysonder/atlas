@@ -31,6 +31,31 @@ struct PlayRequest: Identifiable, Hashable {
     }
 }
 
+/// Which player UI opens when you tap a video. The native full-screen player is
+/// the default; the embedded option plays inline with the info panel beneath it.
+enum PlayerStyle: String, CaseIterable, Identifiable {
+    case fullscreen
+    case embedded
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .fullscreen: "Fullscreen"
+        case .embedded: "Embedded"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .fullscreen:
+            "Tapping a video opens the native full-screen player; tap ⓘ for details."
+        case .embedded:
+            "Tapping a video opens an inline player with the channel, description, and comments scrolling beneath it."
+        }
+    }
+}
+
 /// App-wide state: which instance we talk to, and what's currently playing.
 @MainActor
 @Observable
@@ -41,8 +66,15 @@ final class AppModel {
         didSet { UserDefaults.standard.set(instanceURLString, forKey: Self.instanceKey) }
     }
 
-    /// Set to present the full-screen player from anywhere.
+    /// Set to present the player from anywhere.
     var nowPlaying: PlayRequest?
+
+    /// Which player UI handles `nowPlaying`. Defaults to the native full-screen
+    /// player so existing behavior is unchanged.
+    var playerStyle: PlayerStyle {
+        didSet { UserDefaults.standard.set(playerStyle.rawValue, forKey: Self.playerStyleKey) }
+    }
+    static let playerStyleKey = "atlas.playerStyle"
 
     /// When on, YouTube Shorts are hidden from the feed, search, and channels.
     var hideShorts: Bool {
@@ -102,6 +134,20 @@ final class AppModel {
     /// page, so SearchView can clear the field and refocus the keyboard.
     var searchRetapToken = 0
 
+    // MARK: Siri / App Intents routing
+
+    /// A deferred action from Siri or an App Shortcut. Set by an `AppIntent`,
+    /// consumed and cleared by `RootView` once the UI is alive.
+    var pendingIntent: AtlasIntentAction?
+
+    /// A query Siri / a Shortcut asked us to run. `SearchView` watches this,
+    /// fills its field, runs the search, then clears it.
+    var pendingSearchQuery: String?
+
+    /// A Library sub-screen to deep-link into. `ProfileView` watches this and
+    /// pushes the matching route, then clears it.
+    var libraryTarget: LibraryTarget?
+
     static let instanceKey = "atlas.instanceURL"
     static let defaultInstance = "https://api.piped.private.coffee"
 
@@ -116,6 +162,8 @@ final class AppModel {
         hideShorts = defaults.bool(forKey: Self.hideShortsKey)
         shortsLayout = defaults.string(forKey: Self.shortsLayoutKey)
             .flatMap(ShortsLayout.init(rawValue:)) ?? .inline
+        playerStyle = defaults.string(forKey: Self.playerStyleKey)
+            .flatMap(PlayerStyle.init(rawValue:)) ?? .fullscreen
         // SponsorBlock defaults to on; absent key means a fresh install.
         sponsorBlockEnabled = defaults.object(forKey: Self.sponsorBlockKey) == nil
             ? true : defaults.bool(forKey: Self.sponsorBlockKey)

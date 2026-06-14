@@ -46,6 +46,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var currentDetail: VideoDetail?
         private var usedComposition = false
         private var infoButtonHost: UIHostingController<InfoOverlayButton>?
+        private let infoButtonModel = InfoButtonModel()
+        private var timeControlObservation: NSKeyValueObservation?
         private var detachedForBackground = false
         private static let minWatchSeconds: Double = 5
 
@@ -381,6 +383,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             sponsorModel.prompt = nil
             statusObservation?.invalidate()
             statusObservation = nil
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
+            infoButtonModel.isPaused = false
             usedComposition = false
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
@@ -446,8 +451,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func installInfoButton(on controller: AVPlayerViewController) {
             guard infoButtonHost == nil, let overlay = controller.contentOverlayView else { return }
 
-            let host = UIHostingController(
-                rootView: InfoOverlayButton { [weak self] in self?.presentInfo() })
+            infoButtonModel.onTap = { [weak self] in self?.presentInfo() }
+            let host = UIHostingController(rootView: InfoOverlayButton(model: infoButtonModel))
             host.view.backgroundColor = .clear
             host.view.translatesAutoresizingMaskIntoConstraints = false
             controller.addChild(host)
@@ -455,11 +460,27 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             host.didMove(toParent: controller)
             NSLayoutConstraint.activate([
                 host.view.topAnchor.constraint(
-                    equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 6),
+                    equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 12),
                 host.view.trailingAnchor.constraint(
                     equalTo: overlay.safeAreaLayoutGuide.trailingAnchor, constant: -12)
             ])
             infoButtonHost = host
+            observePlaybackForInfoButton(on: controller.player)
+        }
+
+        /// Collapses the Info button to its glyph while playing and expands it to
+        /// the labeled pill whenever the video is paused (i.e. the transport
+        /// controls are likely on screen), driven off the player's transport state.
+        private func observePlaybackForInfoButton(on player: AVPlayer?) {
+            timeControlObservation?.invalidate()
+            guard let player else { return }
+            infoButtonModel.isPaused = player.timeControlStatus == .paused
+            timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
+                [weak self] player, _ in
+                MainActor.assumeIsolated {
+                    self?.infoButtonModel.isPaused = player.timeControlStatus == .paused
+                }
+            }
         }
 
         /// Slides up a sheet over the still-playing video with the title, full
