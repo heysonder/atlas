@@ -1,0 +1,86 @@
+import Testing
+import Foundation
+@testable import PipedKit
+
+@Test func extractsVideoID() {
+    #expect(PipedID.video(fromWatchURL: "/watch?v=s8BB8q2MyXc") == "s8BB8q2MyXc")
+    #expect(PipedID.video(fromWatchURL: "/watch?v=abc&t=10s") == "abc")
+    #expect(PipedID.video(fromWatchURL: "/channel/UC123") == nil)
+}
+
+@Test func extractsChannelID() {
+    #expect(PipedID.channel(fromURL: "/channel/UCwrVwiJllwhJUKXKmjLcckQ") == "UCwrVwiJllwhJUKXKmjLcckQ")
+    #expect(PipedID.channel(fromURL: nil) == nil)
+}
+
+@Test func stripsHTMLDescription() {
+    let html = "Get up to 40% off at <a href=\"https://ridge.com/MKBHD\">https://ridge.com/MKBHD</a> "
+        + "for Father&#39;s Day!<br><br>MKBHD Merch &amp; more"
+    let plain = HTMLText.plain(html)
+    #expect(!plain.contains("<a"))
+    #expect(!plain.contains("href"))
+    #expect(!plain.lowercased().contains("<br>"))
+    #expect(plain.contains("https://ridge.com/MKBHD"))
+    #expect(plain.contains("Father's Day"))
+    #expect(plain.contains("Merch & more"))
+    #expect(plain.contains("\n"))
+}
+
+@Test func prefersHLSWhenPresent() {
+    let detail = VideoDetail(
+        title: "x", description: nil, uploader: nil, uploaderUrl: nil,
+        uploaderAvatar: nil, thumbnailUrl: nil,
+        hls: "https://example.com/master.m3u8",
+        duration: 1, views: nil, likes: nil, uploaded: nil,
+        uploaderVerified: nil, uploaderSubscriberCount: nil, livestream: nil,
+        videoStreams: [Stream(url: "https://example.com/360.mp4", format: "MP4",
+                              quality: "360p", mimeType: "video/mp4", codec: nil,
+                              videoOnly: false, bitrate: nil, width: nil, height: 360, fps: nil)],
+        audioStreams: nil, relatedStreams: nil, category: nil, tags: nil)
+    #expect(detail.playableURL?.absoluteString == "https://example.com/master.m3u8")
+}
+
+@Test func decodesSponsorSegments() throws {
+    let json = """
+    {"hash":"abcd","segments":[
+        {"segment":[10.5,25.25],"category":"sponsor","actionType":"skip","UUID":"u1"},
+        {"segment":[100.0,108.0],"category":"selfpromo","actionType":"skip","UUID":"u2"}
+    ]}
+    """.data(using: .utf8)!
+    let res = try JSONDecoder().decode(SponsorSegmentsResponse.self, from: json)
+    let segs = try #require(res.segments)
+    #expect(segs.count == 2)
+    #expect(segs[0].start == 10.5)
+    #expect(segs[0].end == 25.25)
+    #expect(segs[0].uuid == "u1")
+    #expect(segs[0].sponsorCategory == .sponsor)
+    #expect(segs[1].sponsorCategory == .selfpromo)
+}
+
+@Test func sponsorCategoryRawValues() {
+    #expect(SponsorCategory.musicOfftopic.rawValue == "music_offtopic")
+    #expect(SponsorCategory(rawValue: "interaction") == .interaction)
+    #expect(SponsorCategory(rawValue: "nonsense") == nil)
+    #expect(SponsorCategory.allCases.count == 8)
+}
+
+@Test func fallsBackToHighestProgressive() {
+    let detail = VideoDetail(
+        title: "x", description: nil, uploader: nil, uploaderUrl: nil,
+        uploaderAvatar: nil, thumbnailUrl: nil, hls: "",
+        duration: 1, views: nil, likes: nil, uploaded: nil,
+        uploaderVerified: nil, uploaderSubscriberCount: nil, livestream: nil,
+        videoStreams: [
+            Stream(url: "https://example.com/360.mp4", format: "MP4", quality: "360p",
+                   mimeType: "video/mp4", codec: nil, videoOnly: false, bitrate: nil,
+                   width: nil, height: 360, fps: nil),
+            Stream(url: "https://example.com/720.mp4", format: "MP4", quality: "720p",
+                   mimeType: "video/mp4", codec: nil, videoOnly: false, bitrate: nil,
+                   width: nil, height: 720, fps: nil),
+            Stream(url: "https://example.com/1080.mp4", format: "MP4", quality: "1080p",
+                   mimeType: "video/mp4", codec: nil, videoOnly: true, bitrate: nil,
+                   width: nil, height: 1080, fps: nil) // video-only, must be ignored
+        ],
+        audioStreams: nil, relatedStreams: nil, category: nil, tags: nil)
+    #expect(detail.playableURL?.absoluteString == "https://example.com/720.mp4")
+}

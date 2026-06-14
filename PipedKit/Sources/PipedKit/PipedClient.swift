@@ -1,0 +1,126 @@
+import Foundation
+
+public enum PipedError: Error, LocalizedError {
+    case badURL
+    case http(Int)
+    case noPlayableStream
+    case decoding(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .badURL: "Invalid request URL."
+        case .http(let code): "Server returned HTTP \(code)."
+        case .noPlayableStream: "This instance couldn't load a playable stream. Try another instance."
+        case .decoding(let m): "Couldn't read the response: \(m)"
+        }
+    }
+}
+
+/// A thin async client for one Piped instance.
+/// `baseURL` is an instance's api_url, e.g. https://api.piped.private.coffee
+public struct PipedClient: Sendable {
+    public let baseURL: URL
+    private let session: URLSession
+
+    public init(baseURL: URL, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.session = session
+    }
+
+    public init?(instanceString: String, session: URLSession = .shared) {
+        guard let url = URL(string: instanceString) else { return nil }
+        self.init(baseURL: url, session: session)
+    }
+
+    // MARK: Endpoints
+
+    /// `filter` is a Piped search filter: "videos", "channels", "playlists", "all".
+    public func search(_ query: String, filter: String = "videos") async throws -> [StreamItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let res: SearchResponse = try await get("search", query: [
+            "q": trimmed, "filter": filter
+        ])
+        return res.items ?? []
+    }
+
+    /// Autocomplete suggestions for a partial query.
+    public func suggestions(_ query: String) async throws -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let result: [String] = try await get("suggestions", query: ["query": trimmed])
+        return result
+    }
+
+    public func streams(videoID: String) async throws -> VideoDetail {
+        try await get("streams/\(videoID)")
+    }
+
+    public func channel(id: String) async throws -> Channel {
+        try await get("channel/\(id)")
+    }
+
+    /// Crowdsourced SponsorBlock skip segments for a video, proxied by the
+    /// instance. `categories` are SponsorBlock category ids (see `SponsorCategory`).
+    /// Returns an empty array when none are requested or the video has no data.
+    public func sponsorSegments(
+        videoID: String, categories: [String]
+    ) async throws -> [SponsorSegment] {
+        guard !categories.isEmpty else { return [] }
+        // Piped expects the categories as a JSON-array string, e.g. ["sponsor","intro"].
+        let json = "[" + categories.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let res: SponsorSegmentsResponse = try await get(
+            "sponsors/\(videoID)", query: ["category": json])
+        return res.segments ?? []
+    }
+
+    /// Aggregated, reverse-chronological feed for the given channel ids.
+    public func feed(channelIDs: [String]) async throws -> [StreamItem] {
+        guard !channelIDs.isEmpty else { return [] }
+        let items: [StreamItem] = try await get("feed/unauthenticated", query: [
+            "channels": channelIDs.joined(separator: ",")
+        ])
+        return items
+    }
+
+    // MARK: Static instance directory (separate host)
+
+    public static func fetchInstances(
+        session: URLSession = .shared
+    ) async throws -> [PipedInstance] {
+        let url = URL(string: "https://piped-instances.kavin.rocks/")!
+        let (data, response) = try await session.data(from: url)
+        try Self.validate(response)
+        do {
+            return try JSONDecoder().decode([PipedInstance].self, from: data)
+        } catch {
+            throw PipedError.decoding(String(describing: error))
+        }
+    }
+
+    // MARK: Plumbing
+
+    private func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
+        var comps = URLComponents(url: baseURL.appendingPathComponent(path),
+                                  resolvingAgainstBaseURL: false)
+        if !query.isEmpty {
+            comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let url = comps?.url else { throw PipedError.badURL }
+
+        let (data, response) = try await session.data(from: url)
+        try Self.validate(response)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw PipedError.decoding(String(describing: error))
+        }
+    }
+
+    private static func validate(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(http.statusCode) else {
+            throw PipedError.http(http.statusCode)
+        }
+    }
+}

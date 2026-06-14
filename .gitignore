@@ -1,0 +1,13 @@
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# xcodegen output (regenerate with `xcodegen generate`)
+Atlas.xcodeproj/
+
+# Swift Package Manager
+.build/
+.swiftpm/
