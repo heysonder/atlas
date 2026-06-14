@@ -8,6 +8,7 @@ struct ChannelDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
     @Query private var allSubs: [SubscribedChannel]
+    @Query private var history: [HistoryEntry]
 
     @State private var phase: LoadPhase<Channel> = .idle
     @State private var videos: [StreamItem] = []
@@ -15,6 +16,10 @@ struct ChannelDetailView: View {
     private var subscription: SubscribedChannel? {
         allSubs.first { $0.channelID == channelID }
     }
+
+    /// A channel page shows the full catalog (watched videos stay visible), so we
+    /// badge what's been seen rather than hiding it the way the Home feed does.
+    private var watchedIDs: Set<String> { Set(history.map(\.videoID)) }
 
     var body: some View {
         Group {
@@ -53,12 +58,15 @@ struct ChannelDetailView: View {
                 } else {
                     GroupedVideoList(items: shown,
                                      avatarFallback: channel.avatarUrl,
-                                     channelIDFallback: channelID) { app.play($0) }
+                                     channelIDFallback: channelID,
+                                     watchedIDs: watchedIDs,
+                                     onAppearItem: { app.prefetchStream($0.videoID) }) { app.play($0) }
                         .padding(.horizontal)
                 }
             }
             .padding(.bottom, 24)
         }
+        .refreshable { await load(force: true) }
     }
 
     @ViewBuilder
@@ -125,12 +133,16 @@ struct ChannelDetailView: View {
         }
     }
 
-    private func load() async {
-        if case .loaded = phase { return }
-        phase = .loading
+    /// Loads the channel header + uploads. `.task` calls it once on appear (and
+    /// skips when already loaded); pull-to-refresh passes `force` to re-fetch
+    /// while keeping the current content on screen instead of blanking to a spinner.
+    private func load(force: Bool = false) async {
+        let alreadyLoaded: Bool
+        if case .loaded = phase { alreadyLoaded = true } else { alreadyLoaded = false }
+        if alreadyLoaded && !force { return }
+        if !alreadyLoaded { phase = .loading }
         do {
             let channel = try await app.client.channel(id: channelID)
-            phase = .loaded(channel)
             // The channel "Videos" tab is currently broken upstream in Piped —
             // `relatedStreams` comes back empty network-wide — so fall back to the
             // RSS-based feed endpoint, which still returns the channel's recent
@@ -139,9 +151,19 @@ struct ChannelDetailView: View {
             if loaded.isEmpty {
                 loaded = (try? await app.client.feed(channelIDs: [channelID])) ?? []
             }
+            phase = .loaded(channel)
             videos = loaded
+            await prefetchThumbnails(app.filteringShorts(loaded))
         } catch {
-            phase = .failed(error.localizedDescription)
+            // On a refresh failure keep the content we're already showing.
+            if !alreadyLoaded { phase = .failed(error.localizedDescription) }
         }
+    }
+
+    /// Warm the first batch of thumbnails so they're decoded before scroll, the
+    /// same head start the Home feed gives its list.
+    private func prefetchThumbnails(_ videos: [StreamItem]) async {
+        await ThumbnailPrefetcher.shared.prefetch(
+            videos.prefix(12).map { Thumbnail.upgraded($0.thumbnail) })
     }
 }
