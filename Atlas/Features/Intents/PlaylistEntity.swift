@@ -22,6 +22,20 @@ struct PlaylistEntity: AppEntity, Identifiable {
     init(_ playlist: Playlist) {
         self.init(id: playlist.id.uuidString, name: playlist.name)
     }
+
+    // MARK: Create-on-demand
+
+    /// Ids for playlists that don't exist yet carry this prefix; the add intent
+    /// creates the playlist when it sees one. Lets "add this to Watch Later" work
+    /// even before you've made a Watch Later playlist.
+    static let createPrefix = "create:"
+
+    static func toCreate(named name: String) -> PlaylistEntity {
+        PlaylistEntity(id: createPrefix + name, name: name)
+    }
+
+    /// True when this entity stands for a playlist that should be created.
+    var isNew: Bool { id.hasPrefix(Self.createPrefix) }
 }
 
 /// Resolves playlists by id and by spoken name (`EntityStringQuery`), so a user
@@ -29,17 +43,25 @@ struct PlaylistEntity: AppEntity, Identifiable {
 struct PlaylistEntityQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [PlaylistEntity.ID]) async throws -> [PlaylistEntity] {
-        let wanted = Set(identifiers)
-        return IntentDataStore.playlists()
-            .filter { wanted.contains($0.id.uuidString) }
-            .map(PlaylistEntity.init)
+        let playlists = IntentDataStore.playlists()
+        return identifiers.compactMap { id in
+            // A "create:" id round-trips as a to-be-created playlist.
+            if id.hasPrefix(PlaylistEntity.createPrefix) {
+                return PlaylistEntity(id: id, name: String(id.dropFirst(PlaylistEntity.createPrefix.count)))
+            }
+            return playlists.first { $0.id.uuidString == id }.map(PlaylistEntity.init)
+        }
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [PlaylistEntity] {
-        IntentDataStore.playlists()
+        let matches = IntentDataStore.playlists()
             .filter { $0.name.localizedCaseInsensitiveContains(string) }
             .map(PlaylistEntity.init)
+        guard matches.isEmpty else { return matches }
+        // No playlist by that name yet — offer to create it instead of failing.
+        let name = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? [] : [PlaylistEntity.toCreate(named: name)]
     }
 
     @MainActor

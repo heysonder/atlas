@@ -96,8 +96,28 @@ enum IntentDataStore {
     /// can speak the right reply.
     enum AddResult { case added, duplicate, missing }
 
-    static func addVideo(_ video: VideoEntity, toPlaylistID id: UUID) -> AddResult {
-        guard let context, let playlist = playlist(id: id) else { return .missing }
+    /// Adds to an existing playlist, or creates one first when the entity is a
+    /// "to-create" placeholder (so "add this to Watch Later" works even if no
+    /// such playlist exists yet).
+    static func addVideo(_ video: VideoEntity, to entity: PlaylistEntity) -> AddResult {
+        guard let context else { return .missing }
+        let playlist: Playlist
+        if entity.isNew {
+            // Reuse a same-named playlist if one was made in the meantime.
+            if let existing = playlists().first(where: {
+                $0.name.localizedCaseInsensitiveCompare(entity.name) == .orderedSame
+            }) {
+                playlist = existing
+            } else {
+                playlist = Playlist(name: entity.name)
+                context.insert(playlist)
+            }
+        } else if let id = UUID(uuidString: entity.id), let existing = self.playlist(id: id) {
+            playlist = existing
+        } else {
+            return .missing
+        }
+
         guard !playlist.videos.contains(where: { $0.videoID == video.id }) else { return .duplicate }
         let entry = PlaylistVideo(videoID: video.id, title: video.title,
                                   uploader: video.uploader, thumbnailURL: video.thumbnail)
