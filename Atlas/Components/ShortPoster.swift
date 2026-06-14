@@ -45,6 +45,9 @@ struct ShortPoster: View {
                     .shadow(radius: 2)
                     .padding(8)
             }
+            .overlay(alignment: .topTrailing) {
+                if watched { WatchedBadge().padding(8) }
+            }
             .contentShape(Rectangle())
             .onTapGesture { onPlay() }
     }
