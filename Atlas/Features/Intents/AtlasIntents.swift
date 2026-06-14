@@ -3,18 +3,17 @@ import SwiftUI
 
 // MARK: - Navigation intents (open the app to a place)
 
-/// "Search for lo-fi beats in Atlas" — real in-app search. Conforming to
-/// `ShowInAppSearchResultsIntent` (not a plain `AppIntent`) is what makes Siri
-/// treat this as searching *inside* the app and auto-extract the term from
-/// natural language, instead of only offering to open the app.
-struct ShowSearchResultsIntent: ShowInAppSearchResultsIntent {
-    static let title: LocalizedStringResource = "Search Atlas"
-    static let description = IntentDescription("Search YouTube from Atlas.")
-
+/// "Search for lo-fi beats in Atlas" — real in-app search via the App Intent
+/// domain schema. `@AppIntent(schema: .system.search)` both conforms this to
+/// `ShowInAppSearchResultsIntent` AND registers it in the assistant domain the
+/// Gemini-rebuilt Siri uses to route "search in <app>" from natural language —
+/// which a plain protocol conformance doesn't do.
+@AppIntent(schema: .system.search)
+struct ShowSearchResultsIntent {
     /// A video app searches general content (vs. a movies/TV-scoped store).
     static let searchScopes: [StringSearchScope] = [.general]
 
-    @Parameter(title: "Search", requestValueDialog: "What do you want to search for?")
+    @Parameter(title: "Search")
     var criteria: StringSearchCriteria
 
     @Dependency var app: AppModel
