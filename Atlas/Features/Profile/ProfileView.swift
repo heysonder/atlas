@@ -5,7 +5,13 @@ struct ProfileView: View {
     @Environment(AppModel.self) private var app
     @Query private var subscriptions: [SubscribedChannel]
     @Query private var downloads: [DownloadedVideo]
-    @State private var path: [Route] = []
+    // Type-erased so the stack can hold more than one value type. The Library
+    // pushes `Route` (top-level menu), `SettingsRoute` (Settings sub-screens),
+    // and `String` (a channel id, from ChannelsView). A typed `[Route]` path
+    // silently drops any non-`Route` push — the row highlights but never
+    // navigates — which is why tapping a channel here used to do nothing while
+    // the same channel link works from Feed/Search (those stacks are untyped).
+    @State private var path = NavigationPath()
 
     /// Value-based routes for the Library menu. Keeping navigation entirely
     /// value-based (rather than mixing in destination-based `NavigationLink`s)
@@ -91,9 +97,9 @@ struct ProfileView: View {
         guard let target = app.libraryTarget else { return }
         app.libraryTarget = nil
         switch target {
-        case .downloads: path = [.downloads]
-        case .history: path = [.history]
-        case .playlists: path = [.playlists]
+        case .downloads: path = NavigationPath([Route.downloads])
+        case .history: path = NavigationPath([Route.history])
+        case .playlists: path = NavigationPath([Route.playlists])
         }
     }
 }
