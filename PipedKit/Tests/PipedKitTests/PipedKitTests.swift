@@ -32,7 +32,7 @@ import Foundation
         uploaderAvatar: nil, thumbnailUrl: nil,
         hls: "https://example.com/master.m3u8",
         duration: 1, views: nil, likes: nil, uploaded: nil,
-        uploaderVerified: nil, uploaderSubscriberCount: nil, livestream: nil,
+        uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
         videoStreams: [Stream(url: "https://example.com/360.mp4", format: "MP4",
                               quality: "360p", mimeType: "video/mp4", codec: nil,
                               videoOnly: false, bitrate: nil, width: nil, height: 360, fps: nil)],
@@ -69,7 +69,7 @@ import Foundation
         title: "x", description: nil, uploader: nil, uploaderUrl: nil,
         uploaderAvatar: nil, thumbnailUrl: nil, hls: "",
         duration: 1, views: nil, likes: nil, uploaded: nil,
-        uploaderVerified: nil, uploaderSubscriberCount: nil, livestream: nil,
+        uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
         videoStreams: [
             Stream(url: "https://example.com/360.mp4", format: "MP4", quality: "360p",
                    mimeType: "video/mp4", codec: nil, videoOnly: false, bitrate: nil,
@@ -83,4 +83,24 @@ import Foundation
         ],
         audioStreams: nil, relatedStreams: nil, category: nil, tags: nil)
     #expect(detail.playableURL?.absoluteString == "https://example.com/720.mp4")
+}
+
+@Test func decodesVideoCreators() throws {
+    let json = """
+    {
+      "uploader": "Main Channel",
+      "uploaderUrl": "/channel/UCmain",
+      "creators": [
+        {"name": "Main Channel", "url": "/channel/UCmain", "avatar": "https://example.com/main.jpg", "role": "owner"},
+        {"name": "Other Creator", "url": "/channel/UCother", "avatar": "https://example.com/other.jpg", "role": "collaborator"}
+      ]
+    }
+    """.data(using: .utf8)!
+    let detail = try JSONDecoder().decode(VideoDetail.self, from: json)
+    let creators = try #require(detail.creators)
+    #expect(creators.count == 2)
+    #expect(creators[0].name == "Main Channel")
+    #expect(creators[0].channelID == "UCmain")
+    #expect(creators[1].avatar == "https://example.com/other.jpg")
+    #expect(creators[1].role == "collaborator")
 }

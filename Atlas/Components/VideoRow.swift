@@ -6,6 +6,8 @@ import PipedKit
 /// channel (via a NavigationLink, so the enclosing stack must register a
 /// `navigationDestination(for: String.self)` mapping the channel id).
 struct VideoRow: View {
+    @Environment(AppModel.self) private var app
+
     let item: StreamItem
     /// Used when the item itself carries no uploader avatar (e.g. a channel page).
     var avatarFallback: String? = nil
@@ -14,8 +16,16 @@ struct VideoRow: View {
     /// Marks the thumbnail as already watched (dimmed, with a "Watched" badge).
     var watched: Bool = false
     var onPlay: () -> Void
+    @State private var collaborators: [CreatorChannel] = []
 
     private var channelID: String? { item.uploaderChannelID ?? channelIDFallback }
+    private var creator: CreatorSummary {
+        CreatorSummary(primaryName: item.uploaderName,
+                       avatarURL: item.uploaderAvatar ?? avatarFallback,
+                       channelID: channelID,
+                       isVerified: item.uploaderVerified ?? false,
+                       collaborators: collaborators)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -25,6 +35,7 @@ struct VideoRow: View {
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .opacity(watched ? 0.55 : 1)
+                    .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
                     .overlay(alignment: .topLeading) {
                         if watched { WatchedBadge().padding(8) }
                     }
@@ -34,13 +45,21 @@ struct VideoRow: View {
             .onTapGesture { onPlay() }
 
             HStack(alignment: .top, spacing: 10) {
-                channelLink { Avatar(url: item.uploaderAvatar ?? avatarFallback, size: 34) }
+                CreatorChannelControl(summary: creator) {
+                    CreatorAvatarCluster(avatarURL: creator.avatarURL,
+                                         collaboratorAvatarURLs: creator.collaborators.map(\.avatarURL),
+                                         additionalCount: creator.additionalCount,
+                                         size: 34)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     title
                     metaRow
                 }
                 Spacer(minLength: 0)
             }
+        }
+        .task(id: item.videoID) {
+            await loadCollaboratorsIfNeeded()
         }
     }
 
@@ -60,7 +79,7 @@ struct VideoRow: View {
                 .font(.caption2.weight(.semibold))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .glassEffect(.regular, in: Capsule())
                 .padding(8)
         }
@@ -76,9 +95,12 @@ struct VideoRow: View {
 
     @ViewBuilder private var metaRow: some View {
         let meta = metaText
+        let rowCreator = creator
         HStack(spacing: 4) {
-            if let name = item.uploaderName, !name.isEmpty {
-                channelLink { Text(name) }
+            if let name = rowCreator.visibleName, !name.isEmpty {
+                CreatorChannelControl(summary: rowCreator) {
+                    Text(name)
+                }
                 if !meta.isEmpty {
                     Text("·")
                     Text(meta)
@@ -92,12 +114,22 @@ struct VideoRow: View {
         .lineLimit(1)
     }
 
-    /// Wraps a label in a channel NavigationLink when a channel id is known.
-    @ViewBuilder private func channelLink<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
-        if let channelID {
-            NavigationLink(value: channelID) { label() }.buttonStyle(.plain)
-        } else {
-            label()
+    private func loadCollaboratorsIfNeeded() async {
+        guard collaborators.isEmpty,
+              creator.hasMultipleCreators,
+              let videoID = item.videoID else { return }
+        var loaded: [CreatorChannel] = []
+        if let detail = try? await app.resolveStream(videoID) {
+            loaded = detail.creators?.creatorChannels(verifiedChannelID: detail.channelID,
+                                                      uploaderVerified: detail.uploaderVerified ?? false) ?? []
+        }
+
+        if loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
+            loaded = loaded.enriched(with: await YouTubeCollaborators.channels(for: videoID))
+        }
+
+        if !loaded.isEmpty {
+            collaborators = loaded
         }
     }
 }
