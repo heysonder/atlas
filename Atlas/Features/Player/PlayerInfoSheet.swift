@@ -40,7 +40,10 @@ struct InfoOverlayButton: View {
 struct PlayerInfoSheet: View {
     let title: String
     let uploader: String?
+    let uploaderDisplayName: String?
     let uploaderAvatar: String?
+    let channelID: String?
+    let creators: [VideoCreator]
     let subscriberCount: Int?
     let uploaderVerified: Bool
     let description: String
@@ -61,7 +64,9 @@ struct PlayerInfoSheet: View {
         NavigationStack {
             ScrollView {
                 PlayerInfoContent(
-                    title: title, uploader: uploader, uploaderAvatar: uploaderAvatar,
+                    title: title, uploader: uploader, uploaderDisplayName: uploaderDisplayName,
+                    uploaderAvatar: uploaderAvatar, channelID: channelID,
+                    creators: creators,
                     subscriberCount: subscriberCount, uploaderVerified: uploaderVerified,
                     description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
@@ -70,6 +75,9 @@ struct PlayerInfoSheet: View {
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { id in
+                ChannelDetailView(channelID: id)
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -86,7 +94,10 @@ struct PlayerInfoSheet: View {
 struct PlayerInfoContent: View {
     let title: String
     let uploader: String?
+    let uploaderDisplayName: String?
     let uploaderAvatar: String?
+    let channelID: String?
+    let creators: [VideoCreator]
     let subscriberCount: Int?
     let uploaderVerified: Bool
     let description: String
@@ -107,8 +118,24 @@ struct PlayerInfoContent: View {
 
     @State private var loader: CommentsLoader?
     @State private var descriptionExpanded = false
+    @State private var fallbackCollaborators: [CreatorChannel] = []
+    private var streamCollaborators: [CreatorChannel] {
+        creators.creatorChannels(verifiedChannelID: channelID,
+                                  uploaderVerified: uploaderVerified)
+    }
+    private var creator: CreatorSummary {
+        CreatorSummary(primaryName: uploader,
+                       displayName: uploaderDisplayName,
+                       avatarURL: uploaderAvatar,
+                       channelID: channelID,
+                       isVerified: uploaderVerified,
+                       subscriberCount: subscriberCount,
+                       collaborators: streamCollaborators.enriched(with: fallbackCollaborators))
+    }
 
-    init(title: String, uploader: String?, uploaderAvatar: String?, subscriberCount: Int?,
+    init(title: String, uploader: String?, uploaderDisplayName: String? = nil,
+         uploaderAvatar: String?, channelID: String?, creators: [VideoCreator] = [],
+         subscriberCount: Int?,
          uploaderVerified: Bool, description: String, canSubscribe: Bool, isSubscribed: Bool,
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
          onFeedback: @escaping (Int) -> Void, client: PipedClient, videoID: String,
@@ -116,7 +143,10 @@ struct PlayerInfoContent: View {
         self.inline = inline
         self.title = title
         self.uploader = uploader
+        self.uploaderDisplayName = uploaderDisplayName
         self.uploaderAvatar = uploaderAvatar
+        self.channelID = channelID
+        self.creators = creators
         self.subscriberCount = subscriberCount
         self.uploaderVerified = uploaderVerified
         self.description = description
@@ -136,8 +166,8 @@ struct PlayerInfoContent: View {
                 .font(.title3.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let uploader, !uploader.isEmpty {
-                channelRow(uploader)
+            if creator.visibleName != nil {
+                channelRow(creator)
             }
 
             if showFeedback && !inline {
@@ -157,6 +187,9 @@ struct PlayerInfoContent: View {
             commentsSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: videoID) {
+            await loadCreatorFallbackIfNeeded()
+        }
         .task {
             if loader == nil { loader = CommentsLoader(client: client, videoID: videoID) }
             await loader?.loadInitial()
@@ -165,24 +198,31 @@ struct PlayerInfoContent: View {
 
     // MARK: Channel row
 
-    private func channelRow(_ uploader: String) -> some View {
+    private func channelRow(_ creator: CreatorSummary) -> some View {
         HStack(spacing: 12) {
-            Avatar(url: uploaderAvatar, size: 44)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(uploader)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    if uploaderVerified {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+            CreatorChannelControl(summary: creator) {
+                HStack(spacing: 12) {
+                    CreatorAvatarCluster(avatarURL: creator.avatarURL,
+                                         collaboratorAvatarURLs: creator.collaborators.map(\.avatarURL),
+                                         additionalCount: creator.additionalCount,
+                                         size: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(creator.visibleName ?? "Channel")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            if creator.isVerified {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let subs = Format.subscribers(creator.subscriberCount) {
+                            Text(subs)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-                if let subs = Format.subscribers(subscriberCount) {
-                    Text(subs)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 8)
@@ -193,6 +233,17 @@ struct PlayerInfoContent: View {
                 }
                 if canSubscribe { subscribeButton }
             }
+        }
+    }
+
+    private func loadCreatorFallbackIfNeeded() async {
+        guard fallbackCollaborators.isEmpty, creator.hasMultipleCreators else { return }
+        let expectedAdditionalCount = creator.additionalCount
+        guard streamCollaborators.needsCreatorFallback(expectedAdditionalCount: expectedAdditionalCount) else { return }
+
+        let channels = await YouTubeCollaborators.channels(for: videoID)
+        if !channels.isEmpty {
+            fallbackCollaborators = channels
         }
     }
 

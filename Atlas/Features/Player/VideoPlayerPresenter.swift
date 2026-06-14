@@ -494,7 +494,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             let sheet = PlayerInfoSheet(
                 title: detail.title ?? currentRequest?.title ?? "Video",
                 uploader: name,
+                uploaderDisplayName: currentRequest?.uploader ?? name,
                 uploaderAvatar: avatar,
+                channelID: channelID,
+                creators: detail.creators ?? [],
                 subscriberCount: detail.uploaderSubscriberCount,
                 uploaderVerified: detail.uploaderVerified ?? false,
                 description: HTMLText.plain(detail.description ?? ""),
@@ -509,7 +512,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 onFeedback: { [weak self] signal in self?.setFeedback(signal) },
                 client: app.client,
                 videoID: videoID)
-            let infoVC = UIHostingController(rootView: sheet)
+            let infoVC = UIHostingController(rootView: sheet
+                .environment(app)
+                .modelContext(modelContext))
             infoVC.modalPresentationStyle = .pageSheet
             if let presentation = infoVC.sheetPresentationController {
                 presentation.detents = [.medium(), .large()]

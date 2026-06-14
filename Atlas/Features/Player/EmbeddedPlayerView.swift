@@ -35,6 +35,9 @@ struct EmbeddedPlayerView: View {
                     .accessibilityLabel("Close")
                 }
             }
+            .navigationDestination(for: String.self) { id in
+                ChannelDetailView(channelID: id)
+            }
         }
         .task { model.start() }
         .onAppear { Orientation.allowVideo() }
@@ -71,7 +74,10 @@ struct EmbeddedPlayerView: View {
                 PlayerInfoContent(
                     title: detail.title ?? model.request.title,
                     uploader: detail.uploader ?? model.request.uploader,
+                    uploaderDisplayName: model.request.uploader ?? detail.uploader,
                     uploaderAvatar: detail.uploaderAvatar,
+                    channelID: detail.channelID,
+                    creators: detail.creators ?? [],
                     subscriberCount: detail.uploaderSubscriberCount,
                     uploaderVerified: detail.uploaderVerified ?? false,
                     description: HTMLText.plain(detail.description ?? ""),

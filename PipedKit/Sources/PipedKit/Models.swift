@@ -74,6 +74,15 @@ public struct Stream: Codable, Hashable, Sendable {
 }
 
 // MARK: - Full video details (/streams/{id})
+public struct VideoCreator: Codable, Hashable, Sendable {
+    public let name: String?
+    public let url: String?
+    public let avatar: String?
+    public let role: String?
+
+    public var channelID: String? { PipedID.channel(fromURL: url) }
+}
+
 public struct VideoDetail: Codable, Sendable {
     public let title: String?
     public let description: String?
@@ -88,6 +97,7 @@ public struct VideoDetail: Codable, Sendable {
     public let uploaded: Int64?
     public let uploaderVerified: Bool?
     public let uploaderSubscriberCount: Int?
+    public let creators: [VideoCreator]?
     public let livestream: Bool?
     public let videoStreams: [Stream]?
     public let audioStreams: [Stream]?
