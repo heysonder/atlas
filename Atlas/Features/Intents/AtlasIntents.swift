@@ -149,8 +149,10 @@ struct AddToPlaylistIntent: AppIntent {
     static let title: LocalizedStringResource = "Add to Playlist"
     static let description = IntentDescription("Save a video to one of your playlists.")
 
-    @Parameter(title: "Video") var video: VideoEntity
-    @Parameter(title: "Playlist") var playlist: PlaylistEntity
+    @Parameter(title: "Video", requestValueDialog: "Which video do you want to add?")
+    var video: VideoEntity
+    @Parameter(title: "Playlist", requestValueDialog: "Which playlist?")
+    var playlist: PlaylistEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let video = self.video

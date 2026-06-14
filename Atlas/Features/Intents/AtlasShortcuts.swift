@@ -58,9 +58,15 @@ struct AtlasShortcuts: AppShortcutsProvider {
 
         // The playlist is an AppEntity, so — unlike the search String — it CAN be
         // spoken inside the phrase, and the query matches it by name.
+        // A phrase can interpolate only ONE parameter, so we speak the playlist
+        // and let Siri ask "which video?" (via the parameter's requestValueDialog),
+        // which the searchable VideoEntity resolves from your description. "Add
+        // this to …" additionally tries on-screen awareness on a real device.
         AppShortcut(
             intent: AddToPlaylistIntent(),
             phrases: [
+                "Add a video to \(\.$playlist) in \(.applicationName)",
+                "Add to \(\.$playlist) in \(.applicationName)",
                 "Add this to \(\.$playlist) in \(.applicationName)",
                 "Save this to \(\.$playlist) in \(.applicationName)",
             ],
