@@ -465,13 +465,17 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Slides up a sheet over the still-playing video with the title, full
         /// description, and a subscribe toggle for the uploader.
         private func presentInfo() {
-            guard let detail = currentDetail, let host = playerVC else { return }
+            guard let detail = currentDetail, let host = playerVC,
+                  let videoID = currentRequest?.videoID ?? presentedID else { return }
             let channelID = detail.channelID
             let name = detail.uploader ?? currentRequest?.uploader
             let avatar = detail.uploaderAvatar
             let sheet = PlayerInfoSheet(
                 title: detail.title ?? currentRequest?.title ?? "Video",
                 uploader: name,
+                uploaderAvatar: avatar,
+                subscriberCount: detail.uploaderSubscriberCount,
+                uploaderVerified: detail.uploaderVerified ?? false,
                 description: HTMLText.plain(detail.description ?? ""),
                 canSubscribe: channelID != nil,
                 isSubscribed: channelID.map(isCurrentlySubscribed) ?? false,
@@ -481,7 +485,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 },
                 showFeedback: FeedMode.current.isPersonalized,
                 feedback: currentFeedbackSignal(),
-                onFeedback: { [weak self] signal in self?.setFeedback(signal) })
+                onFeedback: { [weak self] signal in self?.setFeedback(signal) },
+                client: app.client,
+                videoID: videoID)
             let infoVC = UIHostingController(rootView: sheet)
             infoVC.modalPresentationStyle = .pageSheet
             if let presentation = infoVC.sheetPresentationController {
