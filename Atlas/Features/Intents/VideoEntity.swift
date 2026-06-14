@@ -69,14 +69,23 @@ final class VisibleVideoRegistry {
     func entity(for id: String) -> VideoEntity? { byID[id] }
 }
 
-/// Resolves `VideoEntity` ids — first from what's on screen, then from downloads.
-struct VideoEntityQuery: EntityQuery {
+/// Resolves `VideoEntity` ids from what's on screen and from downloads, and —
+/// because it's an `EntityStringQuery` — lets Siri resolve a *described* video by
+/// running a search. That's what makes "add a SwiftUI tutorial to Watch Later"
+/// work: Siri fills the video parameter by searching, then hands it to the
+/// add-to-playlist intent.
+struct VideoEntityQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [VideoEntity.ID]) async throws -> [VideoEntity] {
         identifiers.compactMap { id in
             if let visible = VisibleVideoRegistry.shared.entity(for: id) { return visible }
             return IntentDataStore.downloads(ids: [id]).first.map(VideoEntity.init)
         }
+    }
+
+    @MainActor
+    func entities(matching string: String) async throws -> [VideoEntity] {
+        await IntentDataStore.searchVideos(string, limit: 10)
     }
 
     @MainActor

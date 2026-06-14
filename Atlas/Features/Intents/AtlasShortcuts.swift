@@ -66,5 +66,16 @@ struct AtlasShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Add to Playlist",
             systemImageName: "text.badge.plus")
+
+        // Returns videos for chaining in the Shortcuts app (Find Videos → Add to
+        // Playlist). Mainly used as a building block rather than a spoken command.
+        AppShortcut(
+            intent: FindVideosIntent(),
+            phrases: [
+                "Find videos in \(.applicationName)",
+                "Find \(.applicationName) videos",
+            ],
+            shortTitle: "Find Videos",
+            systemImageName: "sparkle.magnifyingglass")
     }
 }

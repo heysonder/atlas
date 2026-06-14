@@ -23,6 +23,7 @@ struct AtlasApp: App {
         // Wire Siri / App Intents: give intents access to the store and the live
         // app + download manager, then publish downloads & history to Spotlight.
         IntentDataStore.container = container
+        IntentDataStore.app = appModel
         AppDependencyManager.shared.add(dependency: appModel)
         AppDependencyManager.shared.add(dependency: downloadManager)
         Task { @MainActor in SpotlightIndexer.reindexAll() }
