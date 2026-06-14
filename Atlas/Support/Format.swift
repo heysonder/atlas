@@ -19,18 +19,27 @@ enum Format {
             : String(format: "%d:%02d", m, sec)
     }
 
-    /// 8807 -> "8.8K views", 1200000 -> "1.2M views".
-    static func views(_ count: Int?) -> String? {
+    /// 8807 -> "8.8K", 1200000 -> "1.2M". The bare abbreviated number, no suffix.
+    static func compact(_ count: Int?) -> String? {
         guard let count, count >= 0 else { return nil }
         let n = Double(count)
-        let label: String
         switch n {
-        case 1_000_000_000...: label = String(format: "%.1fB", n / 1_000_000_000)
-        case 1_000_000...:     label = String(format: "%.1fM", n / 1_000_000)
-        case 1_000...:         label = String(format: "%.1fK", n / 1_000)
-        default:               label = "\(count)"
+        case 1_000_000_000...: return String(format: "%.1fB", n / 1_000_000_000)
+        case 1_000_000...:     return String(format: "%.1fM", n / 1_000_000)
+        case 1_000...:         return String(format: "%.1fK", n / 1_000)
+        default:               return "\(count)"
         }
-        return "\(label) views"
+    }
+
+    /// 8807 -> "8.8K views", 1200000 -> "1.2M views".
+    static func views(_ count: Int?) -> String? {
+        compact(count).map { "\($0) views" }
+    }
+
+    /// 8807 -> "8.8K subscribers", 1 -> "1 subscriber".
+    static func subscribers(_ count: Int?) -> String? {
+        guard let count, count > 0, let n = compact(count) else { return nil }
+        return "\(n) subscriber\(count == 1 ? "" : "s")"
     }
 
     /// Joins non-empty parts with " · ".
