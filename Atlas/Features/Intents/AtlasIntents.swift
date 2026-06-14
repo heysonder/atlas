@@ -155,19 +155,19 @@ struct AddToPlaylistIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let video = self.video
         let playlist = self.playlist
-        guard let playlistID = UUID(uuidString: playlist.id) else {
-            return .result(dialog: "I couldn't find that playlist.")
-        }
+        let wasNew = playlist.isNew
         let result = await MainActor.run {
-            IntentDataStore.addVideo(video, toPlaylistID: playlistID)
+            IntentDataStore.addVideo(video, to: playlist)
         }
         switch result {
+        case .added where wasNew:
+            return .result(dialog: "Created \(playlist.name) and added \(video.title).")
         case .added:
             return .result(dialog: "Added \(video.title) to \(playlist.name).")
         case .duplicate:
             return .result(dialog: "\(video.title) is already in \(playlist.name).")
         case .missing:
-            return .result(dialog: "I couldn't find that playlist.")
+            return .result(dialog: "I couldn't save that right now.")
         }
     }
 }
