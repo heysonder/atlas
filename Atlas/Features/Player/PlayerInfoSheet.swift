@@ -54,6 +54,9 @@ struct PlayerInfoSheet: View {
     let showFeedback: Bool
     let feedback: Int
     let onFeedback: (Int) -> Void
+    /// Related videos shown as the playback queue when present.
+    let queue: [StreamItem]
+    let onQueuePlay: (StreamItem) -> Void
     /// Used to fetch comments lazily once the sheet appears.
     let client: PipedClient
     let videoID: String
@@ -70,7 +73,8 @@ struct PlayerInfoSheet: View {
                     subscriberCount: subscriberCount, uploaderVerified: uploaderVerified,
                     description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
-                    feedback: feedback, onFeedback: onFeedback, client: client, videoID: videoID)
+                    feedback: feedback, onFeedback: onFeedback, queue: queue,
+                    onQueuePlay: onQueuePlay, client: client, videoID: videoID)
                     .padding()
             }
             .navigationTitle("Info")
@@ -108,6 +112,8 @@ struct PlayerInfoContent: View {
     let showFeedback: Bool
     @State private var feedback: Int
     let onFeedback: (Int) -> Void
+    let queue: [StreamItem]
+    let onQueuePlay: (StreamItem) -> Void
     /// Used to fetch comments lazily once the view appears.
     let client: PipedClient
     let videoID: String
@@ -119,6 +125,9 @@ struct PlayerInfoContent: View {
     @State private var loader: CommentsLoader?
     @State private var descriptionExpanded = false
     @State private var fallbackCollaborators: [CreatorChannel] = []
+    private var queuedVideos: [StreamItem] {
+        queue.filter { $0.isVideo && $0.videoID != videoID }
+    }
     private var streamCollaborators: [CreatorChannel] {
         creators.creatorChannels(verifiedChannelID: channelID,
                                   uploaderVerified: uploaderVerified)
@@ -138,7 +147,9 @@ struct PlayerInfoContent: View {
          subscriberCount: Int?,
          uploaderVerified: Bool, description: String, canSubscribe: Bool, isSubscribed: Bool,
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
-         onFeedback: @escaping (Int) -> Void, client: PipedClient, videoID: String,
+         onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
+         onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
+         client: PipedClient, videoID: String,
          inline: Bool = false) {
         self.inline = inline
         self.title = title
@@ -156,6 +167,8 @@ struct PlayerInfoContent: View {
         self.showFeedback = showFeedback
         self._feedback = State(initialValue: feedback)
         self.onFeedback = onFeedback
+        self.queue = queue
+        self.onQueuePlay = onQueuePlay
         self.client = client
         self.videoID = videoID
     }
@@ -181,6 +194,12 @@ struct PlayerInfoContent: View {
             Divider()
 
             descriptionBlock
+
+            if !queuedVideos.isEmpty {
+                Divider()
+
+                queueSection
+            }
 
             Divider()
 
@@ -316,6 +335,24 @@ struct PlayerInfoContent: View {
         description.count > 160 || description.filter { $0 == "\n" }.count >= 3
     }
 
+    // MARK: Queue
+
+    private var queueSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Queue")
+                .font(.headline)
+
+            ForEach(queuedVideos) { item in
+                Button {
+                    onQueuePlay(item)
+                } label: {
+                    QueueVideoRow(item: item)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     // MARK: Comments
 
     @ViewBuilder private var commentsSection: some View {
@@ -413,5 +450,58 @@ struct PlayerInfoContent: View {
         }
         .buttonStyle(.bordered)
         .tint(active ? .accentColor : .secondary)
+    }
+}
+
+private struct QueueVideoRow: View {
+    let item: StreamItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                Thumbnail(url: item.thumbnail)
+                    .aspectRatio(16 / 9, contentMode: .fill)
+                    .frame(width: 112, height: 63)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                durationPill
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                let meta = metaText
+                if !meta.isEmpty {
+                    Text(meta)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private var durationPill: some View {
+        let duration = Format.duration(item.duration)
+        if !duration.isEmpty {
+            Text(duration)
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .foregroundStyle(.white)
+                .background(.black.opacity(0.75), in: Capsule())
+                .padding(5)
+        }
+    }
+
+    private var metaText: String {
+        let timeAgo = Format.relativeTime(item.uploaded) ?? item.uploadedDate
+        let views = (item.views ?? -1) >= 500 ? Format.views(item.views) : nil
+        return Format.metaLine(item.uploaderName, views, timeAgo)
     }
 }

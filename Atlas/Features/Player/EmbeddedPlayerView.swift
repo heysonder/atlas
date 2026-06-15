@@ -12,6 +12,7 @@ import PipedKit
 /// (`VideoPlayerPresenter`) is untouched and remains the default.
 struct EmbeddedPlayerView: View {
     @State private var model: EmbeddedPlayerModel
+    @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
@@ -87,6 +88,8 @@ struct EmbeddedPlayerView: View {
                     showFeedback: FeedMode.current.isPersonalized,
                     feedback: model.currentFeedbackSignal(),
                     onFeedback: { model.setFeedback($0, detail: detail) },
+                    queue: detail.relatedStreams ?? [],
+                    onQueuePlay: { app.play($0) },
                     client: model.client,
                     videoID: model.request.videoID,
                     inline: true)

@@ -510,6 +510,15 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 showFeedback: FeedMode.current.isPersonalized,
                 feedback: currentFeedbackSignal(),
                 onFeedback: { [weak self] signal in self?.setFeedback(signal) },
+                queue: detail.relatedStreams ?? [],
+                onQueuePlay: { [weak self, weak host] item in
+                    guard let self else { return }
+                    if let sheet = host?.presentedViewController {
+                        sheet.dismiss(animated: true) { self.playQueued(item) }
+                    } else {
+                        self.playQueued(item)
+                    }
+                },
                 client: app.client,
                 videoID: videoID)
             let infoVC = UIHostingController(rootView: sheet
@@ -521,6 +530,32 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 presentation.prefersGrabberVisible = true
             }
             host.present(infoVC, animated: true)
+        }
+
+        private func playQueued(_ item: StreamItem) {
+            guard let request = PlayRequest(item: item) else { return }
+            if let player, let controller = playerVC {
+                restartPlayback(with: request, player: player, controller: controller)
+            }
+            app.nowPlaying = request
+        }
+
+        private func restartPlayback(with request: PlayRequest, player: AVPlayer, controller: AVPlayerViewController) {
+            loadTask?.cancel()
+            loadTask = nil
+            if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
+            if let sponsorObserver { player.removeTimeObserver(sponsorObserver); self.sponsorObserver = nil }
+            statusObservation?.invalidate()
+            statusObservation = nil
+            sponsorSegments = []
+            sponsorModel.prompt = nil
+            usedComposition = false
+            currentDetail = nil
+            currentRequest = request
+            presentedID = request.videoID
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            loadTask = Task { await load(request, player: player, controller: controller) }
         }
 
         private func isCurrentlySubscribed(_ channelID: String) -> Bool {
