@@ -96,6 +96,7 @@ struct EmbeddedPlayerView: View {
                     client: model.client,
                     videoID: model.request.videoID,
                     currentPlaybackSeconds: model.currentPlaybackSeconds,
+                    onTimestampTap: { model.seek(to: $0) },
                     inline: true)
                     .padding()
             }
@@ -558,6 +559,16 @@ final class EmbeddedPlayerModel {
             lastProgressSaveSeconds = seconds
             savePosition(seconds)
         }
+    }
+
+    func seek(to seconds: Int) {
+        let target = max(seconds, 0)
+        currentPlaybackSeconds = Double(target)
+        player.seek(
+            to: CMTime(seconds: Double(target), preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+        player.play()
     }
 
     private func savePosition(_ seconds: Double) {

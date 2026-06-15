@@ -57,6 +57,7 @@ final class CommentsLoader {
 /// comments" row. Reuses the loader the sheet already populated.
 struct CommentsView: View {
     let loader: CommentsLoader
+    var onTimestampTap: (Int) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
@@ -67,7 +68,11 @@ struct CommentsView: View {
                     unavailable("No comments yet", "bubble.left")
                 } else {
                     ForEach(loader.comments) { comment in
-                        CommentRow(comment: comment, client: loader.client, videoID: loader.videoID)
+                        CommentRow(
+                            comment: comment,
+                            client: loader.client,
+                            videoID: loader.videoID,
+                            onTimestampTap: onTimestampTap)
                         Divider()
                     }
                     if loader.nextpage != nil {
@@ -99,6 +104,7 @@ struct CommentRow: View {
     let client: PipedClient
     let videoID: String
     var isReply = false
+    var onTimestampTap: (Int) -> Void = { _ in }
 
     @State private var replies: [Comment] = []
     @State private var showReplies = false
@@ -112,10 +118,10 @@ struct CommentRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     metaLine
 
-                    Text(comment.plainText)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    TimestampedCommentText(
+                        text: comment.plainText,
+                        timestamps: comment.timestamps,
+                        onTimestampTap: onTimestampTap)
 
                     footer
                 }
@@ -124,8 +130,13 @@ struct CommentRow: View {
 
             if showReplies {
                 ForEach(replies) { reply in
-                    CommentRow(comment: reply, client: client, videoID: videoID, isReply: true)
-                        .padding(.leading, 30)
+                    CommentRow(
+                        comment: reply,
+                        client: client,
+                        videoID: videoID,
+                        isReply: true,
+                        onTimestampTap: onTimestampTap)
+                    .padding(.leading, 30)
                 }
             }
         }
@@ -204,5 +215,61 @@ struct CommentRow: View {
             loadingReplies = false
         }
         showReplies = true
+    }
+}
+
+private struct TimestampedCommentText: View {
+    let text: String
+    let timestamps: [CommentTimestamp]
+    let onTimestampTap: (Int) -> Void
+
+    private static let urlScheme = "atlas-comment-timestamp"
+
+    var body: some View {
+        Text(attributedText)
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .environment(\.openURL, OpenURLAction { url in
+                guard url.scheme == Self.urlScheme,
+                      let secondsText = URLComponents(
+                        url: url,
+                        resolvingAgainstBaseURL: false)?.host,
+                      let seconds = Int(secondsText) else {
+                    return .systemAction
+                }
+                onTimestampTap(seconds)
+                return .handled
+            })
+    }
+
+    private var attributedText: AttributedString {
+        guard !timestamps.isEmpty else { return AttributedString(text) }
+
+        var output = AttributedString()
+        var cursor = text.startIndex
+
+        for timestamp in timestamps {
+            guard let range = text.range(
+                of: timestamp.label,
+                range: cursor..<text.endIndex
+            ) else { continue }
+
+            if cursor < range.lowerBound {
+                output += AttributedString(String(text[cursor..<range.lowerBound]))
+            }
+
+            var linkedTimestamp = AttributedString(String(text[range]))
+            linkedTimestamp.link = URL(string: "\(Self.urlScheme)://\(timestamp.seconds)")
+            linkedTimestamp.foregroundColor = .accentColor
+            output += linkedTimestamp
+            cursor = range.upperBound
+        }
+
+        if cursor < text.endIndex {
+            output += AttributedString(String(text[cursor..<text.endIndex]))
+        }
+
+        return output
     }
 }
