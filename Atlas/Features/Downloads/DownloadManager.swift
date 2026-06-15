@@ -94,6 +94,7 @@ final class DownloadManager {
         guard let row = try? modelContext.fetch(descriptor).first else { return }
         try? FileManager.default.removeItem(at: row.fileURL)
         if let thumb = row.thumbnailURL { try? FileManager.default.removeItem(at: thumb) }
+        if let caption = row.captionURL { try? FileManager.default.removeItem(at: caption) }
         modelContext.delete(row)
         SpotlightIndexer.remove(videoID: videoID)
     }
@@ -149,9 +150,17 @@ final class DownloadManager {
 
             DownloadStore.excludeFromBackup(output)
             let thumbName = await saveThumbnail(thumbnail, videoID: videoID)
+            let caption = await saveCaption(
+                detail.preferredSubtitle(
+                    preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages),
+                videoID: videoID)
             let row = DownloadedVideo(
                 videoID: videoID, title: title, uploader: uploader,
                 fileName: fileName, thumbnailFileName: thumbName,
+                captionFileName: caption?.fileName,
+                captionMimeType: caption?.mimeType,
+                captionLanguageCode: caption?.languageCode,
+                captionName: caption?.name,
                 durationSeconds: detail.duration ?? 0, qualityLabel: quality,
                 byteCount: DownloadStore.byteCount(of: output))
             modelContext.insert(row)
@@ -197,6 +206,22 @@ final class DownloadManager {
         guard (try? data.write(to: dest)) != nil else { return nil }
         DownloadStore.excludeFromBackup(dest)
         return name
+    }
+
+    private func saveCaption(
+        _ subtitle: Subtitle?,
+        videoID: String
+    ) async -> (fileName: String, mimeType: String?, languageCode: String?, name: String?)? {
+        guard let subtitle, let url = subtitle.usableURL,
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              !data.isEmpty else { return nil }
+
+        let ext = subtitle.mimeType?.lowercased().contains("vtt") == true ? "vtt" : "ttml"
+        let name = videoID + ".captions." + ext
+        let dest = DownloadStore.fileURL(name)
+        guard (try? data.write(to: dest, options: .atomic)) != nil else { return nil }
+        DownloadStore.excludeFromBackup(dest)
+        return (name, subtitle.mimeType, subtitle.code, subtitle.name)
     }
 
     private func setState(_ videoID: String, _ state: ActiveDownload.State) {

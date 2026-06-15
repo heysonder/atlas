@@ -28,6 +28,7 @@ final class SponsorSkipModel {
 /// off the bottom of the screen as the segment becomes active.
 struct SkipSponsorButton: View {
     let model: SponsorSkipModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -43,10 +44,10 @@ struct SkipSponsorButton: View {
                 .glassEffect(.regular.interactive(), in: Capsule())
                 .padding(.trailing, 12)
                 .padding(.bottom, 56)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .transition(reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: model.prompt)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.82), value: model.prompt)
     }
 }

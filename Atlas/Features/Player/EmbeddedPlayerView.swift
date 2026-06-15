@@ -65,6 +65,9 @@ struct EmbeddedPlayerView: View {
                         .tint(.white)
                 }
             }
+            .overlay {
+                CaptionOverlayView(model: model.captionModel, bottomPadding: 14)
+            }
     }
 
     // MARK: Info
@@ -166,6 +169,7 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
 @Observable
 final class EmbeddedPlayerModel {
     let player = AVPlayer()
+    let captionModel = CaptionOverlayModel()
     let request: PlayRequest
     private(set) var detail: VideoDetail?
     private(set) var errorMessage: String?
@@ -177,6 +181,8 @@ final class EmbeddedPlayerModel {
     private let modelContext: ModelContext
     private var loadTask: Task<Void, Never>?
     private var timeObserver: Any?
+    private var captionObserver: Any?
+    private var captionTask: Task<Void, Never>?
     private var statusObservation: NSKeyValueObservation?
     private var usedComposition = false
     private var started = false
@@ -191,6 +197,7 @@ final class EmbeddedPlayerModel {
         self.app = app
         self.modelContext = modelContext
         player.allowsExternalPlayback = true
+        player.appliesMediaSelectionCriteriaAutomatically = true
     }
 
     func start() {
@@ -214,6 +221,7 @@ final class EmbeddedPlayerModel {
             guard !Task.isCancelled else { return }
             usedComposition = built.composed
             player.replaceCurrentItem(with: built.item)
+            configureAccessibleMedia(detail)
             isReady = true
             if built.composed { observeForFailure(built.item, detail: detail) }
             self.detail = detail
@@ -231,6 +239,7 @@ final class EmbeddedPlayerModel {
 
     private func loadLocal(_ fileURL: URL) {
         player.replaceCurrentItem(with: AVPlayerItem(url: fileURL))
+        configureAccessibleLocalMedia()
         isReady = true
         recordHistoryLocal()
         Task {
@@ -245,13 +254,75 @@ final class EmbeddedPlayerModel {
     func teardown() {
         loadTask?.cancel()
         loadTask = nil
+        captionTask?.cancel()
+        captionTask = nil
         let t = player.currentTime().seconds
         if t.isFinite { savePosition(t) }
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
+        if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
         statusObservation?.invalidate()
         statusObservation = nil
+        captionModel.reset()
         player.pause()
         player.replaceCurrentItem(with: nil)
+    }
+
+    // MARK: Captions + audio descriptions
+
+    private func configureAccessibleMedia(_ detail: VideoDetail) {
+        guard SystemMediaAccessibility.shouldShowCaptions,
+              let subtitle = detail.preferredSubtitle(
+                preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages)
+        else {
+            captionModel.reset()
+            return
+        }
+        loadCaptions(from: subtitle)
+    }
+
+    private func configureAccessibleLocalMedia() {
+        guard SystemMediaAccessibility.shouldShowCaptions, let url = request.localCaptionURL else {
+            captionModel.reset()
+            return
+        }
+        loadCaptions(from: url, mimeType: request.localCaptionMimeType)
+    }
+
+    private func loadCaptions(from subtitle: Subtitle) {
+        captionTask?.cancel()
+        captionModel.reset()
+        captionTask = Task { [weak self] in
+            let cues = await CaptionLoader.load(subtitle)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.captionModel.setCues(cues)
+                self.installCaptionTracking()
+            }
+        }
+    }
+
+    private func loadCaptions(from url: URL, mimeType: String?) {
+        captionTask?.cancel()
+        captionModel.reset()
+        captionTask = Task { [weak self] in
+            let cues = await CaptionLoader.load(url: url, mimeType: mimeType)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.captionModel.setCues(cues)
+                self.installCaptionTracking()
+            }
+        }
+    }
+
+    private func installCaptionTracking() {
+        if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
+        captionObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated { self?.captionModel.update(at: time.seconds) }
+        }
     }
 
     // MARK: Resume / progress (shared with the full-screen player via HistoryEntry)

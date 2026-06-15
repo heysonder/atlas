@@ -3,6 +3,7 @@ import Foundation
 public enum PipedError: Error, LocalizedError {
     case badURL
     case http(Int)
+    case upstream(String)
     case noPlayableStream
     case decoding(String)
 
@@ -10,10 +11,45 @@ public enum PipedError: Error, LocalizedError {
         switch self {
         case .badURL: "Invalid request URL."
         case .http(let code): "Server returned HTTP \(code)."
+        case .upstream(let message): message
         case .noPlayableStream: "This instance couldn't load a playable stream. Try another instance."
         case .decoding(let m): "Couldn't read the response: \(m)"
         }
     }
+
+    static func fromHTTPStatus(_ statusCode: Int, data: Data) -> PipedError {
+        guard let body = try? JSONDecoder().decode(PipedServerError.self, from: data),
+              let rawMessage = body.error?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawMessage.isEmpty
+        else {
+            return .http(statusCode)
+        }
+
+        if rawMessage.contains("LIVE_STREAM_OFFLINE") {
+            if let quoted = Self.quotedMessage(in: rawMessage) {
+                return .upstream("This live event has not started yet. \(quoted)")
+            }
+            return .upstream("This live event has not started yet.")
+        }
+
+        if rawMessage.contains("SignInConfirmNotBotException") {
+            return .upstream("This instance was blocked by YouTube. Try another instance.")
+        }
+
+        return .http(statusCode)
+    }
+
+    private static func quotedMessage(in message: String) -> String? {
+        guard let first = message.firstIndex(of: "\"") else { return nil }
+        let rest = message[message.index(after: first)...]
+        guard let last = rest.firstIndex(of: "\"") else { return nil }
+        let quoted = rest[..<last].trimmingCharacters(in: .whitespacesAndNewlines)
+        return quoted.isEmpty ? nil : quoted
+    }
+}
+
+private struct PipedServerError: Decodable {
+    let error: String?
 }
 
 /// A thin async client for one Piped instance.
@@ -102,7 +138,7 @@ public struct PipedClient: Sendable {
     ) async throws -> [PipedInstance] {
         let url = URL(string: "https://piped-instances.kavin.rocks/")!
         let (data, response) = try await session.data(from: url)
-        try Self.validate(response)
+        try Self.validate(response, data: data)
         do {
             return try JSONDecoder().decode([PipedInstance].self, from: data)
         } catch {
@@ -121,7 +157,7 @@ public struct PipedClient: Sendable {
         guard let url = comps?.url else { throw PipedError.badURL }
 
         let (data, response) = try await session.data(from: url)
-        try Self.validate(response)
+        try Self.validate(response, data: data)
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
@@ -129,10 +165,10 @@ public struct PipedClient: Sendable {
         }
     }
 
-    private static func validate(_ response: URLResponse) throws {
+    private static func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            throw PipedError.http(http.statusCode)
+            throw PipedError.fromHTTPStatus(http.statusCode, data: data)
         }
     }
 }

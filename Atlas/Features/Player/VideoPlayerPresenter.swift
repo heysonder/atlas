@@ -56,6 +56,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var sponsorObserver: Any?
         private let sponsorModel = SponsorSkipModel()
         private var skipButtonHost: UIHostingController<SkipSponsorButton>?
+        private let captionModel = CaptionOverlayModel()
+        private var captionHost: UIHostingController<CaptionOverlayView>?
+        private var captionObserver: Any?
+        private var captionTask: Task<Void, Never>?
 
         init(app: AppModel, modelContext: ModelContext, clearRequest: @escaping () -> Void) {
             self.app = app
@@ -118,6 +122,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             currentRequest = request
 
             let player = AVPlayer()
+            player.appliesMediaSelectionCriteriaAutomatically = true
             // TEST: all buffering/stall behavior left at AVPlayer defaults
             // (automaticallyWaitsToMinimizeStalling defaults to true).
             let controller = AVPlayerViewController()
@@ -139,7 +144,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
         private func load(_ request: PlayRequest, player: AVPlayer, controller: AVPlayerViewController) async {
             if let local = request.localURL {
-                loadLocal(request, fileURL: local, player: player)
+                loadLocal(request, fileURL: local, player: player, controller: controller)
                 return
             }
             do {
@@ -156,6 +161,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 let baseMetadata = Self.metadata(detail, request)
                 item.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: item)
+                configureAccessibleMedia(detail: detail, player: player, controller: controller)
                 if built.composed { observeForFailure(item, detail: detail, player: player) }
                 attachArtwork(to: item,
                               urlString: detail.thumbnailUrl ?? request.thumbnail,
@@ -182,11 +188,17 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Offline playback of a downloaded file: no stream resolution, info panel,
         /// or related streams — just the local asset, basic Now Playing metadata,
         /// resume, and progress tracking (shared with streamed playback by videoID).
-        private func loadLocal(_ request: PlayRequest, fileURL: URL, player: AVPlayer) {
+        private func loadLocal(
+            _ request: PlayRequest,
+            fileURL: URL,
+            player: AVPlayer,
+            controller: AVPlayerViewController
+        ) {
             let metadata = Self.localMetadata(request)
             let item = AVPlayerItem(url: fileURL)
             item.externalMetadata = metadata
             player.replaceCurrentItem(with: item)
+            configureAccessibleLocalMedia(request: request, player: player, controller: controller)
             attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
             Task {
@@ -322,6 +334,91 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             skipButtonHost = host
         }
 
+        // MARK: Captions + audio descriptions
+
+        private func configureAccessibleMedia(
+            detail: VideoDetail,
+            player: AVPlayer,
+            controller: AVPlayerViewController
+        ) {
+            guard SystemMediaAccessibility.shouldShowCaptions,
+                  let subtitle = detail.preferredSubtitle(
+                    preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages)
+            else {
+                captionModel.reset()
+                return
+            }
+            installCaptionOverlay(on: controller)
+            loadCaptions(from: subtitle, player: player)
+        }
+
+        private func configureAccessibleLocalMedia(
+            request: PlayRequest,
+            player: AVPlayer,
+            controller: AVPlayerViewController
+        ) {
+            guard SystemMediaAccessibility.shouldShowCaptions, let url = request.localCaptionURL else {
+                captionModel.reset()
+                return
+            }
+            installCaptionOverlay(on: controller)
+            loadCaptions(from: url, mimeType: request.localCaptionMimeType, player: player)
+        }
+
+        private func installCaptionOverlay(on controller: AVPlayerViewController) {
+            guard captionHost == nil, let overlay = controller.contentOverlayView else { return }
+            let host = UIHostingController(rootView: CaptionOverlayView(model: captionModel))
+            host.view.backgroundColor = .clear
+            host.view.translatesAutoresizingMaskIntoConstraints = false
+            controller.addChild(host)
+            overlay.insertSubview(host.view, at: 0)
+            host.didMove(toParent: controller)
+            NSLayoutConstraint.activate([
+                host.view.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor),
+                host.view.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor),
+                host.view.leadingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.leadingAnchor),
+                host.view.trailingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.trailingAnchor)
+            ])
+            captionHost = host
+        }
+
+        private func loadCaptions(from subtitle: Subtitle, player: AVPlayer) {
+            captionTask?.cancel()
+            captionModel.reset()
+            captionTask = Task { [weak self] in
+                let cues = await CaptionLoader.load(subtitle)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.captionModel.setCues(cues)
+                    self.installCaptionTracking(on: player)
+                }
+            }
+        }
+
+        private func loadCaptions(from url: URL, mimeType: String?, player: AVPlayer) {
+            captionTask?.cancel()
+            captionModel.reset()
+            captionTask = Task { [weak self] in
+                let cues = await CaptionLoader.load(url: url, mimeType: mimeType)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.captionModel.setCues(cues)
+                    self.installCaptionTracking(on: player)
+                }
+            }
+        }
+
+        private func installCaptionTracking(on player: AVPlayer) {
+            if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
+            captionObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
+            ) { [weak self] time in
+                MainActor.assumeIsolated { self?.captionModel.update(at: time.seconds) }
+            }
+        }
+
         // MARK: Picture-in-Picture
 
         func playerViewControllerWillStartPictureInPicture(_ controller: AVPlayerViewController) {
@@ -372,15 +469,20 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func hardStop() {
             loadTask?.cancel()
             loadTask = nil
+            captionTask?.cancel()
+            captionTask = nil
             if let player {
                 if let t = player.currentTime().seconds as Double?, t.isFinite { savePosition(t) }
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
                 if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
+                if let captionObserver { player.removeTimeObserver(captionObserver) }
             }
             timeObserver = nil
             sponsorObserver = nil
+            captionObserver = nil
             sponsorSegments = []
             sponsorModel.prompt = nil
+            captionModel.reset()
             statusObservation?.invalidate()
             statusObservation = nil
             timeControlObservation?.invalidate()
@@ -395,6 +497,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             skipButtonHost?.view.removeFromSuperview()
             skipButtonHost?.removeFromParent()
             skipButtonHost = nil
+            captionHost?.willMove(toParent: nil)
+            captionHost?.view.removeFromSuperview()
+            captionHost?.removeFromParent()
+            captionHost = nil
             player?.pause()
             player = nil
             playerVC = nil
@@ -599,7 +705,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
         /// Builds the highest-quality playable item: first try composing the best
         /// video-only + audio streams (1080p H.264, or AV1 4K where supported);
-        /// fall back to HLS / progressive (≤720p) if composition isn't possible.
+        /// fall back to HLS / progressive (<=720p) if composition isn't possible.
         /// `composed` indicates the high-quality path was taken (so callers can
         /// watch for runtime failure and retry with the simple URL).
         private static func makePlayerItem(_ detail: VideoDetail) async -> (item: AVPlayerItem, composed: Bool)? {

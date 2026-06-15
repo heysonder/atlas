@@ -11,15 +11,21 @@ struct PlayRequest: Identifiable, Hashable {
     /// When set, the player plays this local file directly and skips the network
     /// stream resolution entirely (offline playback of a download).
     let localURL: URL?
+    /// Optional local caption file saved next to a downloaded video.
+    let localCaptionURL: URL?
+    let localCaptionMimeType: String?
     var id: String { videoID }
 
     nonisolated init(videoID: String, title: String, uploader: String? = nil,
-                     thumbnail: String? = nil, localURL: URL? = nil) {
+                     thumbnail: String? = nil, localURL: URL? = nil,
+                     localCaptionURL: URL? = nil, localCaptionMimeType: String? = nil) {
         self.videoID = videoID
         self.title = title
         self.uploader = uploader
         self.thumbnail = thumbnail
         self.localURL = localURL
+        self.localCaptionURL = localCaptionURL
+        self.localCaptionMimeType = localCaptionMimeType
     }
 
     nonisolated init?(item: StreamItem) {
@@ -259,6 +265,8 @@ final class AppModel {
         nowPlaying = PlayRequest(videoID: video.videoID, title: video.title,
                                  uploader: video.uploader,
                                  thumbnail: video.thumbnailURL?.absoluteString,
-                                 localURL: video.fileURL)
+                                 localURL: video.fileURL,
+                                 localCaptionURL: video.captionURL,
+                                 localCaptionMimeType: video.captionMimeType)
     }
 }
