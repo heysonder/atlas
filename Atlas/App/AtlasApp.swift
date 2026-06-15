@@ -52,7 +52,8 @@ struct AtlasApp: App {
     private static func makeModelContainer() -> ModelContainer {
         let schema = Schema([SubscribedChannel.self, HistoryEntry.self, Playlist.self,
                              PlaylistVideo.self, DownloadedVideo.self, Feedback.self,
-                             SearchEntry.self])
+                             SearchEntry.self, VideoSignalCacheEntry.self,
+                             RecommendationProfileSnapshot.self])
         let config = ModelConfiguration(schema: schema)
         do {
             return try ModelContainer(for: schema, configurations: [config])

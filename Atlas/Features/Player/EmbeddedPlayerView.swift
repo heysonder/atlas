@@ -54,7 +54,7 @@ struct EmbeddedPlayerView: View {
     /// top. The native controls include an "expand" button for true full screen
     /// (landscape) and PiP — so nothing is lost versus the full-screen player.
     private var videoArea: some View {
-        InlineVideoPlayer(player: model.player, isReady: model.isReady)
+        InlineVideoPlayer(player: model.player, isReady: model.isReady, onClose: { dismiss() })
             .aspectRatio(model.detail?.aspectRatio ?? 16.0 / 9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .background(Color.black)
@@ -95,6 +95,7 @@ struct EmbeddedPlayerView: View {
                     onQueuePlay: { app.play($0) },
                     client: model.client,
                     videoID: model.request.videoID,
+                    currentPlaybackSeconds: model.currentPlaybackSeconds,
                     inline: true)
                     .padding()
             }
@@ -144,21 +145,155 @@ struct EmbeddedPlayerView: View {
 private struct InlineVideoPlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     let isReady: Bool
+    let onClose: () -> Void
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
+    func makeUIViewController(context: Context) -> InlinePlayerController {
+        let controller = InlinePlayerController()
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.updatesNowPlayingInfoCenter = true
         controller.videoGravity = .resizeAspect
+        controller.onClose = onClose
         if isReady { controller.player = player }
         return controller
     }
 
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+    func updateUIViewController(_ controller: InlinePlayerController, context: Context) {
+        controller.onClose = onClose
         if isReady, controller.player !== player {
             controller.player = player
         }
+    }
+}
+
+/// An inline `AVPlayerViewController` that adds a custom **close (✕)** control to
+/// the native transport row — sitting beside PiP / AirPlay / full-screen and
+/// auto-hiding with the controls.
+///
+/// iOS exposes no public API for this (custom transport-bar items are tvOS-only,
+/// which is why the full-screen player's "Info" button is a floating overlay
+/// instead). So we reach into the controls' *private* view hierarchy: on each
+/// layout pass we locate the busiest horizontal control row and append our
+/// button if it isn't already attached. Everything is guarded — if a future iOS
+/// reorganises the hierarchy and the row can't be found, we simply add nothing
+/// (no crash; the player just lacks the extra button). Scoped to the embedded
+/// player only; the full-screen `VideoPlayerPresenter` is deliberately untouched.
+final class InlinePlayerController: AVPlayerViewController {
+    var onClose: (() -> Void)?
+    private weak var closeButton: UIButton?
+    private var didScheduleDump = false
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        ensureCloseButton()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Dump the tree once, ~2s in, after the controls have had a chance to
+        // build — regardless of whether we found any buttons — so we can see
+        // whether the transport controls live in our process at all.
+        guard !didScheduleDump else { return }
+        didScheduleDump = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self else { return }
+            Self.dumpHierarchy(self.view)
+        }
+    }
+
+    private func ensureCloseButton() {
+        guard onClose != nil else { return }
+        // Still attached from an earlier pass — leave it be.
+        if let closeButton, closeButton.superview != nil { return }
+
+        let buttons = Self.allButtons(in: view)
+        guard !buttons.isEmpty else { return }   // controls not built yet (or out-of-process)
+
+        // Strategy 1: append to the horizontal stack holding the most buttons.
+        if let row = Self.bestControlRow(in: view) {
+            let button = makeCloseButton()
+            row.addArrangedSubview(button)
+            closeButton = button
+            NSLog("Atlas.embedX: ✅ injected into UIStackView (now \(row.arrangedSubviews.count) items)")
+            return
+        }
+
+        // Strategy 2 (no stack): sit beside the bottom-most control button, in its superview.
+        guard let anchor = buttons.max(by: {
+            let a = $0.convert($0.bounds, to: view), b = $1.convert($1.bounds, to: view)
+            return (a.maxY, a.maxX) < (b.maxY, b.maxX)
+        }), let bar = anchor.superview else { return }
+        let button = makeCloseButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.centerYAnchor.constraint(equalTo: anchor.centerYAnchor),
+            button.leadingAnchor.constraint(equalTo: anchor.trailingAnchor, constant: 16)
+        ])
+        closeButton = button
+        NSLog("Atlas.embedX: ✅ injected beside \(type(of: anchor)) in \(type(of: bar))")
+    }
+
+    private func makeCloseButton() -> UIButton {
+        let button = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
+        button.setImage(UIImage(systemName: "xmark", withConfiguration: config), for: .normal)
+        button.tintColor = .white
+        button.accessibilityLabel = "Close"
+        button.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
+        return button
+    }
+
+    private static func allButtons(in root: UIView) -> [UIButton] {
+        var found: [UIButton] = []
+        func walk(_ v: UIView) {
+            if let b = v as? UIButton { found.append(b) }
+            for sub in v.subviews { walk(sub) }
+        }
+        walk(root)
+        return found
+    }
+
+    /// The most likely transport-control row: the horizontal `UIStackView` with
+    /// the most buttons, breaking ties toward the lowest one on screen (the
+    /// bottom bar, where PiP / AirPlay / full-screen live).
+    private static func bestControlRow(in root: UIView) -> UIStackView? {
+        var best: UIStackView?
+        var bestButtons = 0
+        var bestY: CGFloat = 0
+        func walk(_ v: UIView) {
+            if let stack = v as? UIStackView, stack.axis == .horizontal {
+                let buttons = stack.arrangedSubviews.reduce(into: 0) { count, sub in
+                    if sub is UIButton { count += 1 }
+                }
+                if buttons > 0 {
+                    let y = stack.convert(stack.bounds, to: root).maxY
+                    if buttons > bestButtons || (buttons == bestButtons && y > bestY) {
+                        best = stack; bestButtons = buttons; bestY = y
+                    }
+                }
+            }
+            for sub in v.subviews { walk(sub) }
+        }
+        walk(root)
+        return best
+    }
+
+    /// One-shot diagnostic: logs the controller's view tree so we can see exactly
+    /// where (or whether) the transport controls live in our process.
+    private static func dumpHierarchy(_ root: UIView) {
+        func walk(_ v: UIView, _ depth: Int) {
+            let indent = String(repeating: "·  ", count: depth)
+            var tag = ""
+            if let s = v as? UIStackView { tag = " [STACK \(s.axis == .horizontal ? "H" : "V") arranged=\(s.arrangedSubviews.count)]" }
+            else if v is UIButton { tag = " [BUTTON]" }
+            else if v is UIControl { tag = " [CONTROL]" }
+            NSLog("Atlas.embedX: \(indent)\(type(of: v))\(tag) \(v.frame.debugDescription) hidden=\(v.isHidden) alpha=\(v.alpha)")
+            for sub in v.subviews { walk(sub, depth + 1) }
+        }
+        NSLog("Atlas.embedX: ── view hierarchy dump ──")
+        walk(root, 0)
+        NSLog("Atlas.embedX: ── end dump ──")
     }
 }
 
@@ -170,9 +305,10 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
 final class EmbeddedPlayerModel {
     let player = AVPlayer()
     let captionModel = CaptionOverlayModel()
-    let request: PlayRequest
+    private(set) var request: PlayRequest
     private(set) var detail: VideoDetail?
     private(set) var errorMessage: String?
+    private(set) var currentPlaybackSeconds: Double?
     /// Flips true the moment a player item is set, so the inline controller is
     /// only attached to a player that has something to play.
     private(set) var isReady = false
@@ -183,9 +319,11 @@ final class EmbeddedPlayerModel {
     private var timeObserver: Any?
     private var captionObserver: Any?
     private var captionTask: Task<Void, Never>?
+    private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var usedComposition = false
     private var started = false
+    private var lastProgressSaveSeconds: Double?
 
     private static let minWatchSeconds: Double = 5
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
@@ -221,6 +359,7 @@ final class EmbeddedPlayerModel {
             guard !Task.isCancelled else { return }
             usedComposition = built.composed
             player.replaceCurrentItem(with: built.item)
+            installEndObserver(for: built.item)
             configureAccessibleMedia(detail)
             isReady = true
             if built.composed { observeForFailure(built.item, detail: detail) }
@@ -238,7 +377,9 @@ final class EmbeddedPlayerModel {
     }
 
     private func loadLocal(_ fileURL: URL) {
-        player.replaceCurrentItem(with: AVPlayerItem(url: fileURL))
+        let item = AVPlayerItem(url: fileURL)
+        player.replaceCurrentItem(with: item)
+        installEndObserver(for: item)
         configureAccessibleLocalMedia()
         isReady = true
         recordHistoryLocal()
@@ -260,9 +401,12 @@ final class EmbeddedPlayerModel {
         if t.isFinite { savePosition(t) }
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
         if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
+        removeEndObserver()
         statusObservation?.invalidate()
         statusObservation = nil
         captionModel.reset()
+        currentPlaybackSeconds = nil
+        lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
     }
@@ -325,6 +469,68 @@ final class EmbeddedPlayerModel {
         }
     }
 
+    // MARK: Queue advancement
+
+    private func installEndObserver(for item: AVPlayerItem) {
+        removeEndObserver()
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.playbackEndedNaturally()
+            }
+        }
+    }
+
+    private func removeEndObserver() {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+    }
+
+    private func playbackEndedNaturally() {
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite { savePosition(seconds) }
+        guard let next = app.dequeueNext() else { return }
+        playQueued(next)
+    }
+
+    private func playQueued(_ next: PlayRequest) {
+        resetForItemReplacement()
+        request = next
+        app.nowPlaying = next
+        if let local = next.localURL {
+            loadLocal(local)
+        } else {
+            loadTask = Task { await load() }
+        }
+    }
+
+    private func resetForItemReplacement() {
+        loadTask?.cancel()
+        loadTask = nil
+        captionTask?.cancel()
+        captionTask = nil
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        if let captionObserver { player.removeTimeObserver(captionObserver) }
+        timeObserver = nil
+        captionObserver = nil
+        removeEndObserver()
+        statusObservation?.invalidate()
+        statusObservation = nil
+        captionModel.reset()
+        usedComposition = false
+        detail = nil
+        errorMessage = nil
+        currentPlaybackSeconds = nil
+        lastProgressSaveSeconds = nil
+        isReady = false
+        player.replaceCurrentItem(with: nil)
+    }
+
     // MARK: Resume / progress (shared with the full-screen player via HistoryEntry)
 
     private func savedPosition(for videoID: String) -> Double? {
@@ -337,9 +543,20 @@ final class EmbeddedPlayerModel {
     private func installProgressTracking() {
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main
+            forInterval: CMTime(seconds: 1, preferredTimescale: 2), queue: .main
         ) { [weak self] time in
-            MainActor.assumeIsolated { self?.savePosition(time.seconds) }
+            MainActor.assumeIsolated { self?.handleProgressTick(time.seconds) }
+        }
+    }
+
+    private func handleProgressTick(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        currentPlaybackSeconds = seconds
+        guard seconds >= Self.minWatchSeconds else { return }
+        if lastProgressSaveSeconds == nil
+            || abs(seconds - (lastProgressSaveSeconds ?? 0)) >= Self.minWatchSeconds {
+            lastProgressSaveSeconds = seconds
+            savePosition(seconds)
         }
     }
 
@@ -435,7 +652,9 @@ final class EmbeddedPlayerModel {
                 self.statusObservation?.invalidate()
                 self.statusObservation = nil
                 let resume = self.player.currentTime()
-                self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
+                let fallback = AVPlayerItem(url: url)
+                self.player.replaceCurrentItem(with: fallback)
+                self.installEndObserver(for: fallback)
                 await self.player.seek(to: resume)
                 self.player.playImmediately(atRate: 1.0)
             }

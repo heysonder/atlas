@@ -26,6 +26,8 @@ struct VideoContextMenu: ViewModifier {
             .contextMenu {
                 if item.isVideo {
                     if feedMode.isPersonalized { feedbackButtons; Divider() }
+                    queueButtons
+                    Divider()
                     downloadButton
                     Menu("Add to Playlist", systemImage: "text.badge.plus") {
                         Button("New Playlist…", systemImage: "plus") { creatingNew = true }
@@ -56,6 +58,17 @@ struct VideoContextMenu: ViewModifier {
         }
     }
 
+    @ViewBuilder private var queueButtons: some View {
+        if let request = playRequest {
+            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                app.playNext(request)
+            }
+            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                app.addToQueue(request)
+            }
+        }
+    }
+
     @ViewBuilder private var downloadButton: some View {
         if let videoID = item.videoID {
             if downloads.isDownloaded(videoID) {
@@ -71,6 +84,19 @@ struct VideoContextMenu: ViewModifier {
                 }
             }
         }
+    }
+
+    private var playRequest: PlayRequest? {
+        guard let request = PlayRequest(item: item) else { return nil }
+        let videoID = request.videoID
+        let descriptor = FetchDescriptor<DownloadedVideo>(
+            predicate: #Predicate { $0.videoID == videoID })
+        guard let download = try? context.fetch(descriptor).first else { return request }
+        return PlayRequest(videoID: download.videoID,
+                           title: download.title,
+                           uploader: download.uploader,
+                           thumbnail: download.thumbnailURL?.absoluteString ?? request.thumbnail,
+                           localURL: download.fileURL)
     }
 
     private func add(to playlist: Playlist) {

@@ -302,6 +302,47 @@ public struct Channel: Codable, Sendable {
 
 // MARK: - Comments (/comments/{id} and /nextpage/comments/{id})
 
+/// A timestamp mentioned in a comment body, normalized to seconds.
+public struct CommentTimestamp: Hashable, Identifiable, Sendable {
+    public let seconds: Int
+    public let label: String
+
+    public var id: String { "\(seconds)|\(label)" }
+
+    public init(seconds: Int, label: String) {
+        self.seconds = seconds
+        self.label = label
+    }
+
+    public static func extract(from text: String) -> [CommentTimestamp] {
+        let pattern = #"(?<![\d:])(?:(\d{1,2}):)?(\d{1,3}):(\d{2})(?![\d:])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            func group(_ index: Int) -> String? {
+                let range = match.range(at: index)
+                guard range.location != NSNotFound,
+                      let swiftRange = Range(range, in: text) else { return nil }
+                return String(text[swiftRange])
+            }
+
+            guard let label = group(0),
+                  let middleText = group(2),
+                  let secondsText = group(3),
+                  let middle = Int(middleText),
+                  let seconds = Int(secondsText),
+                  seconds < 60 else { return nil }
+
+            if let hoursText = group(1), let hours = Int(hoursText) {
+                guard middle < 60 else { return nil }
+                return CommentTimestamp(seconds: hours * 3600 + middle * 60 + seconds,
+                                        label: label)
+            }
+            return CommentTimestamp(seconds: middle * 60 + seconds, label: label)
+        }
+    }
+}
+
 /// One comment (or, when fetched via a parent's `repliesPage`, one reply).
 /// `commentText` is HTML, like descriptions — render through `plainText`.
 public struct Comment: Codable, Identifiable, Sendable {
@@ -327,6 +368,10 @@ public struct Comment: Codable, Identifiable, Sendable {
     public var channelID: String? { PipedID.channel(fromURL: commentorUrl) }
     /// HTML-stripped comment body.
     public var plainText: String { HTMLText.plain(commentText ?? "") }
+    /// Timestamps such as `1:23` or `1:02:03` mentioned in the comment body.
+    public var timestamps: [CommentTimestamp] {
+        CommentTimestamp.extract(from: plainText)
+    }
     /// True when there are replies that can be fetched via `repliesPage`.
     public var hasReplies: Bool { (replyCount ?? 0) > 0 && repliesPage != nil }
 }

@@ -41,13 +41,16 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var loadTask: Task<Void, Never>?
         private var pipActive = false
         private var timeObserver: Any?
+        private var endObserver: NSObjectProtocol?
         private var statusObservation: NSKeyValueObservation?
         private var currentRequest: PlayRequest?
         private var currentDetail: VideoDetail?
         private var usedComposition = false
         private var infoButtonHost: UIHostingController<InfoOverlayButton>?
         private let infoButtonModel = InfoButtonModel()
+        private let infoPlaybackTime = PlayerPlaybackTime()
         private var timeControlObservation: NSKeyValueObservation?
+        private var infoCommentTimeObserver: Any?
         private var detachedForBackground = false
         private static let minWatchSeconds: Double = 5
 
@@ -161,6 +164,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 let baseMetadata = Self.metadata(detail, request)
                 item.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: item)
+                installEndObserver(for: item)
                 configureAccessibleMedia(detail: detail, player: player, controller: controller)
                 if built.composed { observeForFailure(item, detail: detail, player: player) }
                 attachArtwork(to: item,
@@ -198,6 +202,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             let item = AVPlayerItem(url: fileURL)
             item.externalMetadata = metadata
             player.replaceCurrentItem(with: item)
+            installEndObserver(for: item)
             configureAccessibleLocalMedia(request: request, player: player, controller: controller)
             attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
@@ -240,6 +245,79 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 entry.durationSeconds = d
             }
             entry.watchedAt = .now
+        }
+
+        // MARK: Queue advancement
+
+        private func installEndObserver(for item: AVPlayerItem) {
+            removeEndObserver()
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.playbackEndedNaturally()
+                }
+            }
+        }
+
+        private func removeEndObserver() {
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+                self.endObserver = nil
+            }
+        }
+
+        private func playbackEndedNaturally() {
+            if let seconds = player?.currentTime().seconds, seconds.isFinite {
+                savePosition(seconds)
+            }
+            guard let next = app.dequeueNext(),
+                  let player,
+                  let controller = playerVC else { return }
+
+            resetForItemReplacement(on: player)
+            presentedID = next.videoID
+            currentRequest = next
+            app.nowPlaying = next
+            player.replaceCurrentItem(with: nil)
+            loadTask = Task { await load(next, player: player, controller: controller) }
+        }
+
+        private func resetForItemReplacement(on player: AVPlayer) {
+            loadTask?.cancel()
+            loadTask = nil
+            captionTask?.cancel()
+            captionTask = nil
+            if let timeObserver { player.removeTimeObserver(timeObserver) }
+            if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
+            if let captionObserver { player.removeTimeObserver(captionObserver) }
+            if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
+            timeObserver = nil
+            sponsorObserver = nil
+            captionObserver = nil
+            infoCommentTimeObserver = nil
+            sponsorSegments = []
+            sponsorModel.prompt = nil
+            captionModel.reset()
+            removeEndObserver()
+            statusObservation?.invalidate()
+            statusObservation = nil
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
+            infoButtonModel.isPaused = false
+            infoPlaybackTime.seconds = nil
+            usedComposition = false
+            currentDetail = nil
+            infoButtonHost?.willMove(toParent: nil)
+            infoButtonHost?.view.removeFromSuperview()
+            infoButtonHost?.removeFromParent()
+            infoButtonHost = nil
+            skipButtonHost?.willMove(toParent: nil)
+            skipButtonHost?.view.removeFromSuperview()
+            skipButtonHost?.removeFromParent()
+            skipButtonHost = nil
         }
 
         // MARK: SponsorBlock
@@ -476,10 +554,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
                 if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
                 if let captionObserver { player.removeTimeObserver(captionObserver) }
+                if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
             }
             timeObserver = nil
             sponsorObserver = nil
             captionObserver = nil
+            infoCommentTimeObserver = nil
+            removeEndObserver()
             sponsorSegments = []
             sponsorModel.prompt = nil
             captionModel.reset()
@@ -488,6 +569,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             timeControlObservation?.invalidate()
             timeControlObservation = nil
             infoButtonModel.isPaused = false
+            infoPlaybackTime.seconds = nil
             usedComposition = false
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
@@ -589,11 +671,35 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             }
         }
 
+        private func installInfoCommentTimeTracking(on player: AVPlayer?) {
+            guard let player else { return }
+            updateInfoPlaybackTime(player.currentTime().seconds)
+            guard infoCommentTimeObserver == nil else { return }
+            infoCommentTimeObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 1, preferredTimescale: 2), queue: .main
+            ) { [weak self] time in
+                MainActor.assumeIsolated { self?.updateInfoPlaybackTime(time.seconds) }
+            }
+        }
+
+        private func stopInfoCommentTimeTracking() {
+            if let infoCommentTimeObserver, let player {
+                player.removeTimeObserver(infoCommentTimeObserver)
+            }
+            infoCommentTimeObserver = nil
+            infoPlaybackTime.seconds = nil
+        }
+
+        private func updateInfoPlaybackTime(_ seconds: Double) {
+            infoPlaybackTime.seconds = seconds.isFinite ? seconds : nil
+        }
+
         /// Slides up a sheet over the still-playing video with the title, full
         /// description, and a subscribe toggle for the uploader.
         private func presentInfo() {
             guard let detail = currentDetail, let host = playerVC,
                   let videoID = currentRequest?.videoID ?? presentedID else { return }
+            installInfoCommentTimeTracking(on: player)
             let channelID = detail.channelID
             let name = detail.uploader ?? currentRequest?.uploader
             let avatar = detail.uploaderAvatar
@@ -626,7 +732,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     }
                 },
                 client: app.client,
-                videoID: videoID)
+                videoID: videoID,
+                playbackTime: infoPlaybackTime,
+                onDisappear: { [weak self] in self?.stopInfoCommentTimeTracking() })
             let infoVC = UIHostingController(rootView: sheet
                 .environment(app)
                 .modelContext(modelContext))
@@ -748,6 +856,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     fallback.externalMetadata = Self.metadata(detail, self.currentRequest ?? PlayRequest(
                         videoID: detail.channelID ?? "", title: detail.title ?? ""))
                     player.replaceCurrentItem(with: fallback)
+                    self.installEndObserver(for: fallback)
                     await player.seek(to: resume)
                     player.playImmediately(atRate: 1.0)
                 }

@@ -75,12 +75,9 @@ struct VideoRow: View {
     @ViewBuilder private var durationPill: some View {
         let d = Format.duration(item.duration)
         if !d.isEmpty {
-            Text(d)
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .foregroundStyle(.primary)
-                .glassEffect(.regular, in: Capsule())
+            ThumbnailChip {
+                Text(d)
+            }
                 .padding(8)
         }
     }

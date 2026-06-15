@@ -37,6 +37,14 @@ struct DownloadsView: View {
                                     SavedRow(video: video)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                                        app.playNext(playRequest(for: video))
+                                    }
+                                    Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                                        app.addToQueue(playRequest(for: video))
+                                    }
+                                }
                             }
                             .onDelete(perform: deleteSaved)
                         }
@@ -50,6 +58,14 @@ struct DownloadsView: View {
 
     private func deleteSaved(_ offsets: IndexSet) {
         for index in offsets { downloads.remove(saved[index].videoID) }
+    }
+
+    private func playRequest(for video: DownloadedVideo) -> PlayRequest {
+        PlayRequest(videoID: video.videoID,
+                    title: video.title,
+                    uploader: video.uploader,
+                    thumbnail: video.thumbnailURL?.absoluteString,
+                    localURL: video.fileURL)
     }
 }
 

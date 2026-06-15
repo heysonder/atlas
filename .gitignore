@@ -5,6 +5,9 @@ DerivedData/
 xcuserdata/
 .DS_Store
 
+# Codex local workspace state
+.codex/
+
 # xcodegen output (regenerate with `xcodegen generate`)
 Atlas.xcodeproj/
 

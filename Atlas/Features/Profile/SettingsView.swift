@@ -6,7 +6,7 @@ import PipedKit
 /// matching the rest of the stack — mixing in destination-based links would
 /// double-navigate (see the note in ProfileView).
 enum SettingsRoute: Hashable {
-    case instances, sponsorBlock, backup
+    case instances, sponsorBlock, backup, topicCloud
 }
 
 /// Root settings screen: the lightweight, frequently-touched controls stay
@@ -42,6 +42,14 @@ struct SettingsView: View {
                 Text(app.hideShorts
                      ? "Hide YouTube Shorts from your feed, search, and channels."
                      : app.shortsLayout.blurb)
+            }
+
+            Section {
+                NavigationLink(value: SettingsRoute.topicCloud) {
+                    settingRow("Topic Cloud", systemImage: "textformat.size", detail: "Local")
+                }
+            } header: {
+                Text("Personalization")
             }
 
             Section {
