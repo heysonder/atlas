@@ -57,6 +57,23 @@ import Foundation
     #expect(segs[1].sponsorCategory == .selfpromo)
 }
 
+@Test func extractsCommentTimestamps() throws {
+    let json = """
+    {"commentText":"Intro <a>1:23</a><br>Deep dive 1:02:03 and long one 123:45"}
+    """.data(using: .utf8)!
+    let comment = try JSONDecoder().decode(PipedKit.Comment.self, from: json)
+    #expect(comment.timestamps.map { $0.seconds } == [83, 3723, 7425])
+    #expect(comment.timestamps.map { $0.label } == ["1:23", "1:02:03", "123:45"])
+}
+
+@Test func ignoresInvalidCommentTimestamps() throws {
+    let json = """
+    {"commentText":"Ratios like 16:9, invalid seconds 1:75, and chained 1:02:03:04 are not timestamps."}
+    """.data(using: .utf8)!
+    let comment = try JSONDecoder().decode(PipedKit.Comment.self, from: json)
+    #expect(comment.timestamps.isEmpty)
+}
+
 @Test func sponsorCategoryRawValues() {
     #expect(SponsorCategory.musicOfftopic.rawValue == "music_offtopic")
     #expect(SponsorCategory(rawValue: "interaction") == .interaction)

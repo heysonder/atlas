@@ -5,12 +5,22 @@ import SwiftUI
 /// unlike the Home feed — watched videos stay visible rather than being hidden.
 struct WatchedBadge: View {
     var body: some View {
-        Label("Watched", systemImage: "checkmark.circle.fill")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .glassEffect(.regular, in: Capsule())
+        ThumbnailChip {
+            Label("Watched", systemImage: "checkmark.circle.fill")
+        }
             .accessibilityLabel("Watched")
+    }
+}
+
+struct ThumbnailChip<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundStyle(.primary)
+            .glassEffect(.regular, in: Capsule())
     }
 }

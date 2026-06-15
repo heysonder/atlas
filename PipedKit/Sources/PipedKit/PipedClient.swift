@@ -96,6 +96,12 @@ public struct PipedClient: Sendable {
         try await get("channel/\(id)")
     }
 
+    /// Continues paging a channel's uploads with the `nextpage` token returned by
+    /// `/channel/:channelId` or a previous channel next-page response.
+    public func channelNextPage(id: String, nextpage: String) async throws -> Channel {
+        try await get("nextpage/channel/\(id)", query: ["nextpage": nextpage])
+    }
+
     /// First page of a video's comments. `CommentsPage.disabled` is true when the
     /// uploader has turned comments off.
     public func comments(videoID: String) async throws -> CommentsPage {
@@ -128,6 +134,15 @@ public struct PipedClient: Sendable {
         let items: [StreamItem] = try await get("feed/unauthenticated", query: [
             "channels": channelIDs.joined(separator: ",")
         ])
+        return items
+    }
+
+    /// Public trending videos for a region. Useful as a cold-start feed before
+    /// the user has local subscriptions or enough watch/search history.
+    public func trending(region: String = "US") async throws -> [StreamItem] {
+        let trimmed = region.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = trimmed.isEmpty ? "US" : trimmed.uppercased()
+        let items: [StreamItem] = try await get("trending", query: ["region": resolved])
         return items
     }
 

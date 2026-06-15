@@ -45,10 +45,10 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chasemarshall.atlas
+        PRODUCT_BUNDLE_IDENTIFIER: sh.cmf.atlas
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
-        DEVELOPMENT_TEAM: 3TKR2M3626
+        DEVELOPMENT_TEAM: R8VQT6V47K
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "6.0"
         SWIFT_APPROACHABLE_CONCURRENCY: YES
@@ -60,3 +60,22 @@ targets:
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
+
+  AtlasTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AtlasTests
+    dependencies:
+      - target: Atlas
+      - package: PipedKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sh.cmf.atlas.tests
+        DEVELOPMENT_TEAM: R8VQT6V47K
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Atlas.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Atlas"
+        BUNDLE_LOADER: "$(TEST_HOST)"

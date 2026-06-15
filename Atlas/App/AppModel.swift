@@ -37,6 +37,17 @@ struct PlayRequest: Identifiable, Hashable {
     }
 }
 
+/// One transient item in the in-memory playback queue.
+struct QueuedVideo: Identifiable, Hashable {
+    let id: UUID
+    let request: PlayRequest
+
+    init(_ request: PlayRequest, id: UUID = UUID()) {
+        self.id = id
+        self.request = request
+    }
+}
+
 /// Which player UI opens when you tap a video. The native full-screen player is
 /// the default; the embedded option plays inline with the info panel beneath it.
 enum PlayerStyle: String, CaseIterable, Identifiable {
@@ -74,6 +85,10 @@ final class AppModel {
 
     /// Set to present the player from anywhere.
     var nowPlaying: PlayRequest?
+
+    /// Transient session queue. It intentionally is not persisted; closing the
+    /// app clears it.
+    var queuedVideos: [QueuedVideo] = []
 
     /// Which player UI handles `nowPlaying`. Defaults to the native full-screen
     /// player so existing behavior is unchanged.
@@ -254,6 +269,23 @@ final class AppModel {
     func play(_ item: StreamItem) {
         guard let request = PlayRequest(item: item) else { return }
         nowPlaying = request
+    }
+
+    func playNext(_ request: PlayRequest) {
+        queuedVideos.insert(QueuedVideo(request), at: 0)
+    }
+
+    func addToQueue(_ request: PlayRequest) {
+        queuedVideos.append(QueuedVideo(request))
+    }
+
+    func dequeueNext() -> PlayRequest? {
+        guard !queuedVideos.isEmpty else { return nil }
+        return queuedVideos.removeFirst().request
+    }
+
+    func clearQueue() {
+        queuedVideos.removeAll()
     }
 
     func playPlaylistVideo(_ video: PlaylistVideo) {

@@ -123,6 +123,14 @@ struct PlaylistDetailView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                                app.playNext(playRequest(for: video))
+                            }
+                            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                                app.addToQueue(playRequest(for: video))
+                            }
+                        }
                     }
                     .onDelete(perform: removeVideos)
                 }
@@ -135,5 +143,10 @@ struct PlaylistDetailView: View {
     private func removeVideos(_ offsets: IndexSet) {
         let ordered = playlist.orderedVideos
         for index in offsets { context.delete(ordered[index]) }
+    }
+
+    private func playRequest(for video: PlaylistVideo) -> PlayRequest {
+        PlayRequest(videoID: video.videoID, title: video.title,
+                    uploader: video.uploader, thumbnail: video.thumbnailURL)
     }
 }

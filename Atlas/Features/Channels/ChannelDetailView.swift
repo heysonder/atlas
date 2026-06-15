@@ -13,6 +13,8 @@ struct ChannelDetailView: View {
 
     @State private var phase: LoadPhase<Channel> = .idle
     @State private var videos: [StreamItem] = []
+    @State private var nextpage: String?
+    @State private var isLoadingNextPage = false
 
     private var subscription: SubscribedChannel? {
         allSubs.first { $0.channelID == channelID }
@@ -55,21 +57,48 @@ struct ChannelDetailView: View {
 
                 let shown = app.filteringShorts(videos)
                 if shown.isEmpty {
-                    ContentUnavailableView("No videos to show", systemImage: "play.slash",
-                        description: Text("This instance returned no uploads for this channel. Try another instance in Settings."))
-                        .padding(.top, 40)
+                    emptyState
                 } else {
                     GroupedVideoList(items: shown,
                                      avatarFallback: channel.avatarUrl,
                                      channelIDFallback: channelID,
                                      watchedIDs: watchedIDs,
-                                     onAppearItem: { app.prefetchStream($0.videoID) }) { app.play($0) }
+                                     onAppearItem: { handleAppear($0, visibleItems: shown) }) { app.play($0) }
                         .padding(.horizontal)
+                    paginationFooter
                 }
             }
             .padding(.bottom, 24)
         }
         .refreshable { await load(force: true) }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if hasNextPage || isLoadingNextPage {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+                .task(id: nextpage) { await loadNextPage() }
+        } else {
+            ContentUnavailableView("No videos to show", systemImage: "play.slash",
+                description: Text("This instance returned no uploads for this channel. Try another instance in Settings."))
+                .padding(.top, 40)
+        }
+    }
+
+    @ViewBuilder
+    private var paginationFooter: some View {
+        if isLoadingNextPage {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+        } else if hasNextPage {
+            Color.clear
+                .frame(height: 1)
+                .id(nextpage)
+                .onAppear { Task { await loadNextPage() } }
+        }
     }
 
     @ViewBuilder
@@ -136,6 +165,27 @@ struct ChannelDetailView: View {
         }
     }
 
+    private var hasNextPage: Bool {
+        nextpage?.isEmpty == false
+    }
+
+    private func normalizedNextpage(_ token: String?) -> String? {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private func handleAppear(_ item: StreamItem, visibleItems: [StreamItem]) {
+        app.prefetchStream(item.videoID)
+        guard shouldLoadNextPage(after: item, visibleItems: visibleItems) else { return }
+        Task { await loadNextPage() }
+    }
+
+    private func shouldLoadNextPage(after item: StreamItem, visibleItems: [StreamItem]) -> Bool {
+        guard hasNextPage, !isLoadingNextPage,
+              let index = visibleItems.firstIndex(where: { $0.id == item.id }) else { return false }
+        return index >= max(visibleItems.count - 4, 0)
+    }
+
     /// Loads the channel header + uploads. `.task` calls it once on appear (and
     /// skips when already loaded); pull-to-refresh passes `force` to re-fetch
     /// while keeping the current content on screen instead of blanking to a spinner.
@@ -156,11 +206,44 @@ struct ChannelDetailView: View {
             }
             phase = .loaded(channel)
             videos = loaded
+            nextpage = normalizedNextpage(channel.nextpage)
             await prefetchThumbnails(app.filteringShorts(loaded))
+        } catch is CancellationError {
+            return
         } catch {
             // On a refresh failure keep the content we're already showing.
             if !alreadyLoaded { phase = .failed(error.localizedDescription) }
         }
+    }
+
+    private func loadNextPage() async {
+        guard let token = nextpage, !isLoadingNextPage else { return }
+        isLoadingNextPage = true
+        defer { isLoadingNextPage = false }
+
+        do {
+            let page = try await app.client.channelNextPage(id: channelID, nextpage: token)
+            let newToken = normalizedNextpage(page.nextpage)
+            let appended = appendUnique(page.relatedStreams ?? [])
+            nextpage = appended.isEmpty && newToken == token ? nil : newToken
+            await prefetchThumbnails(appended)
+        } catch is CancellationError {
+            return
+        } catch {
+            // Keep the token so a later scroll or pull-to-refresh can retry.
+        }
+    }
+
+    @discardableResult
+    private func appendUnique(_ newVideos: [StreamItem]) -> [StreamItem] {
+        var existingIDs = Set(videos.map(\.id))
+        let unique = newVideos.filter { item in
+            guard !existingIDs.contains(item.id) else { return false }
+            existingIDs.insert(item.id)
+            return true
+        }
+        videos.append(contentsOf: unique)
+        return unique
     }
 
     /// Warm the first batch of thumbnails so they're decoded before scroll, the

@@ -11,6 +11,12 @@ final class InfoButtonModel {
     @ObservationIgnored var onTap: () -> Void = {}
 }
 
+@MainActor
+@Observable
+final class PlayerPlaybackTime {
+    var seconds: Double?
+}
+
 /// The small Liquid Glass "Info" button layered over the video.
 struct InfoOverlayButton: View {
     let model: InfoButtonModel
@@ -62,6 +68,8 @@ struct PlayerInfoSheet: View {
     /// Used to fetch comments lazily once the sheet appears.
     let client: PipedClient
     let videoID: String
+    var playbackTime: PlayerPlaybackTime?
+    var onDisappear: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
 
@@ -76,7 +84,8 @@ struct PlayerInfoSheet: View {
                     description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
                     feedback: feedback, onFeedback: onFeedback, queue: queue,
-                    onQueuePlay: onQueuePlay, client: client, videoID: videoID)
+                    onQueuePlay: onQueuePlay, client: client, videoID: videoID,
+                    currentPlaybackSeconds: playbackTime?.seconds)
                     .padding()
             }
             .navigationTitle("Info")
@@ -90,14 +99,18 @@ struct PlayerInfoSheet: View {
                 }
             }
         }
+        .onDisappear(perform: onDisappear)
     }
 }
 
 /// The contents of the player's "Info" panel: the title, a channel row with
 /// avatar + subscribe toggle, optional feedback buttons, a collapsible
-/// description, and the video's comments. Used both inside `PlayerInfoSheet`
-/// (over the full-screen player) and inline beneath the embedded player.
+/// description, the video's comments, and the upcoming queue. Used both inside
+/// `PlayerInfoSheet` (over the full-screen player) and inline beneath the
+/// embedded player.
 struct PlayerInfoContent: View {
+    @Environment(AppModel.self) private var app
+
     let title: String
     let uploader: String?
     let uploaderDisplayName: String?
@@ -119,17 +132,21 @@ struct PlayerInfoContent: View {
     /// Used to fetch comments lazily once the view appears.
     let client: PipedClient
     let videoID: String
-    /// Inline layout for the embedded player: feedback shown as circular buttons
-    /// in the channel row, and comments expanded in place (no navigation push).
-    /// Defaults off, so the full-screen player's Info sheet is unchanged.
+    let currentPlaybackSeconds: Double?
+    /// Inline layout for the embedded player: comments expanded in place (no
+    /// navigation push). Feedback uses the same circular channel-row buttons in
+    /// both the embedded player and Info sheet.
+    /// Defaults off, so the Info sheet keeps its compact comments preview.
     var inline: Bool = false
 
     @State private var loader: CommentsLoader?
     @State private var descriptionExpanded = false
     @State private var fallbackCollaborators: [CreatorChannel] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var queuedVideos: [StreamItem] {
-        queue.filter { $0.isVideo && $0.videoID != videoID }
+    private var queueItems: [QueueDisplayItem] {
+        app.queuedVideos.enumerated().map {
+            QueueDisplayItem(position: $0.offset, queued: $0.element)
+        }
     }
     private var streamCollaborators: [CreatorChannel] {
         creators.creatorChannels(verifiedChannelID: channelID,
@@ -153,7 +170,7 @@ struct PlayerInfoContent: View {
          onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
          onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
          client: PipedClient, videoID: String,
-         inline: Bool = false) {
+         currentPlaybackSeconds: Double? = nil, inline: Bool = false) {
         self.inline = inline
         self.title = title
         self.uploader = uploader
@@ -174,6 +191,7 @@ struct PlayerInfoContent: View {
         self.onQueuePlay = onQueuePlay
         self.client = client
         self.videoID = videoID
+        self.currentPlaybackSeconds = currentPlaybackSeconds
     }
 
     var body: some View {
@@ -186,27 +204,19 @@ struct PlayerInfoContent: View {
                 channelRow(creator)
             }
 
-            if showFeedback && !inline {
-                HStack(spacing: 12) {
-                    suggestButton(more: true)
-                    suggestButton(more: false)
-                    Spacer(minLength: 0)
-                }
-            }
-
             Divider()
 
             descriptionBlock
 
-            if !queuedVideos.isEmpty {
+            Divider()
+
+            commentsSection
+
+            if !inline {
                 Divider()
 
                 queueSection
             }
-
-            Divider()
-
-            commentsSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: videoID) {
@@ -249,7 +259,7 @@ struct PlayerInfoContent: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 8) {
-                if inline && showFeedback {
+                if showFeedback {
                     feedbackButton(more: true)
                     feedbackButton(more: false)
                 }
@@ -342,24 +352,6 @@ struct PlayerInfoContent: View {
         description.count > 160 || description.filter { $0 == "\n" }.count >= 3
     }
 
-    // MARK: Queue
-
-    private var queueSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Queue")
-                .font(.headline)
-
-            ForEach(queuedVideos) { item in
-                Button {
-                    onQueuePlay(item)
-                } label: {
-                    QueueVideoRow(item: item)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
     // MARK: Comments
 
     @ViewBuilder private var commentsSection: some View {
@@ -381,7 +373,7 @@ struct PlayerInfoContent: View {
                 } else if inline {
                     inlineComments(loader)
                 } else {
-                    ForEach(loader.comments.prefix(2)) { comment in
+                    ForEach(previewComments(loader)) { comment in
                         CommentRow(comment: comment, client: loader.client, videoID: videoID)
                     }
                     viewAllCommentsLink(loader)
@@ -406,6 +398,48 @@ struct PlayerInfoContent: View {
         Text(text)
             .font(.callout)
             .foregroundStyle(.secondary)
+    }
+
+    private func previewComments(_ loader: CommentsLoader) -> [Comment] {
+        let comments = loader.comments
+        guard !comments.isEmpty else { return [] }
+
+        var selected: [Comment] = []
+        if let pinned = comments.first(where: { $0.pinned == true }) {
+            selected.append(pinned)
+        } else if let first = comments.first {
+            selected.append(first)
+        }
+
+        if let active = activeTimestampComment(in: comments), !selected.containsComment(active) {
+            selected.append(active)
+        }
+
+        for comment in comments where selected.count < 2 && !selected.containsComment(comment) {
+            selected.append(comment)
+        }
+
+        return Array(selected.prefix(2))
+    }
+
+    private func activeTimestampComment(in comments: [Comment]) -> Comment? {
+        guard let currentPlaybackSeconds, currentPlaybackSeconds.isFinite else { return nil }
+        let playhead = Int(currentPlaybackSeconds.rounded(.down))
+        let activeWindow = 10
+        var best: (comment: Comment, timestamp: CommentTimestamp, index: Int)?
+
+        for (index, comment) in comments.enumerated() {
+            for timestamp in comment.timestamps
+                where playhead >= timestamp.seconds && playhead < timestamp.seconds + activeWindow {
+                if best == nil
+                    || timestamp.seconds > best!.timestamp.seconds
+                    || (timestamp.seconds == best!.timestamp.seconds && index < best!.index) {
+                    best = (comment, timestamp, index)
+                }
+            }
+        }
+
+        return best?.comment
     }
 
     /// All comments, expanded in place and paginated as the user scrolls — used
@@ -440,75 +474,87 @@ struct PlayerInfoContent: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: Feedback
+    // MARK: Queue
 
-    /// "Suggest More / Less"; tapping the active one again clears it.
-    private func suggestButton(more: Bool) -> some View {
-        let active = more ? feedback > 0 : feedback < 0
-        return Button {
-            let target = more ? 1 : -1
-            feedback = (feedback == target) ? 0 : target
-            onFeedback(feedback)
-        } label: {
-            Label(more ? "Suggest More" : "Suggest Less",
-                  systemImage: more ? (active ? "hand.thumbsup.fill" : "hand.thumbsup")
-                                    : (active ? "hand.thumbsdown.fill" : "hand.thumbsdown"))
-                .font(.subheadline.weight(.semibold))
-        }
-        .buttonStyle(.bordered)
-        .tint(active ? .accentColor : .secondary)
-    }
-}
-
-private struct QueueVideoRow: View {
-    let item: StreamItem
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Thumbnail(url: item.thumbnail)
-                    .aspectRatio(16 / 9, contentMode: .fill)
-                    .frame(width: 112, height: 63)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                durationPill
+    @ViewBuilder private var queueSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Text("Queue")
+                    .font(.headline)
+                if !queueItems.isEmpty {
+                    Text("\(queueItems.count)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.displayTitle)
+            if queueItems.isEmpty {
+                Text("Nothing queued.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(queueItems) { item in
+                        queueRow(item.queued, position: item.position)
+                    }
+                }
+            }
+        }
+    }
+
+    private func queueRow(_ queued: QueuedVideo, position: Int) -> some View {
+        HStack(spacing: 10) {
+            ZStack(alignment: .topLeading) {
+                Thumbnail(url: queued.request.thumbnail)
+                    .aspectRatio(16 / 9, contentMode: .fill)
+                    .frame(width: 84, height: 47)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                Text("\(position + 1)")
+                    .font(.caption2.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(.black.opacity(0.72), in: Capsule())
+                    .padding(5)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(queued.request.title)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                let meta = metaText
-                if !meta.isEmpty {
-                    Text(meta)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let uploader = queued.request.uploader, !uploader.isEmpty {
+                        Text(uploader)
+                            .lineLimit(1)
+                    }
+                    if queued.request.localURL != nil {
+                        Label("Downloaded", systemImage: "arrow.down.circle.fill")
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
         }
-        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
+}
 
-    @ViewBuilder private var durationPill: some View {
-        let duration = Format.duration(item.duration)
-        if !duration.isEmpty {
-            Text(duration)
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .foregroundStyle(.white)
-                .background(.black.opacity(0.75), in: Capsule())
-                .padding(5)
-        }
+private extension [Comment] {
+    func containsComment(_ comment: Comment) -> Bool {
+        contains { $0.id == comment.id }
     }
+}
 
-    private var metaText: String {
-        let timeAgo = Format.relativeTime(item.uploaded) ?? item.uploadedDate
-        let views = (item.views ?? -1) >= 500 ? Format.views(item.views) : nil
-        return Format.metaLine(item.uploaderName, views, timeAgo)
-    }
+private struct QueueDisplayItem: Identifiable {
+    let position: Int
+    let queued: QueuedVideo
+
+    var id: UUID { queued.id }
 }
