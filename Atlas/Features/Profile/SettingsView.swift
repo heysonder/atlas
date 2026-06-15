@@ -76,6 +76,9 @@ struct SettingsView: View {
             }
 
             Section {
+                Link(destination: privacyPolicyURL) {
+                    Label("Privacy Policy", systemImage: "hand.raised")
+                }
                 LabeledContent("Version", value: appVersion)
             }
         }
@@ -109,5 +112,9 @@ struct SettingsView: View {
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    private var privacyPolicyURL: URL {
+        URL(string: "https://atlas.cmf.sh/privacy")!
     }
 }
