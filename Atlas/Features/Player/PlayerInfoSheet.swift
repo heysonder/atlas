@@ -212,7 +212,7 @@ struct PlayerInfoContent: View {
 
             commentsSection
 
-            if !inline {
+            if !inline && !queueItems.isEmpty {
                 Divider()
 
                 queueSection
@@ -488,15 +488,9 @@ struct PlayerInfoContent: View {
                 }
             }
 
-            if queueItems.isEmpty {
-                Text("Nothing queued.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(queueItems) { item in
-                        queueRow(item.queued, position: item.position)
-                    }
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(queueItems) { item in
+                    queueRow(item.queued, position: item.position)
                 }
             }
         }
