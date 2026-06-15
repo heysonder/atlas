@@ -59,8 +59,8 @@ Signing team and bundle id live in `project.yml` (`DEVELOPMENT_TEAM`, `PRODUCT_B
 
 ## Configuration
 
-The default instance is set in `Atlas/App/AppModel.swift` (`defaultInstance`) and is overridable at
-runtime in **Profile → Settings**.
+Atlas does not ship with a default Piped instance. Set one at runtime in
+**Profile → Settings → Instance** before using online video features.
 
 ## Roadmap
 

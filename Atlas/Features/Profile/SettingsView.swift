@@ -97,7 +97,8 @@ struct SettingsView: View {
     }
 
     private var currentHost: String {
-        URL(string: app.instanceURLString)?.host ?? app.instanceURLString
+        guard !app.instanceURLString.isEmpty else { return "Not set" }
+        return URL(string: app.instanceURLString)?.host ?? app.instanceURLString
     }
 
     private var sponsorSummary: String {

@@ -14,7 +14,7 @@ struct InstancesSettingsView: View {
     var body: some View {
         Form {
             Section("Current instance") {
-                Text(app.instanceURLString)
+                Text(currentInstanceLabel)
                     .font(.callout.monospaced())
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -26,8 +26,7 @@ struct InstancesSettingsView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                 Button("Use this instance") { useCustom() }
-                    .disabled(URL(string: customURL.trimmingCharacters(in: .whitespaces)) == nil
-                              || customURL.isEmpty)
+                    .disabled(!isCustomURLValid)
             } header: {
                 Text("Custom instance")
             } footer: {
@@ -36,6 +35,14 @@ struct InstancesSettingsView: View {
         }
         .navigationTitle("Instance")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var currentInstanceLabel: String {
+        app.instanceURLString.isEmpty ? "Not set" : app.instanceURLString
+    }
+
+    private var isCustomURLValid: Bool {
+        URL(string: AppModel.normalize(customURL))?.host != nil
     }
 
     private func useCustom() {

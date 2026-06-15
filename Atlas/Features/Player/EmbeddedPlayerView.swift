@@ -328,7 +328,7 @@ final class EmbeddedPlayerModel {
     private static let minWatchSeconds: Double = 5
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
-    var client: PipedClient { app.client }
+    var client: PipedClient { try! app.client }
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
         self.request = request
