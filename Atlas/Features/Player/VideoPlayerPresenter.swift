@@ -735,6 +735,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 client: client,
                 videoID: videoID,
                 playbackTime: infoPlaybackTime,
+                onTimestampTap: { [weak self] seconds in
+                    self?.seekToCommentTimestamp(seconds)
+                },
                 onDisappear: { [weak self] in self?.stopInfoCommentTimeTracking() })
             let infoVC = UIHostingController(rootView: sheet
                 .environment(app)
@@ -745,6 +748,17 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 presentation.prefersGrabberVisible = true
             }
             host.present(infoVC, animated: true)
+        }
+
+        private func seekToCommentTimestamp(_ seconds: Int) {
+            guard let player else { return }
+            let target = max(seconds, 0)
+            updateInfoPlaybackTime(Double(target))
+            player.seek(
+                to: CMTime(seconds: Double(target), preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+            player.play()
         }
 
         private func playQueued(_ item: StreamItem) {

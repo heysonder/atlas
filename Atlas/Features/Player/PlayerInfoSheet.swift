@@ -69,6 +69,7 @@ struct PlayerInfoSheet: View {
     let client: PipedClient
     let videoID: String
     var playbackTime: PlayerPlaybackTime?
+    var onTimestampTap: (Int) -> Void = { _ in }
     var onDisappear: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
@@ -85,7 +86,8 @@ struct PlayerInfoSheet: View {
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
                     feedback: feedback, onFeedback: onFeedback, queue: queue,
                     onQueuePlay: onQueuePlay, client: client, videoID: videoID,
-                    currentPlaybackSeconds: playbackTime?.seconds)
+                    currentPlaybackSeconds: playbackTime?.seconds,
+                    onTimestampTap: onTimestampTap)
                     .padding()
             }
             .navigationTitle("Info")
@@ -133,6 +135,7 @@ struct PlayerInfoContent: View {
     let client: PipedClient
     let videoID: String
     let currentPlaybackSeconds: Double?
+    let onTimestampTap: (Int) -> Void
     /// Inline layout for the embedded player: comments expanded in place (no
     /// navigation push). Feedback uses the same circular channel-row buttons in
     /// both the embedded player and Info sheet.
@@ -170,7 +173,9 @@ struct PlayerInfoContent: View {
          onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
          onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
          client: PipedClient, videoID: String,
-         currentPlaybackSeconds: Double? = nil, inline: Bool = false) {
+         currentPlaybackSeconds: Double? = nil,
+         onTimestampTap: @escaping (Int) -> Void = { _ in },
+         inline: Bool = false) {
         self.inline = inline
         self.title = title
         self.uploader = uploader
@@ -192,6 +197,7 @@ struct PlayerInfoContent: View {
         self.client = client
         self.videoID = videoID
         self.currentPlaybackSeconds = currentPlaybackSeconds
+        self.onTimestampTap = onTimestampTap
     }
 
     var body: some View {
@@ -374,7 +380,11 @@ struct PlayerInfoContent: View {
                     inlineComments(loader)
                 } else {
                     ForEach(previewComments(loader)) { comment in
-                        CommentRow(comment: comment, client: loader.client, videoID: videoID)
+                        CommentRow(
+                            comment: comment,
+                            client: loader.client,
+                            videoID: videoID,
+                            onTimestampTap: onTimestampTap)
                     }
                     viewAllCommentsLink(loader)
                 }
@@ -446,7 +456,11 @@ struct PlayerInfoContent: View {
     /// in the embedded player so comments never push to a separate page.
     @ViewBuilder private func inlineComments(_ loader: CommentsLoader) -> some View {
         ForEach(loader.comments) { comment in
-            CommentRow(comment: comment, client: loader.client, videoID: videoID)
+            CommentRow(
+                comment: comment,
+                client: loader.client,
+                videoID: videoID,
+                onTimestampTap: onTimestampTap)
             Divider()
         }
         if loader.nextpage != nil {
@@ -459,7 +473,7 @@ struct PlayerInfoContent: View {
 
     private func viewAllCommentsLink(_ loader: CommentsLoader) -> some View {
         NavigationLink {
-            CommentsView(loader: loader)
+            CommentsView(loader: loader, onTimestampTap: onTimestampTap)
         } label: {
             HStack {
                 Text("View all comments")
