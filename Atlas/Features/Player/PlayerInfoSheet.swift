@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import PipedKit
 
 /// Drives the in-player "Info" button. While the video plays the button shows
@@ -54,6 +55,8 @@ struct PlayerInfoSheet: View {
     let creators: [VideoCreator]
     let subscriberCount: Int?
     let uploaderVerified: Bool
+    let thumbnail: String?
+    let duration: Int?
     let description: String
     let canSubscribe: Bool
     let isSubscribed: Bool
@@ -82,6 +85,7 @@ struct PlayerInfoSheet: View {
                     uploaderAvatar: uploaderAvatar, channelID: channelID,
                     creators: creators,
                     subscriberCount: subscriberCount, uploaderVerified: uploaderVerified,
+                    thumbnail: thumbnail, duration: duration,
                     description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
                     feedback: feedback, onFeedback: onFeedback, queue: queue,
@@ -112,6 +116,8 @@ struct PlayerInfoSheet: View {
 /// embedded player.
 struct PlayerInfoContent: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.modelContext) private var context
+    @Query(sort: \Playlist.createdAt, order: .reverse) private var playlists: [Playlist]
 
     let title: String
     let uploader: String?
@@ -121,6 +127,8 @@ struct PlayerInfoContent: View {
     let creators: [VideoCreator]
     let subscriberCount: Int?
     let uploaderVerified: Bool
+    let thumbnail: String?
+    let duration: Int?
     let description: String
     let canSubscribe: Bool
     @State private var isSubscribed: Bool
@@ -144,6 +152,8 @@ struct PlayerInfoContent: View {
 
     @State private var loader: CommentsLoader?
     @State private var descriptionExpanded = false
+    @State private var creatingPlaylist = false
+    @State private var newPlaylistName = ""
     @State private var fallbackCollaborators: [CreatorChannel] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var queueItems: [QueueDisplayItem] {
@@ -168,7 +178,8 @@ struct PlayerInfoContent: View {
     init(title: String, uploader: String?, uploaderDisplayName: String? = nil,
          uploaderAvatar: String?, channelID: String?, creators: [VideoCreator] = [],
          subscriberCount: Int?,
-         uploaderVerified: Bool, description: String, canSubscribe: Bool, isSubscribed: Bool,
+         uploaderVerified: Bool, thumbnail: String? = nil, duration: Int? = nil,
+         description: String, canSubscribe: Bool, isSubscribed: Bool,
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
          onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
          onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
@@ -185,6 +196,8 @@ struct PlayerInfoContent: View {
         self.creators = creators
         self.subscriberCount = subscriberCount
         self.uploaderVerified = uploaderVerified
+        self.thumbnail = thumbnail
+        self.duration = duration
         self.description = description
         self.canSubscribe = canSubscribe
         self._isSubscribed = State(initialValue: isSubscribed)
@@ -210,6 +223,10 @@ struct PlayerInfoContent: View {
                 channelRow(creator)
             }
 
+            if !inline {
+                playlistMenu
+            }
+
             Divider()
 
             descriptionBlock
@@ -231,6 +248,11 @@ struct PlayerInfoContent: View {
         .task {
             if loader == nil { loader = CommentsLoader(client: client, videoID: videoID) }
             await loader?.loadInitial()
+        }
+        .alert("New Playlist", isPresented: $creatingPlaylist) {
+            TextField("Name", text: $newPlaylistName)
+            Button("Cancel", role: .cancel) { newPlaylistName = "" }
+            Button("Create") { createAndAddToPlaylist() }
         }
     }
 
@@ -320,6 +342,58 @@ struct PlayerInfoContent: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
         .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
+    }
+
+    // MARK: Playlist
+
+    private var playlistMenu: some View {
+        Menu {
+            Button("New Playlist…", systemImage: "plus") { creatingPlaylist = true }
+            if !playlists.isEmpty { Divider() }
+            ForEach(playlists) { playlist in
+                let containsVideo = playlistContainsCurrentVideo(playlist)
+                Button {
+                    addCurrentVideo(to: playlist)
+                } label: {
+                    Label(playlist.name, systemImage: containsVideo ? "checkmark" : "music.note.list")
+                }
+                .disabled(containsVideo)
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "text.badge.plus")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityLabel("Add to Playlist")
+    }
+
+    private func playlistContainsCurrentVideo(_ playlist: Playlist) -> Bool {
+        playlist.videos.contains { $0.videoID == videoID }
+    }
+
+    private func addCurrentVideo(to playlist: Playlist) {
+        guard !playlistContainsCurrentVideo(playlist) else { return }
+        let video = PlaylistVideo(
+            videoID: videoID,
+            title: title,
+            uploader: uploaderDisplayName ?? uploader,
+            thumbnailURL: thumbnail,
+            duration: duration ?? 0)
+        video.playlist = playlist
+        context.insert(video)
+    }
+
+    private func createAndAddToPlaylist() {
+        let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        newPlaylistName = ""
+        guard !name.isEmpty else { return }
+        let playlist = Playlist(name: name)
+        context.insert(playlist)
+        addCurrentVideo(to: playlist)
     }
 
     // MARK: Description

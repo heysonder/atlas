@@ -713,6 +713,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 creators: detail.creators ?? [],
                 subscriberCount: detail.uploaderSubscriberCount,
                 uploaderVerified: detail.uploaderVerified ?? false,
+                thumbnail: detail.thumbnailUrl ?? currentRequest?.thumbnail,
+                duration: detail.duration,
                 description: HTMLText.plain(detail.description ?? ""),
                 canSubscribe: channelID != nil,
                 isSubscribed: channelID.map(isCurrentlySubscribed) ?? false,

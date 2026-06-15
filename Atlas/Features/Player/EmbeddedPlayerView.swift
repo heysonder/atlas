@@ -84,6 +84,8 @@ struct EmbeddedPlayerView: View {
                     creators: detail.creators ?? [],
                     subscriberCount: detail.uploaderSubscriberCount,
                     uploaderVerified: detail.uploaderVerified ?? false,
+                    thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
+                    duration: detail.duration,
                     description: HTMLText.plain(detail.description ?? ""),
                     canSubscribe: detail.channelID != nil,
                     isSubscribed: model.isSubscribed(detail.channelID),
