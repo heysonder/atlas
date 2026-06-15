@@ -14,13 +14,15 @@ final class InfoButtonModel {
 /// The small Liquid Glass "Info" button layered over the video.
 struct InfoOverlayButton: View {
     let model: InfoButtonModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         Button(action: model.onTap) {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle")
                 if model.isPaused {
                     Text("Info")
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
                 }
             }
             .font(.subheadline.weight(.semibold))
@@ -30,7 +32,7 @@ struct InfoOverlayButton: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
-        .animation(.snappy(duration: 0.25), value: model.isPaused)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: model.isPaused)
     }
 }
 
@@ -125,6 +127,7 @@ struct PlayerInfoContent: View {
     @State private var loader: CommentsLoader?
     @State private var descriptionExpanded = false
     @State private var fallbackCollaborators: [CreatorChannel] = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var queuedVideos: [StreamItem] {
         queue.filter { $0.isVideo && $0.videoID != videoID }
     }
@@ -280,7 +283,7 @@ struct PlayerInfoContent: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(active ? Color.accentColor : .primary)
                 .frame(width: 44, height: 44)
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
@@ -296,7 +299,7 @@ struct PlayerInfoContent: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(isSubscribed ? .secondary : .primary)
                 .frame(width: 44, height: 44)
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
@@ -319,7 +322,11 @@ struct PlayerInfoContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if isDescriptionLong {
                     Button(descriptionExpanded ? "Show less" : "Show more") {
-                        withAnimation(.easeInOut(duration: 0.2)) { descriptionExpanded.toggle() }
+                        if reduceMotion {
+                            descriptionExpanded.toggle()
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.2)) { descriptionExpanded.toggle() }
+                        }
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.plain)

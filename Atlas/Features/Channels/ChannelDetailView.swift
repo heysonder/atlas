@@ -7,6 +7,7 @@ struct ChannelDetailView: View {
 
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allSubs: [SubscribedChannel]
     @Query private var history: [HistoryEntry]
 
@@ -117,7 +118,7 @@ struct ChannelDetailView: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(subscribed ? .secondary : Color.accentColor)
                 .frame(width: 44, height: 44)
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
