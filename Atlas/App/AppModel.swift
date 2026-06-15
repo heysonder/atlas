@@ -77,10 +77,16 @@ enum PlayerStyle: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class AppModel {
-    /// Persisted instance api_url. Defaults to a reachable public instance;
-    /// override in Settings (including your own self-hosted instance).
+    /// Persisted instance api_url. Empty means the user has not opted into a
+    /// Piped instance, so online surfaces must not create a network client.
     var instanceURLString: String {
-        didSet { UserDefaults.standard.set(instanceURLString, forKey: Self.instanceKey) }
+        didSet {
+            if instanceURLString.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.instanceKey)
+            } else {
+                UserDefaults.standard.set(instanceURLString, forKey: Self.instanceKey)
+            }
+        }
     }
 
     /// Set to present the player from anywhere.
@@ -170,13 +176,11 @@ final class AppModel {
     var libraryTarget: LibraryTarget?
 
     static let instanceKey = "atlas.instanceURL"
-    static let defaultInstance = "https://api.piped.private.coffee"
-
-    /// The bundled default before this build pointed at api.piped.private.coffee.
-    private static let previousDefault = "https://pipedapi.cmf.sh"
-    /// Set once we've performed the one-time switch onto the new default, so we
-    /// never override a user who deliberately picks their own instance later.
-    private static let switchedDefaultKey = "atlas.switchedToPrivateCoffee"
+    nonisolated static let missingInstanceMessage = "Set a Piped instance in Settings before using online video features."
+    private static let retiredBundledDefaults: Set<String> = [
+        "https://api.piped.private.coffee",
+        "https://pipedapi.cmf.sh",
+    ]
 
     init() {
         let defaults = UserDefaults.standard
@@ -193,28 +197,25 @@ final class AppModel {
         } else {
             sponsorCategories = Self.defaultSponsorCategories
         }
-        var normalized = (defaults.string(forKey: Self.instanceKey)).map(Self.normalize)
-
-        // One-time: move installs still sitting on the old bundled default onto
-        // the new one. Guarded by a flag so switching back to your own instance
-        // (e.g. a self-hosted box) in Settings sticks and isn't re-overridden.
-        if !defaults.bool(forKey: Self.switchedDefaultKey) {
-            if normalized == nil || normalized == Self.previousDefault {
-                normalized = Self.defaultInstance
-            }
-            defaults.set(true, forKey: Self.switchedDefaultKey)
-        }
-
-        let resolved = normalized ?? Self.defaultInstance
+        let stored = defaults.string(forKey: Self.instanceKey).map(Self.normalize) ?? ""
+        let resolved = Self.retiredBundledDefaults.contains(stored) ? "" : stored
         instanceURLString = resolved
         // Self-heal a previously-saved value that was missing its scheme.
-        defaults.set(resolved, forKey: Self.instanceKey)
+        if resolved.isEmpty {
+            defaults.removeObject(forKey: Self.instanceKey)
+        } else {
+            defaults.set(resolved, forKey: Self.instanceKey)
+        }
     }
 
     /// A client for the currently selected instance.
     var client: PipedClient {
-        PipedClient(instanceString: instanceURLString)
-            ?? PipedClient(baseURL: URL(string: Self.defaultInstance)!)
+        get throws {
+            guard let client = PipedClient(instanceString: instanceURLString) else {
+                throw AtlasNetworkError.missingPipedInstance
+            }
+            return client
+        }
     }
 
     // MARK: Stream resolution cache (warms the slow /streams extraction)
@@ -230,6 +231,7 @@ final class AppModel {
             return cached.detail
         }
         if let task = inflight[videoID] { return try await task.value }
+        let client = try self.client
         let task = Task<VideoDetail, Error> { try await client.streams(videoID: videoID) }
         inflight[videoID] = task
         do {
@@ -257,7 +259,7 @@ final class AppModel {
     /// trims whitespace, drops a trailing slash, and adds `https://` when no scheme is present.
     static func normalize(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return defaultInstance }
+        guard !s.isEmpty else { return "" }
         if s.hasSuffix("/") { s.removeLast() }
         let lower = s.lowercased()
         if !lower.hasPrefix("http://") && !lower.hasPrefix("https://") {
@@ -300,5 +302,16 @@ final class AppModel {
                                  localURL: video.fileURL,
                                  localCaptionURL: video.captionURL,
                                  localCaptionMimeType: video.captionMimeType)
+    }
+}
+
+enum AtlasNetworkError: LocalizedError {
+    case missingPipedInstance
+
+    var errorDescription: String? {
+        switch self {
+        case .missingPipedInstance:
+            AppModel.missingInstanceMessage
+        }
     }
 }

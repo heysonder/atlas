@@ -44,12 +44,12 @@ enum IntentDataStore {
 
     /// A Piped client for network search that works without the app process:
     /// reads the selected instance straight from defaults (mirrors `AppModel`).
-    static var client: PipedClient {
-        if let app { return app.client }
+    /// Nil means the user has not opted into online Piped calls.
+    static var client: PipedClient? {
+        if let app { return try? app.client }
         let raw = UserDefaults.standard.string(forKey: AppModel.instanceKey)
-        let normalized = raw.map(AppModel.normalize) ?? AppModel.defaultInstance
+        let normalized = raw.map(AppModel.normalize) ?? ""
         return PipedClient(instanceString: normalized)
-            ?? PipedClient(baseURL: URL(string: AppModel.defaultInstance)!)
     }
 
     private static var context: ModelContext? { container?.mainContext }
@@ -90,6 +90,7 @@ enum IntentDataStore {
     static func searchVideos(_ query: String, limit: Int = 10) async -> [VideoEntity] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+        guard let client else { return [] }
         let videos = ((try? await client.search(trimmed, filter: "videos")) ?? [])
             .filter(\.isVideo)
             .prefix(limit)

@@ -332,7 +332,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         ) {
             let categories = app.activeSponsorCategoryIDs
             guard !categories.isEmpty else { return }
-            let client = app.client
+            guard let client = try? app.client else { return }
             let videoID = request.videoID
             Task { [weak self] in
                 let fetched = (try? await client.sponsorSegments(
@@ -698,6 +698,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// description, and a subscribe toggle for the uploader.
         private func presentInfo() {
             guard let detail = currentDetail, let host = playerVC,
+                  let client = try? app.client,
                   let videoID = currentRequest?.videoID ?? presentedID else { return }
             installInfoCommentTimeTracking(on: player)
             let channelID = detail.channelID
@@ -731,7 +732,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                         self.playQueued(item)
                     }
                 },
-                client: app.client,
+                client: client,
                 videoID: videoID,
                 playbackTime: infoPlaybackTime,
                 onDisappear: { [weak self] in self?.stopInfoCommentTimeTracking() })
