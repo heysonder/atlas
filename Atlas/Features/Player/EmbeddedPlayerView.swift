@@ -65,9 +65,6 @@ struct EmbeddedPlayerView: View {
                         .tint(.white)
                 }
             }
-            .overlay {
-                CaptionOverlayView(model: model.captionModel, bottomPadding: 14)
-            }
     }
 
     // MARK: Info
@@ -307,7 +304,6 @@ final class InlinePlayerController: AVPlayerViewController {
 @Observable
 final class EmbeddedPlayerModel {
     let player = AVPlayer()
-    let captionModel = CaptionOverlayModel()
     private(set) var request: PlayRequest
     private(set) var detail: VideoDetail?
     private(set) var errorMessage: String?
@@ -320,8 +316,6 @@ final class EmbeddedPlayerModel {
     private let modelContext: ModelContext
     private var loadTask: Task<Void, Never>?
     private var timeObserver: Any?
-    private var captionObserver: Any?
-    private var captionTask: Task<Void, Never>?
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var usedComposition = false
@@ -338,7 +332,7 @@ final class EmbeddedPlayerModel {
         self.app = app
         self.modelContext = modelContext
         player.allowsExternalPlayback = true
-        player.appliesMediaSelectionCriteriaAutomatically = true
+        player.appliesMediaSelectionCriteriaAutomatically = false
     }
 
     func start() {
@@ -362,8 +356,8 @@ final class EmbeddedPlayerModel {
             guard !Task.isCancelled else { return }
             usedComposition = built.composed
             player.replaceCurrentItem(with: built.item)
+            PlayerCaptionSelection.keepOffByDefault(for: built.item)
             installEndObserver(for: built.item)
-            configureAccessibleMedia(detail)
             isReady = true
             if built.composed { observeForFailure(built.item, detail: detail) }
             self.detail = detail
@@ -382,8 +376,8 @@ final class EmbeddedPlayerModel {
     private func loadLocal(_ fileURL: URL) {
         let item = AVPlayerItem(url: fileURL)
         player.replaceCurrentItem(with: item)
+        PlayerCaptionSelection.keepOffByDefault(for: item)
         installEndObserver(for: item)
-        configureAccessibleLocalMedia()
         isReady = true
         recordHistoryLocal()
         Task {
@@ -398,78 +392,16 @@ final class EmbeddedPlayerModel {
     func teardown() {
         loadTask?.cancel()
         loadTask = nil
-        captionTask?.cancel()
-        captionTask = nil
         let t = player.currentTime().seconds
         if t.isFinite { savePosition(t) }
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
-        if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
         removeEndObserver()
         statusObservation?.invalidate()
         statusObservation = nil
-        captionModel.reset()
         currentPlaybackSeconds = nil
         lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
-    }
-
-    // MARK: Captions + audio descriptions
-
-    private func configureAccessibleMedia(_ detail: VideoDetail) {
-        guard SystemMediaAccessibility.shouldShowCaptions,
-              let subtitle = detail.preferredSubtitle(
-                preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages)
-        else {
-            captionModel.reset()
-            return
-        }
-        loadCaptions(from: subtitle)
-    }
-
-    private func configureAccessibleLocalMedia() {
-        guard SystemMediaAccessibility.shouldShowCaptions, let url = request.localCaptionURL else {
-            captionModel.reset()
-            return
-        }
-        loadCaptions(from: url, mimeType: request.localCaptionMimeType)
-    }
-
-    private func loadCaptions(from subtitle: Subtitle) {
-        captionTask?.cancel()
-        captionModel.reset()
-        captionTask = Task { [weak self] in
-            let cues = await CaptionLoader.load(subtitle)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.captionModel.setCues(cues)
-                self.installCaptionTracking()
-            }
-        }
-    }
-
-    private func loadCaptions(from url: URL, mimeType: String?) {
-        captionTask?.cancel()
-        captionModel.reset()
-        captionTask = Task { [weak self] in
-            let cues = await CaptionLoader.load(url: url, mimeType: mimeType)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.captionModel.setCues(cues)
-                self.installCaptionTracking()
-            }
-        }
-    }
-
-    private func installCaptionTracking() {
-        if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
-        captionObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
-        ) { [weak self] time in
-            MainActor.assumeIsolated { self?.captionModel.update(at: time.seconds) }
-        }
     }
 
     // MARK: Queue advancement
@@ -515,16 +447,11 @@ final class EmbeddedPlayerModel {
     private func resetForItemReplacement() {
         loadTask?.cancel()
         loadTask = nil
-        captionTask?.cancel()
-        captionTask = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
-        if let captionObserver { player.removeTimeObserver(captionObserver) }
         timeObserver = nil
-        captionObserver = nil
         removeEndObserver()
         statusObservation?.invalidate()
         statusObservation = nil
-        captionModel.reset()
         usedComposition = false
         detail = nil
         errorMessage = nil
@@ -667,6 +594,7 @@ final class EmbeddedPlayerModel {
                 let resume = self.player.currentTime()
                 let fallback = AVPlayerItem(url: url)
                 self.player.replaceCurrentItem(with: fallback)
+                PlayerCaptionSelection.keepOffByDefault(for: fallback)
                 self.installEndObserver(for: fallback)
                 await self.player.seek(to: resume)
                 self.player.playImmediately(atRate: 1.0)

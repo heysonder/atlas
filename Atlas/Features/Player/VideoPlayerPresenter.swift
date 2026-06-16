@@ -59,10 +59,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var sponsorObserver: Any?
         private let sponsorModel = SponsorSkipModel()
         private var skipButtonHost: UIHostingController<SkipSponsorButton>?
-        private let captionModel = CaptionOverlayModel()
-        private var captionHost: UIHostingController<CaptionOverlayView>?
-        private var captionObserver: Any?
-        private var captionTask: Task<Void, Never>?
 
         init(app: AppModel, modelContext: ModelContext, clearRequest: @escaping () -> Void) {
             self.app = app
@@ -125,7 +121,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             currentRequest = request
 
             let player = AVPlayer()
-            player.appliesMediaSelectionCriteriaAutomatically = true
+            player.appliesMediaSelectionCriteriaAutomatically = false
             // TEST: all buffering/stall behavior left at AVPlayer defaults
             // (automaticallyWaitsToMinimizeStalling defaults to true).
             let controller = AVPlayerViewController()
@@ -164,8 +160,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 let baseMetadata = Self.metadata(detail, request)
                 item.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: item)
+                PlayerCaptionSelection.keepOffByDefault(for: item)
                 installEndObserver(for: item)
-                configureAccessibleMedia(detail: detail, player: player, controller: controller)
                 if built.composed { observeForFailure(item, detail: detail, player: player) }
                 attachArtwork(to: item,
                               urlString: detail.thumbnailUrl ?? request.thumbnail,
@@ -202,8 +198,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             let item = AVPlayerItem(url: fileURL)
             item.externalMetadata = metadata
             player.replaceCurrentItem(with: item)
+            PlayerCaptionSelection.keepOffByDefault(for: item)
             installEndObserver(for: item)
-            configureAccessibleLocalMedia(request: request, player: player, controller: controller)
             attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
             Task {
@@ -288,19 +284,14 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func resetForItemReplacement(on player: AVPlayer) {
             loadTask?.cancel()
             loadTask = nil
-            captionTask?.cancel()
-            captionTask = nil
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
-            if let captionObserver { player.removeTimeObserver(captionObserver) }
             if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
             timeObserver = nil
             sponsorObserver = nil
-            captionObserver = nil
             infoCommentTimeObserver = nil
             sponsorSegments = []
             sponsorModel.prompt = nil
-            captionModel.reset()
             removeEndObserver()
             statusObservation?.invalidate()
             statusObservation = nil
@@ -412,91 +403,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             skipButtonHost = host
         }
 
-        // MARK: Captions + audio descriptions
-
-        private func configureAccessibleMedia(
-            detail: VideoDetail,
-            player: AVPlayer,
-            controller: AVPlayerViewController
-        ) {
-            guard SystemMediaAccessibility.shouldShowCaptions,
-                  let subtitle = detail.preferredSubtitle(
-                    preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages)
-            else {
-                captionModel.reset()
-                return
-            }
-            installCaptionOverlay(on: controller)
-            loadCaptions(from: subtitle, player: player)
-        }
-
-        private func configureAccessibleLocalMedia(
-            request: PlayRequest,
-            player: AVPlayer,
-            controller: AVPlayerViewController
-        ) {
-            guard SystemMediaAccessibility.shouldShowCaptions, let url = request.localCaptionURL else {
-                captionModel.reset()
-                return
-            }
-            installCaptionOverlay(on: controller)
-            loadCaptions(from: url, mimeType: request.localCaptionMimeType, player: player)
-        }
-
-        private func installCaptionOverlay(on controller: AVPlayerViewController) {
-            guard captionHost == nil, let overlay = controller.contentOverlayView else { return }
-            let host = UIHostingController(rootView: CaptionOverlayView(model: captionModel))
-            host.view.backgroundColor = .clear
-            host.view.translatesAutoresizingMaskIntoConstraints = false
-            controller.addChild(host)
-            overlay.insertSubview(host.view, at: 0)
-            host.didMove(toParent: controller)
-            NSLayoutConstraint.activate([
-                host.view.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor),
-                host.view.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor),
-                host.view.leadingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.leadingAnchor),
-                host.view.trailingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.trailingAnchor)
-            ])
-            captionHost = host
-        }
-
-        private func loadCaptions(from subtitle: Subtitle, player: AVPlayer) {
-            captionTask?.cancel()
-            captionModel.reset()
-            captionTask = Task { [weak self] in
-                let cues = await CaptionLoader.load(subtitle)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self else { return }
-                    self.captionModel.setCues(cues)
-                    self.installCaptionTracking(on: player)
-                }
-            }
-        }
-
-        private func loadCaptions(from url: URL, mimeType: String?, player: AVPlayer) {
-            captionTask?.cancel()
-            captionModel.reset()
-            captionTask = Task { [weak self] in
-                let cues = await CaptionLoader.load(url: url, mimeType: mimeType)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self else { return }
-                    self.captionModel.setCues(cues)
-                    self.installCaptionTracking(on: player)
-                }
-            }
-        }
-
-        private func installCaptionTracking(on player: AVPlayer) {
-            if let captionObserver { player.removeTimeObserver(captionObserver); self.captionObserver = nil }
-            captionObserver = player.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
-            ) { [weak self] time in
-                MainActor.assumeIsolated { self?.captionModel.update(at: time.seconds) }
-            }
-        }
-
         // MARK: Picture-in-Picture
 
         func playerViewControllerWillStartPictureInPicture(_ controller: AVPlayerViewController) {
@@ -547,23 +453,18 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func hardStop() {
             loadTask?.cancel()
             loadTask = nil
-            captionTask?.cancel()
-            captionTask = nil
             if let player {
                 if let t = player.currentTime().seconds as Double?, t.isFinite { savePosition(t) }
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
                 if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
-                if let captionObserver { player.removeTimeObserver(captionObserver) }
                 if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
             }
             timeObserver = nil
             sponsorObserver = nil
-            captionObserver = nil
             infoCommentTimeObserver = nil
             removeEndObserver()
             sponsorSegments = []
             sponsorModel.prompt = nil
-            captionModel.reset()
             statusObservation?.invalidate()
             statusObservation = nil
             timeControlObservation?.invalidate()
@@ -579,10 +480,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             skipButtonHost?.view.removeFromSuperview()
             skipButtonHost?.removeFromParent()
             skipButtonHost = nil
-            captionHost?.willMove(toParent: nil)
-            captionHost?.view.removeFromSuperview()
-            captionHost?.removeFromParent()
-            captionHost = nil
             player?.pause()
             player = nil
             playerVC = nil
@@ -873,6 +770,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     fallback.externalMetadata = Self.metadata(detail, self.currentRequest ?? PlayRequest(
                         videoID: detail.channelID ?? "", title: detail.title ?? ""))
                     player.replaceCurrentItem(with: fallback)
+                    PlayerCaptionSelection.keepOffByDefault(for: fallback)
                     self.installEndObserver(for: fallback)
                     await player.seek(to: resume)
                     player.playImmediately(atRate: 1.0)

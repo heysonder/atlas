@@ -150,10 +150,7 @@ final class DownloadManager {
 
             DownloadStore.excludeFromBackup(output)
             let thumbName = await saveThumbnail(thumbnail, videoID: videoID)
-            let caption = await saveCaption(
-                detail.preferredSubtitle(
-                    preferredLanguages: SystemMediaAccessibility.preferredCaptionLanguages),
-                videoID: videoID)
+            let caption = await saveCaption(detail.preferredSubtitle(), videoID: videoID)
             let row = DownloadedVideo(
                 videoID: videoID, title: title, uploader: uploader,
                 fileName: fileName, thumbnailFileName: thumbName,
