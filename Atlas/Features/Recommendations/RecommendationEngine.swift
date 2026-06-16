@@ -510,7 +510,9 @@ struct RecommendationEngine {
         if items.count < target {
             for bucket in buckets {
                 for item in bucket.items {
-                    append(item)
+                    if append(item) {
+                        noteSelected(item, bucket: bucket)
+                    }
                     if items.count >= target { break }
                 }
                 if items.count >= target { break }
