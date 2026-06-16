@@ -647,16 +647,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         private func restartPlayback(with request: PlayRequest, player: AVPlayer, controller: AVPlayerViewController) {
-            loadTask?.cancel()
-            loadTask = nil
-            if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
-            if let sponsorObserver { player.removeTimeObserver(sponsorObserver); self.sponsorObserver = nil }
-            statusObservation?.invalidate()
-            statusObservation = nil
-            sponsorSegments = []
-            sponsorModel.prompt = nil
-            usedComposition = false
-            currentDetail = nil
+            let seconds = player.currentTime().seconds
+            if seconds.isFinite { savePosition(seconds) }
+            resetForItemReplacement(on: player)
             currentRequest = request
             presentedID = request.videoID
             player.pause()

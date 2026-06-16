@@ -57,13 +57,27 @@ private struct PipedServerError: Decodable {
 public struct PipedClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
+    private static let boundedSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 45
+        return URLSession(configuration: configuration)
+    }()
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL) {
+        self.init(baseURL: baseURL, session: Self.boundedSession)
+    }
+
+    public init(baseURL: URL, session: URLSession) {
         self.baseURL = baseURL
         self.session = session
     }
 
-    public init?(instanceString: String, session: URLSession = .shared) {
+    public init?(instanceString: String) {
+        self.init(instanceString: instanceString, session: Self.boundedSession)
+    }
+
+    public init?(instanceString: String, session: URLSession) {
         guard let url = URL(string: instanceString) else { return nil }
         self.init(baseURL: url, session: session)
     }
@@ -169,9 +183,11 @@ public struct PipedClient: Sendable {
 
     // MARK: Static instance directory (separate host)
 
-    public static func fetchInstances(
-        session: URLSession = .shared
-    ) async throws -> [PipedInstance] {
+    public static func fetchInstances() async throws -> [PipedInstance] {
+        try await fetchInstances(session: Self.boundedSession)
+    }
+
+    public static func fetchInstances(session: URLSession) async throws -> [PipedInstance] {
         let url = URL(string: "https://piped-instances.kavin.rocks/")!
         let (data, response) = try await session.data(from: url)
         try Self.validate(response, data: data)
@@ -185,12 +201,7 @@ public struct PipedClient: Sendable {
     // MARK: Plumbing
 
     private func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path),
-                                  resolvingAgainstBaseURL: false)
-        if !query.isEmpty {
-            comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        }
-        guard let url = comps?.url else { throw PipedError.badURL }
+        let url = try Self.url(baseURL: baseURL, path: path, query: query)
 
         let (data, response) = try await session.data(from: url)
         try Self.validate(response, data: data)
@@ -199,6 +210,28 @@ public struct PipedClient: Sendable {
         } catch {
             throw PipedError.decoding(String(describing: error))
         }
+    }
+
+    static func url(baseURL: URL, path: String, query: [String: String] = [:]) throws -> URL {
+        var comps = URLComponents(url: baseURL.appendingPathComponent(path),
+                                  resolvingAgainstBaseURL: false)
+        if !query.isEmpty {
+            comps?.percentEncodedQueryItems = query
+                .sorted { $0.key < $1.key }
+                .map {
+                    URLQueryItem(
+                        name: percentEncodeQueryComponent($0.key),
+                        value: percentEncodeQueryComponent($0.value))
+                }
+        }
+        guard let url = comps?.url else { throw PipedError.badURL }
+        return url
+    }
+
+    private static func percentEncodeQueryComponent(_ value: String) -> String {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=?#[]")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     private static func validate(_ response: URLResponse, data: Data) throws {

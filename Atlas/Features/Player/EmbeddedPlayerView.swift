@@ -420,6 +420,8 @@ final class EmbeddedPlayerModel {
     }
 
     private func playQueued(_ next: PlayRequest) {
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite { savePosition(seconds) }
         resetForItemReplacement()
         request = next
         app.nowPlaying = next

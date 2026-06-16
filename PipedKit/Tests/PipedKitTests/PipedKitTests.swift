@@ -26,6 +26,25 @@ import Foundation
     #expect(plain.contains("\n"))
 }
 
+@Test func leavesMalformedEntitiesButContinuesDecodingValidEntities() {
+    let plain = HTMLText.plain("Bad scalar &#99999999; then &#65; and &#x42; &madeup;")
+    #expect(plain.contains("&#99999999;"))
+    #expect(plain.contains("A and B"))
+    #expect(plain.contains("&madeup;"))
+}
+
+@Test func encodesPipedQueryValuesThatServersMayDecodeAsFormSyntax() throws {
+    let url = try PipedClient.url(
+        baseURL: URL(string: "https://piped.example")!,
+        path: "search",
+        query: ["q": "jazz + funk C++ a&b=c?d#e[f]", "filter": "videos"])
+
+    let absolute = url.absoluteString
+    #expect(absolute.contains("q=jazz%20%2B%20funk%20C%2B%2B%20a%26b%3Dc%3Fd%23e%5Bf%5D"))
+    #expect(!absolute.contains("jazz+%20funk"))
+    #expect(!absolute.contains("C++"))
+}
+
 @Test func prefersHLSWhenPresent() {
     let detail = VideoDetail(
         title: "x", description: nil, uploader: nil, uploaderUrl: nil,
@@ -58,6 +77,20 @@ import Foundation
     #expect(segs[1].sponsorCategory == .selfpromo)
 }
 
+@Test func decodesSponsorSegmentsLossily() throws {
+    let json = """
+    {"segments":[
+        {"segment":[10.0,20.0],"category":"sponsor","actionType":"skip","UUID":"good"},
+        {"segment":"bad","category":"selfpromo"},
+        {"segment":[30.0,40.0],"category":"intro","actionType":"skip","UUID":"also-good"}
+    ]}
+    """.data(using: .utf8)!
+    let res = try JSONDecoder().decode(SponsorSegmentsResponse.self, from: json)
+    let segs = try #require(res.segments)
+    #expect(segs.map(\.uuid) == ["good", "also-good"])
+    #expect(segs.map(\.category) == ["sponsor", "intro"])
+}
+
 @Test func decodesVideoChapters() throws {
     let json = """
     {
@@ -78,6 +111,24 @@ import Foundation
     #expect(chapters[0].start == 0)
     #expect(chapters[1].start == 74)
     #expect(chapters[2].title == "Vibe of WWDC")
+}
+
+@Test func decodesVideoChaptersLossily() throws {
+    let json = """
+    {
+      "title": "Chapter test",
+      "chapters": [
+        {"title": "Intro", "start": 0},
+        {"title": "Bad", "start": "not-a-number"},
+        "bad element",
+        {"title": "Main", "start": 42}
+      ]
+    }
+    """.data(using: .utf8)!
+    let detail = try JSONDecoder().decode(VideoDetail.self, from: json)
+    let chapters = try #require(detail.chapters)
+    #expect(chapters.map(\.title) == ["Intro", "Main"])
+    #expect(chapters.map(\.start) == [0, 42])
 }
 
 @Test func extractsCommentTimestamps() throws {
