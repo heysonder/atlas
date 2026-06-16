@@ -61,11 +61,7 @@ struct DownloadsView: View {
     }
 
     private func playRequest(for video: DownloadedVideo) -> PlayRequest {
-        PlayRequest(videoID: video.videoID,
-                    title: video.title,
-                    uploader: video.uploader,
-                    thumbnail: video.thumbnailURL?.absoluteString,
-                    localURL: video.fileURL)
+        PlayRequest(download: video)
     }
 }
 

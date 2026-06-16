@@ -25,10 +25,8 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [audio]
-        # DEV ONLY: allow http instances during local development.
-        # Tighten to your instance's domain (or move it to HTTPS) before App Store submission.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoads: false
         # iPhone: portrait while browsing; the player adds landscape at runtime
         # (see OrientationGate). Upside-down is intentionally omitted on iPhone.
         UISupportedInterfaceOrientations:

@@ -35,6 +35,17 @@ struct PlayRequest: Identifiable, Hashable {
                   uploader: item.uploaderName,
                   thumbnail: item.thumbnail)
     }
+
+    @MainActor
+    init(download: DownloadedVideo, fallbackThumbnail: String? = nil) {
+        self.init(videoID: download.videoID,
+                  title: download.title,
+                  uploader: download.uploader,
+                  thumbnail: download.thumbnailURL?.absoluteString ?? fallbackThumbnail,
+                  localURL: download.fileURL,
+                  localCaptionURL: download.captionURL,
+                  localCaptionMimeType: download.captionMimeType)
+    }
 }
 
 /// One transient item in the in-memory playback queue.
@@ -91,6 +102,10 @@ final class AppModel {
 
     /// Set to present the player from anywhere.
     var nowPlaying: PlayRequest?
+
+    /// Set when the persistent SwiftData store could not be opened and the app
+    /// launched with temporary storage to avoid deleting the user's local data.
+    var persistenceRecoveryMessage: String?
 
     /// Transient session queue. It intentionally is not persisted; closing the
     /// app clears it.
@@ -182,8 +197,9 @@ final class AppModel {
         "https://pipedapi.cmf.sh",
     ]
 
-    init() {
+    init(persistenceRecoveryMessage: String? = nil) {
         let defaults = UserDefaults.standard
+        self.persistenceRecoveryMessage = persistenceRecoveryMessage
         hideShorts = defaults.bool(forKey: Self.hideShortsKey)
         shortsLayout = defaults.string(forKey: Self.shortsLayoutKey)
             .flatMap(ShortsLayout.init(rawValue:)) ?? .inline
@@ -198,7 +214,8 @@ final class AppModel {
             sponsorCategories = Self.defaultSponsorCategories
         }
         let stored = defaults.string(forKey: Self.instanceKey).map(Self.normalize) ?? ""
-        let resolved = Self.retiredBundledDefaults.contains(stored) ? "" : stored
+        let resolved = Self.retiredBundledDefaults.contains(stored) || !Self.isValidInstanceURL(stored)
+            ? "" : stored
         instanceURLString = resolved
         // Self-heal a previously-saved value that was missing its scheme.
         if resolved.isEmpty {
@@ -268,6 +285,13 @@ final class AppModel {
         return s
     }
 
+    static func isValidInstanceURL(_ raw: String) -> Bool {
+        guard let url = URL(string: normalize(raw)),
+              url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false else { return false }
+        return true
+    }
+
     func play(_ item: StreamItem) {
         guard let request = PlayRequest(item: item) else { return }
         nowPlaying = request
@@ -305,12 +329,7 @@ final class AppModel {
     }
 
     func playDownloaded(_ video: DownloadedVideo) {
-        nowPlaying = PlayRequest(videoID: video.videoID, title: video.title,
-                                 uploader: video.uploader,
-                                 thumbnail: video.thumbnailURL?.absoluteString,
-                                 localURL: video.fileURL,
-                                 localCaptionURL: video.captionURL,
-                                 localCaptionMimeType: video.captionMimeType)
+        nowPlaying = PlayRequest(download: video)
     }
 }
 

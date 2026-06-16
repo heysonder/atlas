@@ -15,40 +15,42 @@ struct ShortPoster: View {
     var onPlay: () -> Void
 
     var body: some View {
-        Color.clear
-            .aspectRatio(9/16, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .overlay {
-                Thumbnail(url: item.thumbnail)
-                    .aspectRatio(16/9, contentMode: .fill)
-                    .opacity(watched ? 0.55 : 1)
-            }
-            .overlay {
-                LinearGradient(colors: [.clear, .black.opacity(0.8)],
-                               startPoint: .center, endPoint: .bottom)
-            }
-            .overlay(alignment: .bottomLeading) {
-                Text(item.displayTitle)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .shadow(radius: 3)
-                    .padding(10)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(alignment: .topLeading) {
-                Image(systemName: "play.square.stack.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.white)
-                    .shadow(radius: 2)
-                    .padding(8)
-            }
-            .overlay(alignment: .topTrailing) {
-                if watched { WatchedBadge().padding(8) }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { onPlay() }
+        Button(action: onPlay) {
+            Color.clear
+                .aspectRatio(9/16, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    Thumbnail(url: item.thumbnail)
+                        .aspectRatio(16/9, contentMode: .fill)
+                        .opacity(watched ? 0.55 : 1)
+                }
+                .overlay {
+                    LinearGradient(colors: [.clear, .black.opacity(0.8)],
+                                   startPoint: .center, endPoint: .bottom)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    Text(item.displayTitle)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .multilineTextAlignment(.leading)
+                        .shadow(radius: 3)
+                        .padding(10)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(alignment: .topLeading) {
+                    Image(systemName: "play.square.stack.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .shadow(radius: 2)
+                        .padding(8)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if watched { WatchedBadge().padding(8) }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.displayTitle)
     }
 }

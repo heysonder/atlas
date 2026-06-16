@@ -37,6 +37,16 @@ struct RootView: View {
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
             playFromSpotlight(activity)
         }
+        .alert("Local Library Temporarily Unavailable",
+               isPresented: Binding {
+                   app.persistenceRecoveryMessage != nil
+               } set: { isPresented in
+                   if !isPresented { app.persistenceRecoveryMessage = nil }
+               }) {
+            Button("OK") { app.persistenceRecoveryMessage = nil }
+        } message: {
+            Text(app.persistenceRecoveryMessage ?? "")
+        }
     }
 
     // MARK: Siri / Spotlight handling

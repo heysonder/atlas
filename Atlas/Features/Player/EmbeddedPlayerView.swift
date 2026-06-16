@@ -182,24 +182,10 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
 final class InlinePlayerController: AVPlayerViewController {
     var onClose: (() -> Void)?
     private weak var closeButton: UIButton?
-    private var didScheduleDump = false
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         ensureCloseButton()
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        // Dump the tree once, ~2s in, after the controls have had a chance to
-        // build — regardless of whether we found any buttons — so we can see
-        // whether the transport controls live in our process at all.
-        guard !didScheduleDump else { return }
-        didScheduleDump = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            guard let self else { return }
-            Self.dumpHierarchy(self.view)
-        }
     }
 
     private func ensureCloseButton() {
@@ -215,7 +201,6 @@ final class InlinePlayerController: AVPlayerViewController {
             let button = makeCloseButton()
             row.addArrangedSubview(button)
             closeButton = button
-            NSLog("Atlas.embedX: ✅ injected into UIStackView (now \(row.arrangedSubviews.count) items)")
             return
         }
 
@@ -232,7 +217,6 @@ final class InlinePlayerController: AVPlayerViewController {
             button.leadingAnchor.constraint(equalTo: anchor.trailingAnchor, constant: 16)
         ])
         closeButton = button
-        NSLog("Atlas.embedX: ✅ injected beside \(type(of: anchor)) in \(type(of: bar))")
     }
 
     private func makeCloseButton() -> UIButton {
@@ -280,22 +264,6 @@ final class InlinePlayerController: AVPlayerViewController {
         return best
     }
 
-    /// One-shot diagnostic: logs the controller's view tree so we can see exactly
-    /// where (or whether) the transport controls live in our process.
-    private static func dumpHierarchy(_ root: UIView) {
-        func walk(_ v: UIView, _ depth: Int) {
-            let indent = String(repeating: "·  ", count: depth)
-            var tag = ""
-            if let s = v as? UIStackView { tag = " [STACK \(s.axis == .horizontal ? "H" : "V") arranged=\(s.arrangedSubviews.count)]" }
-            else if v is UIButton { tag = " [BUTTON]" }
-            else if v is UIControl { tag = " [CONTROL]" }
-            NSLog("Atlas.embedX: \(indent)\(type(of: v))\(tag) \(v.frame.debugDescription) hidden=\(v.isHidden) alpha=\(v.alpha)")
-            for sub in v.subviews { walk(sub, depth + 1) }
-        }
-        NSLog("Atlas.embedX: ── view hierarchy dump ──")
-        walk(root, 0)
-        NSLog("Atlas.embedX: ── end dump ──")
-    }
 }
 
 /// Owns the `AVPlayer` for the embedded player and mirrors the full-screen
@@ -353,10 +321,11 @@ final class EmbeddedPlayerModel {
             guard !Task.isCancelled else { return }
             let initialItem: AVPlayerItem
             let startsComposed: Bool
-            if let fastItem = StreamComposer.makeFastStartPlayerItem(detail) {
+            if let fastItem = StreamPlaybackBuilder.makeFastStartPlayerItem(detail) {
                 initialItem = fastItem
                 startsComposed = false
-            } else if let composed = await StreamComposer.makeComposedPlayerItem(detail, allowAV1: Self.supportsAV1) {
+            } else if let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
+                detail, allowAV1: Self.supportsAV1) {
                 initialItem = composed
                 startsComposed = true
             } else {
@@ -606,12 +575,12 @@ final class EmbeddedPlayerModel {
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             Task { @MainActor [weak self] in
-                guard let self, self.usedComposition, let url = detail.playableURL else { return }
+                guard let self, self.usedComposition else { return }
                 self.usedComposition = false
                 self.statusObservation?.invalidate()
                 self.statusObservation = nil
                 let resume = self.player.currentTime()
-                let fallback = AVPlayerItem(url: url)
+                guard let fallback = StreamPlaybackBuilder.fallbackPlayerItem(for: detail) else { return }
                 self.player.replaceCurrentItem(with: fallback)
                 PlayerCaptionSelection.keepOffByDefault(for: fallback)
                 self.installEndObserver(for: fallback)
@@ -622,7 +591,7 @@ final class EmbeddedPlayerModel {
     }
 
     private func upgradeToComposedPlaybackIfAvailable(detail: VideoDetail, requestID: String) async {
-        guard let composed = await StreamComposer.makeComposedPlayerItem(
+        guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
             detail, allowAV1: Self.supportsAV1) else { return }
         guard await waitForFastStartPlayback(requestID: requestID) else { return }
         guard !Task.isCancelled,
@@ -657,49 +626,5 @@ final class EmbeddedPlayerModel {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return false
-    }
-}
-
-/// Builds player items the same way the full-screen player does. The simple URL
-/// item starts playback quickly; the composed item is prepared later as a
-/// quality upgrade when separate video-only + audio streams are available.
-private enum StreamComposer {
-    static func makeFastStartPlayerItem(_ detail: VideoDetail) -> AVPlayerItem? {
-        guard let url = detail.playableURL else { return nil }
-        return AVPlayerItem(url: url)
-    }
-
-    static func makeComposedPlayerItem(_ detail: VideoDetail, allowAV1: Bool) async -> AVPlayerItem? {
-        if let source = detail.bestComposedSource(allowAV1: allowAV1),
-           let composed = await composedItem(video: source.video, audio: source.audio) {
-            return composed
-        }
-        return nil
-    }
-
-    private static func composedItem(video videoURL: URL, audio audioURL: URL) async -> AVPlayerItem? {
-        let videoAsset = AVURLAsset(url: videoURL)
-        let audioAsset = AVURLAsset(url: audioURL)
-        let composition = AVMutableComposition()
-        do {
-            guard let vTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
-                  let aTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
-                return nil
-            }
-            let vDuration = try await videoAsset.load(.duration)
-            guard let vComp = composition.addMutableTrack(
-                    withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-                  let aComp = composition.addMutableTrack(
-                    withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-                return nil
-            }
-            try vComp.insertTimeRange(CMTimeRange(start: .zero, duration: vDuration), of: vTrack, at: .zero)
-            let aDuration = try await audioAsset.load(.duration)
-            try aComp.insertTimeRange(
-                CMTimeRange(start: .zero, duration: min(vDuration, aDuration)), of: aTrack, at: .zero)
-            return AVPlayerItem(asset: composition)
-        } catch {
-            return nil   // fall back to HLS/progressive
-        }
     }
 }

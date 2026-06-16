@@ -6,7 +6,7 @@ import PipedKit
 /// Per-video signals fetched from `/streams` to sharpen ranking: YouTube's own
 /// category label ("News & politics", "Science & technology") and the creator's
 /// tags — clean topical keywords with none of a description's ad/affiliate copy.
-struct VideoSignals: Sendable {
+nonisolated struct VideoSignals: Sendable {
     let category: String?
     let tags: [String]
     let topicKey: String?
@@ -20,7 +20,7 @@ struct VideoSignals: Sendable {
 
 /// A value-type snapshot of a `Feedback` row for the ranking functions: a
 /// thumbs-up (+1) or thumbs-down (−1) plus the video's signature.
-struct FeedbackSignal: Sendable {
+nonisolated struct FeedbackSignal: Sendable {
     let signal: Int
     let title: String
     let uploader: String?
@@ -28,9 +28,67 @@ struct FeedbackSignal: Sendable {
     let tags: [String]
 }
 
+/// Value snapshot of a watched video. Ranking can move this off the main actor
+/// without carrying SwiftData model instances across actors.
+nonisolated struct HistorySignal: Sendable, Hashable {
+    let videoID: String
+    let title: String
+    let uploader: String?
+    let thumbnailURL: String?
+    let watchedAt: Date
+    let positionSeconds: Double
+    let durationSeconds: Double
+
+    @MainActor
+    init(_ entry: HistoryEntry) {
+        self.videoID = entry.videoID
+        self.title = entry.title
+        self.uploader = entry.uploader
+        self.thumbnailURL = entry.thumbnailURL
+        self.watchedAt = entry.watchedAt
+        self.positionSeconds = entry.positionSeconds
+        self.durationSeconds = entry.durationSeconds
+    }
+
+    init(videoID: String, title: String, uploader: String? = nil,
+         thumbnailURL: String? = nil, watchedAt: Date,
+         positionSeconds: Double, durationSeconds: Double) {
+        self.videoID = videoID
+        self.title = title
+        self.uploader = uploader
+        self.thumbnailURL = thumbnailURL
+        self.watchedAt = watchedAt
+        self.positionSeconds = positionSeconds
+        self.durationSeconds = durationSeconds
+    }
+}
+
+/// Value snapshot of a saved playlist video used by ranking/profile math.
+nonisolated struct SavedVideoSignal: Sendable, Hashable {
+    let videoID: String
+    let title: String
+    let uploader: String?
+    let addedAt: Date
+
+    @MainActor
+    init(_ video: PlaylistVideo) {
+        self.videoID = video.videoID
+        self.title = video.title
+        self.uploader = video.uploader
+        self.addedAt = video.addedAt
+    }
+
+    init(videoID: String, title: String, uploader: String? = nil, addedAt: Date) {
+        self.videoID = videoID
+        self.title = title
+        self.uploader = uploader
+        self.addedAt = addedAt
+    }
+}
+
 /// A persisted search query collapsed into a ranking signal. Repeated searches
 /// matter, but the weight decays as the query gets stale.
-struct SearchSignal: Sendable {
+nonisolated struct SearchSignal: Sendable {
     let query: String
     let count: Int
     let lastSearchedAt: Date
@@ -53,14 +111,14 @@ struct SearchSignal: Sendable {
 }
 
 /// Local, on-device taste profile assembled from the persisted user signals.
-struct InterestProfile {
-    let history: [HistoryEntry]
+nonisolated struct InterestProfile: Sendable {
+    let history: [HistorySignal]
     let feedback: [FeedbackSignal]
-    let saved: [PlaylistVideo]
+    let saved: [SavedVideoSignal]
     let searches: [SearchSignal]
     let subscribedIDs: Set<String>
-    let relatedSeeds: [HistoryEntry]
-    let explorationSeeds: [HistoryEntry]
+    let relatedSeeds: [HistorySignal]
+    let explorationSeeds: [HistorySignal]
     let channelAffinity: [String: Double]
     private let candidateSearchQueriesOverride: [String]?
     private let savedSeedIDsOverride: [String]?
@@ -81,9 +139,9 @@ struct InterestProfile {
         return saved.prefix(8).map(\.videoID)
     }
 
-    init(history: [HistoryEntry], feedback: [FeedbackSignal], saved: [PlaylistVideo],
+    init(history: [HistorySignal], feedback: [FeedbackSignal], saved: [SavedVideoSignal],
          searches: [SearchSignal], subscribedIDs: Set<String>,
-         relatedSeeds: [HistoryEntry], explorationSeeds: [HistoryEntry],
+         relatedSeeds: [HistorySignal], explorationSeeds: [HistorySignal],
          channelAffinity: [String: Double],
          candidateSearchQueriesOverride: [String]? = nil,
          savedSeedIDsOverride: [String]? = nil) {
@@ -100,7 +158,7 @@ struct InterestProfile {
     }
 }
 
-enum CandidateSource: Hashable, Sendable {
+nonisolated enum CandidateSource: Hashable, Sendable {
     case related
     case search
     case saved
@@ -108,7 +166,7 @@ enum CandidateSource: Hashable, Sendable {
     case exploration
 }
 
-struct CandidateSourceBucket {
+nonisolated struct CandidateSourceBucket: Sendable {
     let source: CandidateSource
     let items: [StreamItem]
     let frequency: [String: Int]
@@ -123,7 +181,7 @@ struct CandidateSourceBucket {
     }
 }
 
-struct CandidatePool {
+nonisolated struct CandidatePool: Sendable {
     let items: [StreamItem]
     let frequency: [String: Int]
     let sourcesByID: [String: Set<CandidateSource>]
@@ -143,7 +201,7 @@ struct RecommendationEngine {
 
     /// Gather related videos from the user's recent watches, with a frequency
     /// count (how many source videos pointed at each candidate).
-    func candidates(from recent: [HistoryEntry], excluding watched: Set<String>)
+    func candidates(from recent: [HistorySignal], excluding watched: Set<String>)
     async -> (items: [StreamItem], frequency: [String: Int]) {
         var frequency: [String: Int] = [:]
         var byID: [String: StreamItem] = [:]
@@ -280,8 +338,24 @@ struct RecommendationEngine {
 
     // MARK: Local profile + candidate pool
 
+    @MainActor
     static func makeProfile(history: [HistoryEntry], feedback: [FeedbackSignal],
                             saved: [PlaylistVideo], searches: [SearchSignal],
+                            subscribedIDs: Set<String>,
+                            snapshot: RecommendationProfileSnapshot? = nil,
+                            signature: String? = nil) -> InterestProfile {
+        makeProfile(
+            history: history.map(HistorySignal.init),
+            feedback: feedback,
+            saved: saved.map(SavedVideoSignal.init),
+            searches: searches,
+            subscribedIDs: subscribedIDs,
+            snapshot: snapshot,
+            signature: signature)
+    }
+
+    static func makeProfile(history: [HistorySignal], feedback: [FeedbackSignal],
+                            saved: [SavedVideoSignal], searches: [SearchSignal],
                             subscribedIDs: Set<String>,
                             snapshot: RecommendationProfileSnapshot? = nil,
                             signature: String? = nil) -> InterestProfile {
@@ -313,8 +387,20 @@ struct RecommendationEngine {
                                channelAffinity: affinity)
     }
 
+    @MainActor
     static func profileSignature(history: [HistoryEntry], feedback: [FeedbackSignal],
                                  saved: [PlaylistVideo], searches: [SearchSignal],
+                                 subscribedIDs: Set<String>) -> String {
+        profileSignature(
+            history: history.map(HistorySignal.init),
+            feedback: feedback,
+            saved: saved.map(SavedVideoSignal.init),
+            searches: searches,
+            subscribedIDs: subscribedIDs)
+    }
+
+    static func profileSignature(history: [HistorySignal], feedback: [FeedbackSignal],
+                                 saved: [SavedVideoSignal], searches: [SearchSignal],
                                  subscribedIDs: Set<String>) -> String {
         let historyPart = history.prefix(80).map {
             "\($0.videoID):\(Int($0.watchedAt.timeIntervalSince1970)):" +
@@ -333,8 +419,8 @@ struct RecommendationEngine {
         return [historyPart, feedbackPart, savedPart, searchPart, subPart].joined(separator: "\n")
     }
 
-    private static func channelAffinity(history: [HistoryEntry],
-                                        saved: [PlaylistVideo]) -> [String: Double] {
+    nonisolated private static func channelAffinity(history: [HistorySignal],
+                                                    saved: [SavedVideoSignal]) -> [String: Double] {
         var affinity: [String: Double] = [:]
         for entry in history {
             if let u = entry.uploader {
@@ -350,9 +436,9 @@ struct RecommendationEngine {
 
     /// Strong-watch seed selection: prefer videos the user actually spent time
     /// with, keep some recency, and avoid letting one channel own all seed slots.
-    private static func selectHistorySeeds(_ history: [HistoryEntry], limit: Int,
-                                           excludedIDs: Set<String> = [],
-                                           channelCap: Int) -> [HistoryEntry] {
+    nonisolated private static func selectHistorySeeds(_ history: [HistorySignal], limit: Int,
+                                                       excludedIDs: Set<String> = [],
+                                                       channelCap: Int) -> [HistorySignal] {
         let ranked = history
             .filter { !excludedIDs.contains($0.videoID) }
             .map { ($0, historySeedScore($0)) }
@@ -361,7 +447,7 @@ struct RecommendationEngine {
                 return $0.1 > $1.1
             }
 
-        var chosen: [HistoryEntry] = []
+        var chosen: [HistorySignal] = []
         var channels: [String: Int] = [:]
         for (entry, _) in ranked where chosen.count < limit {
             let key = entry.uploader ?? entry.videoID
@@ -378,14 +464,14 @@ struct RecommendationEngine {
         return chosen
     }
 
-    private static func historySeedScore(_ entry: HistoryEntry) -> Double {
+    nonisolated private static func historySeedScore(_ entry: HistorySignal) -> Double {
         let ageDays = max(0, Date().timeIntervalSince(entry.watchedAt) / 86_400)
         let recency = max(0.2, 1 - ageDays / 45)
         return watchWeight(position: entry.positionSeconds, duration: entry.durationSeconds) * recency
     }
 
-    static func mergeCandidateSources(_ buckets: [CandidateSourceBucket],
-                                      target: Int = 80) -> CandidatePool {
+    nonisolated static func mergeCandidateSources(_ buckets: [CandidateSourceBucket],
+                                                  target: Int = 80) -> CandidatePool {
         var items: [StreamItem] = []
         var included = Set<String>()
         var sourcesByID: [String: Set<CandidateSource>] = [:]
@@ -438,8 +524,8 @@ struct RecommendationEngine {
     func refineWithSignals(_ shortlist: [StreamItem], profile: InterestProfile,
                            sourcesByID: [String: Set<CandidateSource>] = [:]) async -> [StreamItem] {
         let signals = await fetchSignals(shortlist)
-        let ranked = Self.rankByTopic(shortlist, profile: profile,
-                                      sourcesByID: sourcesByID, enrichment: signals)
+        let ranked = await Self.rankByTopicInBackground(
+            shortlist, profile: profile, sourcesByID: sourcesByID, enrichment: signals)
         return Self.diversify(ranked, enrichment: signals)
     }
 
@@ -519,7 +605,7 @@ struct RecommendationEngine {
     /// hitting the 4× ceiling by 80%: you don't have to reach 100%, because end
     /// cards, outros and ads mean people routinely stop within the last 10–20%, so
     /// "near the end" already counts as finished. Unknown duration stays neutral.
-    static func watchWeight(position: Double, duration: Double) -> Double {
+    nonisolated static func watchWeight(position: Double, duration: Double) -> Double {
         guard duration > 0 else { return 1 }
         let ratio = min(position / duration, 1)
         if ratio <= 0.5 { return 0.5 + ratio }            // 0 → 0.5, 0.5 → 1.0
@@ -528,7 +614,7 @@ struct RecommendationEngine {
 
     // MARK: Strategy A — heuristic
 
-    static func rankRelated(_ pool: CandidatePool, profile: InterestProfile) -> [StreamItem] {
+    nonisolated static func rankRelated(_ pool: CandidatePool, profile: InterestProfile) -> [StreamItem] {
         let maxAff = max(profile.channelAffinity.values.max() ?? 1, 1)
         let now = Date().timeIntervalSince1970
 
@@ -557,9 +643,9 @@ struct RecommendationEngine {
 
     // MARK: Strategy B — on-device semantic
 
-    static func rankByTopic(_ items: [StreamItem], profile: InterestProfile,
-                            sourcesByID: [String: Set<CandidateSource>] = [:],
-                            enrichment: [String: VideoSignals] = [:]) -> [StreamItem] {
+    nonisolated static func rankByTopic(_ items: [StreamItem], profile: InterestProfile,
+                                        sourcesByID: [String: Set<CandidateSource>] = [:],
+                                        enrichment: [String: VideoSignals] = [:]) -> [StreamItem] {
         guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return items }
 
         // Only pure grammar words are dropped outright. Topical-but-common words
@@ -776,15 +862,26 @@ struct RecommendationEngine {
             .map { $0.0 }
     }
 
+    nonisolated static func rankByTopicInBackground(
+        _ items: [StreamItem],
+        profile: InterestProfile,
+        sourcesByID: [String: Set<CandidateSource>] = [:],
+        enrichment: [String: VideoSignals] = [:]
+    ) async -> [StreamItem] {
+        await Task.detached(priority: .userInitiated) {
+            rankByTopic(items, profile: profile, sourcesByID: sourcesByID, enrichment: enrichment)
+        }.value
+    }
+
     // MARK: Diversity
 
     /// Keep the opening screen from becoming one channel or one topic, while
     /// preserving the full ranked order after the first window.
-    static func diversify(_ ranked: [StreamItem],
-                          enrichment: [String: VideoSignals] = [:],
-                          window: Int = 15,
-                          maxPerChannel: Int = 2,
-                          maxPerTopic: Int = 4) -> [StreamItem] {
+    nonisolated static func diversify(_ ranked: [StreamItem],
+                                      enrichment: [String: VideoSignals] = [:],
+                                      window: Int = 15,
+                                      maxPerChannel: Int = 2,
+                                      maxPerTopic: Int = 4) -> [StreamItem] {
         let target = min(window, ranked.count)
         guard target > 1 else { return ranked }
 
@@ -840,10 +937,10 @@ struct RecommendationEngine {
     /// Pull-to-refresh should not feel like a no-op. When the top of the previous
     /// For You render appears again, move those items below the next screenful
     /// without excluding them from the feed.
-    static func rotateRecentlyShown(_ ranked: [StreamItem],
-                                    recentTopIDs: Set<String>,
-                                    protectedWindow: Int = 8,
-                                    insertionIndex: Int = 12) -> [StreamItem] {
+    nonisolated static func rotateRecentlyShown(_ ranked: [StreamItem],
+                                                recentTopIDs: Set<String>,
+                                                protectedWindow: Int = 8,
+                                                insertionIndex: Int = 12) -> [StreamItem] {
         guard !recentTopIDs.isEmpty else { return ranked }
 
         var kept: [StreamItem] = []
@@ -861,8 +958,8 @@ struct RecommendationEngine {
         return Array(kept.prefix(split)) + held + Array(kept.dropFirst(split))
     }
 
-    private static func topicKey(for item: StreamItem,
-                                 enrichment: [String: VideoSignals]) -> String? {
+    nonisolated private static func topicKey(for item: StreamItem,
+                                             enrichment: [String: VideoSignals]) -> String? {
         if let id = item.videoID, let signal = enrichment[id] {
             if let topicKey = signal.topicKey { return topicKey }
             if let category = signal.category?.trimmingCharacters(
@@ -875,7 +972,7 @@ struct RecommendationEngine {
         return topicKey(category: nil, text: "\(item.displayTitle) \(item.uploaderName ?? "")")
     }
 
-    static func topicKey(category: String?, text rawText: String) -> String? {
+    nonisolated static func topicKey(category: String?, text rawText: String) -> String? {
         if let category = category?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !category.isEmpty {
             return "yt:\(category)"
