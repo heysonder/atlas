@@ -570,16 +570,30 @@ struct RecommendationEngine {
 
     private func cachedSignals(for ids: [String]) -> [String: VideoSignals] {
         guard let modelContext else { return [:] }
-        let now = Date()
-        var out: [String: VideoSignals] = [:]
-        for id in ids {
-            let descriptor = FetchDescriptor<VideoSignalCacheEntry>(
-                predicate: #Predicate { $0.videoID == id })
-            guard let entry = try? modelContext.fetch(descriptor).first else { continue }
-            guard now.timeIntervalSince(entry.updatedAt) < Self.signalCacheTTL else { continue }
-            out[id] = entry.videoSignals
+        return Self.freshCachedSignals(for: ids, in: modelContext)
+    }
+
+    static func freshCachedSignals(
+        for ids: [String],
+        in modelContext: ModelContext,
+        now: Date = .now
+    ) -> [String: VideoSignals] {
+        guard !ids.isEmpty else { return [:] }
+        let uniqueIDs = Array(Set(ids))
+        let descriptor = FetchDescriptor<VideoSignalCacheEntry>(
+            predicate: #Predicate { uniqueIDs.contains($0.videoID) })
+        let entries = (try? modelContext.fetch(descriptor)) ?? []
+        return freshCachedSignals(from: entries, now: now)
+    }
+
+    static func freshCachedSignals(
+        from entries: [VideoSignalCacheEntry],
+        now: Date = .now
+    ) -> [String: VideoSignals] {
+        entries.reduce(into: [:]) { out, entry in
+            guard now.timeIntervalSince(entry.updatedAt) < signalCacheTTL else { return }
+            out[entry.videoID] = entry.videoSignals
         }
-        return out
     }
 
     private func cacheSignals(videoID: String, detail: VideoDetail,

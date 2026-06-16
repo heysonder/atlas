@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Atlas
 import PipedKit
@@ -119,6 +120,62 @@ import PipedKit
     #expect(entry.videoSignals.topicKey == "yt:science & technology")
 }
 
+@MainActor
+@Test func batchedSignalCacheFiltersExpiredEntries() {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let fresh = VideoSignalCacheEntry(
+        videoID: "fresh",
+        category: "Science & technology",
+        tags: ["swift"],
+        updatedAt: now.addingTimeInterval(-60))
+    let expired = VideoSignalCacheEntry(
+        videoID: "expired",
+        category: "News & politics",
+        tags: ["policy"],
+        updatedAt: now.addingTimeInterval(-31 * 86_400))
+
+    let signals = RecommendationEngine.freshCachedSignals(from: [fresh, expired], now: now)
+
+    #expect(signals["fresh"]?.category == "Science & technology")
+    #expect(signals["expired"] == nil)
+}
+
+@MainActor
+@Test func batchedSignalCacheFetchesRequestedIDsFromSwiftData() throws {
+    let schema = Schema([VideoSignalCacheEntry.self])
+    let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+    let container = try ModelContainer(for: schema, configurations: [config])
+    let context = container.mainContext
+    context.insert(VideoSignalCacheEntry(
+        videoID: "wanted",
+        category: "Science & technology",
+        tags: ["swift"]))
+    context.insert(VideoSignalCacheEntry(
+        videoID: "other",
+        category: "News & politics",
+        tags: ["policy"]))
+
+    let signals = RecommendationEngine.freshCachedSignals(for: ["wanted"], in: context)
+
+    #expect(signals["wanted"]?.tags == ["swift"])
+    #expect(signals["other"] == nil)
+}
+
+@MainActor
+@Test func timestampPreviewIndexPrefersLatestActiveTimestamp() throws {
+    let comments = try [
+        comment("first", text: "Early note at 0:04"),
+        comment("second", text: "Better match at 0:08"),
+        comment("third", text: "Later note at 0:30"),
+    ]
+    var index = TimestampCommentPreviewIndex()
+    index.updateIfNeeded(comments)
+
+    #expect(index.activeComment(at: 9)?.id == "second")
+    #expect(index.activeComment(at: 18) == nil)
+    #expect(index.activeComment(at: 35)?.id == "third")
+}
+
 private func historyEntry(_ id: String, uploader: String, watchedAt: TimeInterval) -> HistoryEntry {
     HistoryEntry(videoID: id, title: "Video \(id)", uploader: uploader,
                  watchedAt: Date(timeIntervalSince1970: watchedAt),
@@ -137,4 +194,15 @@ private func streamItem(_ id: String, uploader: String = "Uploader",
     }
     """.data(using: .utf8)!
     return try JSONDecoder().decode(StreamItem.self, from: json)
+}
+
+private func comment(_ id: String, text: String) throws -> PipedKit.Comment {
+    let json = """
+    {
+      "commentId": "\(id)",
+      "commentText": "\(text)",
+      "author": "Tester"
+    }
+    """.data(using: .utf8)!
+    return try JSONDecoder().decode(PipedKit.Comment.self, from: json)
 }
