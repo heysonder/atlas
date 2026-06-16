@@ -100,7 +100,8 @@ struct SearchView: View {
                         Color.clear.frame(height: 12)
                     }
                     // Then videos.
-                    GroupedVideoList(items: videos) { app.play($0) }
+                    GroupedVideoList(items: videos,
+                                     onAppearItem: { app.prefetchStream($0.videoID) }) { app.play($0) }
                     paginationFooter
                 }
                 .padding(.horizontal)
