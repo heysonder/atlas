@@ -7,9 +7,10 @@ enum StreamPlaybackBuilder {
     /// video-only + audio streams, then fall back to HLS/progressive playback.
     static func makePlayerItem(
         _ detail: VideoDetail,
-        allowAV1: Bool
+        allowAV1: Bool,
+        preferredLanguages: [String] = Locale.preferredLanguages
     ) async -> (item: AVPlayerItem, composed: Bool)? {
-        if let source = detail.bestComposedSource(allowAV1: allowAV1),
+        if let source = detail.bestComposedSource(allowAV1: allowAV1, preferredLanguages: preferredLanguages),
            let composed = await composedItem(video: source.video, audio: source.audio) {
             return (composed, true)
         }
@@ -27,14 +28,6 @@ enum StreamPlaybackBuilder {
     static func makeFastStartPlayerItem(_ detail: VideoDetail) -> AVPlayerItem? {
         guard let url = detail.playableURL else { return nil }
         return AVPlayerItem(url: url)
-    }
-
-    /// Builds the highest-quality composed item from video-only + audio streams.
-    /// This is intentionally separate from fast-start playback so callers can
-    /// start quickly and upgrade later.
-    static func makeComposedPlayerItem(_ detail: VideoDetail, allowAV1: Bool) async -> AVPlayerItem? {
-        guard let source = detail.bestComposedSource(allowAV1: allowAV1) else { return nil }
-        return await composedItem(video: source.video, audio: source.audio)
     }
 
     private static func composedItem(video videoURL: URL, audio audioURL: URL) async -> AVPlayerItem? {

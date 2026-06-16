@@ -52,8 +52,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var timeControlObservation: NSKeyValueObservation?
         private var infoCommentTimeObserver: Any?
         private var detachedForBackground = false
-        private static let minFastStartSecondsBeforeUpgrade: Double = 3
-
         // SponsorBlock: skippable segments + the overlay button that offers them.
         private var sponsorSegments: [SponsorSegment] = []
         private var sponsorObserver: Any?
@@ -150,27 +148,24 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 let detail = try await app.resolveStream(request.videoID)
                 guard !Task.isCancelled else { return }
                 let baseMetadata = Self.metadata(detail, request)
-                let initialItem: AVPlayerItem
-                let startsComposed: Bool
-                if let fastItem = StreamPlaybackBuilder.makeFastStartPlayerItem(detail) {
-                    initialItem = fastItem
-                    startsComposed = false
-                } else if let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-                    detail, allowAV1: Self.supportsAV1) {
-                    initialItem = composed
-                    startsComposed = true
-                } else {
+                guard let playback = await StreamPlaybackBuilder.makePlayerItem(
+                    detail,
+                    allowAV1: Self.supportsAV1
+                ) else {
                     showError(on: controller, PipedError.noPlayableStream.localizedDescription)
                     return
                 }
                 guard !Task.isCancelled else { return }
-                usedComposition = startsComposed
+                let initialItem = playback.item
+                await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
+                guard !Task.isCancelled else { return }
+                usedComposition = playback.composed
                 // TEST: leave preferredForwardBufferDuration at its default (0 = system-managed).
                 initialItem.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: initialItem)
                 PlayerCaptionSelection.keepOffByDefault(for: initialItem)
                 installEndObserver(for: initialItem)
-                if startsComposed { observeForFailure(initialItem, detail: detail, player: player) }
+                if playback.composed { observeForFailure(initialItem, detail: detail, player: player) }
                 attachArtwork(to: initialItem,
                               urlString: detail.thumbnailUrl ?? request.thumbnail,
                               base: baseMetadata)
@@ -187,11 +182,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 installProgressTracking(on: player)
                 loadSponsorSegments(for: request, player: player, controller: controller)
                 recordHistory(detail, request)
-                if !startsComposed {
-                    await upgradeToComposedPlaybackIfAvailable(
-                        detail: detail, request: request, metadata: baseMetadata,
-                        player: player, controller: controller)
-                }
             } catch {
                 guard !Task.isCancelled else { return }
                 showError(on: controller, error.localizedDescription)
@@ -705,58 +695,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
         private static let supportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
-        private func upgradeToComposedPlaybackIfAvailable(
-            detail: VideoDetail,
-            request: PlayRequest,
-            metadata: [AVMetadataItem],
-            player: AVPlayer,
-            controller: AVPlayerViewController
-        ) async {
-            guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-                detail, allowAV1: Self.supportsAV1) else { return }
-            guard await waitForFastStartPlayback(player: player, request: request) else { return }
-            guard !Task.isCancelled,
-                  self.player === player,
-                  playerVC === controller,
-                  presentedID == request.videoID,
-                  currentRequest?.videoID == request.videoID else { return }
-
-            let resume = player.currentTime()
-            let shouldResume = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            composed.externalMetadata = metadata
-            usedComposition = true
-            player.replaceCurrentItem(with: composed)
-            PlayerCaptionSelection.keepOffByDefault(for: composed)
-            installEndObserver(for: composed)
-            observeForFailure(composed, detail: detail, player: player)
-            attachArtwork(to: composed,
-                          urlString: detail.thumbnailUrl ?? request.thumbnail,
-                          base: metadata)
-            await player.seek(to: resume)
-            if shouldResume {
-                player.playImmediately(atRate: 1.0)
-            }
-            NSLog("Atlas.player: ⬆️ upgraded active playback to composed item")
-        }
-
-        private func waitForFastStartPlayback(player: AVPlayer, request: PlayRequest) async -> Bool {
-            for _ in 0..<48 {
-                guard !Task.isCancelled,
-                      self.player === player,
-                      presentedID == request.videoID,
-                      currentRequest?.videoID == request.videoID else { return false }
-                if player.currentItem?.status == .failed {
-                    return true
-                }
-                let seconds = player.currentTime().seconds
-                if seconds.isFinite, seconds >= Self.minFastStartSecondsBeforeUpgrade {
-                    return true
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            return false
-        }
-
         /// If a composed item fails to actually play, swap to the simple HLS/progressive URL.
         private func observeForFailure(_ item: AVPlayerItem, detail: VideoDetail, player: AVPlayer) {
             statusObservation?.invalidate()
@@ -771,6 +709,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     let resume = player.currentTime()
                     fallback.externalMetadata = Self.metadata(detail, self.currentRequest ?? PlayRequest(
                         videoID: detail.channelID ?? "", title: detail.title ?? ""))
+                    await PlayerAudioSelection.selectPreferredAudio(for: fallback)
                     player.replaceCurrentItem(with: fallback)
                     PlayerCaptionSelection.keepOffByDefault(for: fallback)
                     self.installEndObserver(for: fallback)
