@@ -153,10 +153,11 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 let baseMetadata = Self.metadata(detail, request)
                 let initialItem: AVPlayerItem
                 let startsComposed: Bool
-                if let fastItem = Self.makeFastStartPlayerItem(detail) {
+                if let fastItem = StreamPlaybackBuilder.makeFastStartPlayerItem(detail) {
                     initialItem = fastItem
                     startsComposed = false
-                } else if let composed = await Self.makeComposedPlayerItem(detail) {
+                } else if let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
+                    detail, allowAV1: Self.supportsAV1) {
                     initialItem = composed
                     startsComposed = true
                 } else {
@@ -754,40 +755,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
         private static let supportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
-        /// Builds the fastest item AVPlayer can open directly. HLS is adaptive, and
-        /// progressive mp4 is a simple fallback; neither requires probing separate
-        /// audio/video tracks before the first frame can start.
-        private static func makeFastStartPlayerItem(_ detail: VideoDetail) -> AVPlayerItem? {
-            guard let url = detail.playableURL else { return nil }
-            NSLog("Atlas.player: ▶️ fast-start URL = \(url.absoluteString.prefix(60))…")
-            return AVPlayerItem(url: url)
-        }
-
-        /// Builds the highest-quality composed item from video-only + audio streams
-        /// (1080p H.264, or AV1 4K where supported). This is intentionally kept off
-        /// the first-playback path when a fast-start URL exists.
-        private static func makeComposedPlayerItem(_ detail: VideoDetail) async -> AVPlayerItem? {
-            // Diagnostic: what did the instance actually offer? Reveals whether
-            // AV1 / >1080p streams even exist for this video on this instance.
-            let inventory = (detail.videoStreams ?? [])
-                .sorted { ($0.height ?? 0) > ($1.height ?? 0) }
-                .map { "\($0.height ?? 0)p:\($0.codec ?? $0.mimeType ?? "?")\($0.isProgressive ? "(prog)" : "")" }
-                .joined(separator: ", ")
-            NSLog("Atlas.player: 📺 videoStreams = [\(inventory)] | hls: \(detail.hls?.isEmpty == false) | AV1 hw: \(supportsAV1)")
-
-            if let source = detail.bestComposedSource(allowAV1: supportsAV1) {
-                NSLog("Atlas.player: best compose-able source = \(source.height)p (AV1 allowed: \(supportsAV1))")
-                if let composed = await composedItem(video: source.video, audio: source.audio) {
-                    NSLog("Atlas.player: ✅ composed \(source.height)p item")
-                    return composed
-                }
-                NSLog("Atlas.player: ⚠️ composition failed, falling back")
-            } else {
-                NSLog("Atlas.player: no compose-able video-only+audio pair (HLS present: \(detail.hls?.isEmpty == false))")
-            }
-            return nil
-        }
-
         private func upgradeToComposedPlaybackIfAvailable(
             detail: VideoDetail,
             request: PlayRequest,
@@ -795,7 +762,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             player: AVPlayer,
             controller: AVPlayerViewController
         ) async {
-            guard let composed = await Self.makeComposedPlayerItem(detail) else { return }
+            guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
+                detail, allowAV1: Self.supportsAV1) else { return }
             guard await waitForFastStartPlayback(player: player, request: request) else { return }
             guard !Task.isCancelled,
                   self.player === player,
@@ -846,12 +814,11 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 guard item.status == .failed else { return }
                 Task { @MainActor [weak self] in
                     guard let self, self.usedComposition,
-                          let url = detail.playableURL else { return }
+                          let fallback = StreamPlaybackBuilder.fallbackPlayerItem(for: detail) else { return }
                     self.usedComposition = false
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
                     let resume = player.currentTime()
-                    let fallback = AVPlayerItem(url: url)
                     fallback.externalMetadata = Self.metadata(detail, self.currentRequest ?? PlayRequest(
                         videoID: detail.channelID ?? "", title: detail.title ?? ""))
                     player.replaceCurrentItem(with: fallback)
@@ -860,39 +827,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     await player.seek(to: resume)
                     player.playImmediately(atRate: 1.0)
                 }
-            }
-        }
-
-        /// Merges separate remote video-only and audio tracks into one playable item.
-        private static func composedItem(video videoURL: URL, audio audioURL: URL) async -> AVPlayerItem? {
-            let videoAsset = AVURLAsset(url: videoURL)
-            let audioAsset = AVURLAsset(url: audioURL)
-            let composition = AVMutableComposition()
-            do {
-                guard let vTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
-                      let aTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
-                    NSLog("Atlas.player: composition aborted — missing video or audio track")
-                    return nil
-                }
-                let vDuration = try await videoAsset.load(.duration)
-                let range = CMTimeRange(start: .zero, duration: vDuration)
-
-                guard let vComp = composition.addMutableTrack(
-                        withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-                      let aComp = composition.addMutableTrack(
-                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-                    return nil
-                }
-                try vComp.insertTimeRange(range, of: vTrack, at: .zero)
-                // Audio track may be a hair shorter/longer; clamp to its own duration.
-                let aDuration = try await audioAsset.load(.duration)
-                let aRange = CMTimeRange(start: .zero, duration: min(vDuration, aDuration))
-                try aComp.insertTimeRange(aRange, of: aTrack, at: .zero)
-
-                return AVPlayerItem(asset: composition)
-            } catch {
-                NSLog("Atlas.player: composition threw — \(error.localizedDescription)")
-                return nil   // fall back to HLS/progressive
             }
         }
 

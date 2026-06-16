@@ -92,11 +92,7 @@ struct VideoContextMenu: ViewModifier {
         let descriptor = FetchDescriptor<DownloadedVideo>(
             predicate: #Predicate { $0.videoID == videoID })
         guard let download = try? context.fetch(descriptor).first else { return request }
-        return PlayRequest(videoID: download.videoID,
-                           title: download.title,
-                           uploader: download.uploader,
-                           thumbnail: download.thumbnailURL?.absoluteString ?? request.thumbnail,
-                           localURL: download.fileURL)
+        return PlayRequest(download: download, fallbackThumbnail: request.thumbnail)
     }
 
     private func add(to playlist: Playlist) {

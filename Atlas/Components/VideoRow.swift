@@ -29,20 +29,22 @@ struct VideoRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                Thumbnail(url: item.thumbnail)
-                    .aspectRatio(16/9, contentMode: .fill)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .opacity(watched ? 0.55 : 1)
-                    .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
-                    .overlay(alignment: .topLeading) {
-                        if watched { WatchedBadge().padding(8) }
-                    }
-                durationPill
+            Button(action: onPlay) {
+                ZStack(alignment: .bottomTrailing) {
+                    Thumbnail(url: item.thumbnail)
+                        .aspectRatio(16/9, contentMode: .fill)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .opacity(watched ? 0.55 : 1)
+                        .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
+                        .overlay(alignment: .topLeading) {
+                            if watched { WatchedBadge().padding(8) }
+                        }
+                    durationPill
+                }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { onPlay() }
+            .buttonStyle(.plain)
+            .accessibilityLabel(item.displayTitle)
 
             HStack(alignment: .top, spacing: 10) {
                 CreatorChannelControl(summary: creator) {
@@ -64,12 +66,14 @@ struct VideoRow: View {
     }
 
     private var title: some View {
-        Text(item.displayTitle)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(2)
-            .multilineTextAlignment(.leading)
-            .contentShape(Rectangle())
-            .onTapGesture { onPlay() }
+        Button(action: onPlay) {
+            Text(item.displayTitle)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var durationPill: some View {

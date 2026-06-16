@@ -12,17 +12,17 @@ struct AtlasApp: App {
 
     init() {
         Self.configureURLCache()
-        let container = Self.makeModelContainer()
-        modelContainer = container
-        let appModel = AppModel()
-        let downloadManager = DownloadManager(modelContext: container.mainContext)
+        let containerResult = Self.makeModelContainer()
+        modelContainer = containerResult.container
+        let appModel = AppModel(persistenceRecoveryMessage: containerResult.recoveryMessage)
+        let downloadManager = DownloadManager(modelContext: modelContainer.mainContext)
         _app = State(initialValue: appModel)
         _downloads = State(initialValue: downloadManager)
         configureAudioSession()
 
         // Wire Siri / App Intents: give intents access to the store and the live
         // app + download manager, then publish downloads & history to Spotlight.
-        IntentDataStore.injectedContainer = container
+        IntentDataStore.injectedContainer = modelContainer
         IntentDataStore.app = appModel
         AppDependencyManager.shared.add(dependency: appModel)
         AppDependencyManager.shared.add(dependency: downloadManager)
@@ -46,25 +46,33 @@ struct AtlasApp: App {
         .modelContainer(modelContainer)
     }
 
-    /// Builds the SwiftData container, self-healing if the on-disk store can't be
-    /// loaded or migrated (e.g. after a schema change). Worst case we reset local
-    /// data — all of it is re-fetchable, so this can never brick the app.
-    private static func makeModelContainer() -> ModelContainer {
+    private struct ModelContainerResult {
+        let container: ModelContainer
+        let recoveryMessage: String?
+    }
+
+    /// Builds the SwiftData container without deleting the user's persistent
+    /// store. If the on-disk store cannot be opened, launch against temporary
+    /// in-memory storage and surface the problem so the saved data remains
+    /// available for migration/backup recovery instead of being silently wiped.
+    private static func makeModelContainer() -> ModelContainerResult {
         let schema = Schema([SubscribedChannel.self, HistoryEntry.self, Playlist.self,
                              PlaylistVideo.self, DownloadedVideo.self, Feedback.self,
                              SearchEntry.self, VideoSignalCacheEntry.self,
                              RecommendationProfileSnapshot.self])
         let config = ModelConfiguration(schema: schema)
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            return ModelContainerResult(
+                container: try ModelContainer(for: schema, configurations: [config]),
+                recoveryMessage: nil)
         } catch {
-            // Migration/incompatibility: delete the store and start fresh.
-            let url = config.url
-            for path in [url.path, url.path + "-wal", url.path + "-shm"] {
-                try? FileManager.default.removeItem(atPath: path)
+            let memoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            if let fallback = try? ModelContainer(for: schema, configurations: [memoryConfig]) {
+                return ModelContainerResult(
+                    container: fallback,
+                    recoveryMessage: "Atlas could not open its saved library, so it started with temporary storage. Your existing on-device data was left untouched.")
             }
-            return (try? ModelContainer(for: schema, configurations: [config]))
-                ?? { fatalError("Unrecoverable SwiftData error: \(error)") }()
+            fatalError("Unrecoverable SwiftData error: \(error)")
         }
     }
 

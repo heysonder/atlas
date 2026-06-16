@@ -296,7 +296,7 @@ struct FeedView: View {
             await prefetch(visible(rotated))
         case .forYouCustom:
             // Instant on-device pass, then upgrade with YouTube category/tags.
-            let coarse = RecommendationEngine.rankByTopic(
+            let coarse = await RecommendationEngine.rankByTopicInBackground(
                 pool.items, profile: profile, sourcesByID: pool.sourcesByID)
             let diverseCoarse = RecommendationEngine.diversify(coarse)
             let rotatedCoarse = RecommendationEngine.rotateRecentlyShown(

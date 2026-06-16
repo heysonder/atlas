@@ -30,7 +30,7 @@ struct InstancesSettingsView: View {
             } header: {
                 Text("Custom instance")
             } footer: {
-                Text("Point Atlas at your own self-hosted Piped API for the most reliable experience.")
+                Text("Point Atlas at your own HTTPS self-hosted Piped API for the most reliable experience.")
             }
         }
         .navigationTitle("Instance")
@@ -42,12 +42,12 @@ struct InstancesSettingsView: View {
     }
 
     private var isCustomURLValid: Bool {
-        URL(string: AppModel.normalize(customURL))?.host != nil
+        AppModel.isValidInstanceURL(customURL)
     }
 
     private func useCustom() {
         let normalized = AppModel.normalize(customURL)
-        guard URL(string: normalized)?.host != nil else { return }
+        guard AppModel.isValidInstanceURL(normalized) else { return }
         app.instanceURLString = normalized
         customURL = ""
     }
