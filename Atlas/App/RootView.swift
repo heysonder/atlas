@@ -52,9 +52,9 @@ struct RootView: View {
             playMostRecentWatch()
         case .forYou:
             app.selectedTab = .feed
-        case .openDownloads:
+        case .openLibrary(let target):
             app.selectedTab = .profile
-            app.libraryTarget = .downloads
+            app.libraryTarget = target
         }
     }
 

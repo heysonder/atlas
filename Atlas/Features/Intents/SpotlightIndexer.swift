@@ -7,9 +7,8 @@ import UniformTypeIdentifiers
 /// result hands `RootView` an `NSUserActivity` whose identifier we parse back into
 /// a video id to resume playback.
 ///
-/// This is the classic CoreSpotlight path that runs on iOS 26+. On iOS 27 the
-/// same entities are *also* pushed into the semantic index via `IndexedEntity`
-/// (see `VideoEntity`), which adds meaning-based matching on top of keywords.
+/// This is the CoreSpotlight path that runs on iOS 26+. The focused `VideoEntity`
+/// shape can be reused later if Atlas adopts semantic indexing.
 @MainActor
 enum SpotlightIndexer {
     /// Spotlight item ids are namespaced so the tap handler can tell where a hit
