@@ -10,7 +10,7 @@ enum AtlasIntentAction: Equatable, Sendable {
     case search(String)
     case resumeWatching
     case forYou
-    case openDownloads
+    case openLibrary(LibraryTarget)
 }
 
 /// A Library sub-screen to deep-link into. `ProfileView` owns its own navigation
@@ -38,7 +38,8 @@ enum IntentDataStore {
         if let injectedContainer { return injectedContainer }
         injectedContainer = try? ModelContainer(
             for: SubscribedChannel.self, HistoryEntry.self, Playlist.self,
-            PlaylistVideo.self, DownloadedVideo.self, Feedback.self, SearchEntry.self)
+            PlaylistVideo.self, DownloadedVideo.self, Feedback.self, SearchEntry.self,
+            VideoSignalCacheEntry.self, RecommendationProfileSnapshot.self)
         return injectedContainer
     }
 

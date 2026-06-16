@@ -35,32 +35,37 @@ struct AtlasShortcuts: AppShortcutsProvider {
             systemImageName: "sparkles")
 
         AppShortcut(
-            intent: OpenDownloadsIntent(),
+            intent: OpenLibraryIntent(),
             phrases: [
-                "Open \(.applicationName) downloads",
-                "Show my downloads in \(.applicationName)",
+                "Open \(\.$destination) in \(.applicationName)",
+                "Show my \(\.$destination) in \(.applicationName)",
             ],
-            shortTitle: "Downloads",
-            systemImageName: "arrow.down.circle")
+            shortTitle: "Open Library",
+            systemImageName: "square.stack.fill")
 
         AppShortcut(
             intent: PlayVideoIntent(),
-            phrases: ["Play this in \(.applicationName)"],
-            shortTitle: "Play",
+            phrases: [
+                "Play \(\.$target) in \(.applicationName)",
+                "Play a video in \(.applicationName)",
+            ],
+            shortTitle: "Play Video",
             systemImageName: "play.fill")
 
         AppShortcut(
             intent: DownloadVideoIntent(),
-            phrases: ["Download this in \(.applicationName)"],
-            shortTitle: "Download",
+            phrases: [
+                "Download \(\.$target) in \(.applicationName)",
+                "Download a video in \(.applicationName)",
+            ],
+            shortTitle: "Download Video",
             systemImageName: "arrow.down.circle")
 
         // The playlist is an AppEntity, so — unlike the search String — it CAN be
         // spoken inside the phrase, and the query matches it by name.
         // A phrase can interpolate only ONE parameter, so we speak the playlist
         // and let Siri ask "which video?" (via the parameter's requestValueDialog),
-        // which the searchable VideoEntity resolves from your description. "Add
-        // this to …" additionally tries on-screen awareness on a real device.
+        // which the searchable VideoEntity resolves from your description.
         AppShortcut(
             intent: AddToPlaylistIntent(),
             phrases: [
