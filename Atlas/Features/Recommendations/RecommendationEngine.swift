@@ -477,28 +477,33 @@ struct RecommendationEngine {
         var sourcesByID: [String: Set<CandidateSource>] = [:]
         var frequency: [String: Int] = [:]
 
-        func note(_ item: StreamItem, bucket: CandidateSourceBucket) {
+        func noteSelected(_ item: StreamItem, bucket: CandidateSourceBucket) {
             guard let id = item.videoID else { return }
             sourcesByID[id, default: []].insert(bucket.source)
             if let count = bucket.frequency[id] {
-                frequency[id, default: 0] += count
+                frequency[id] = max(frequency[id] ?? 0, count)
             }
         }
 
-        func append(_ item: StreamItem) {
-            guard let id = item.videoID, !included.contains(id), items.count < target else { return }
+        @discardableResult
+        func append(_ item: StreamItem) -> Bool {
+            guard let id = item.videoID, !included.contains(id), items.count < target else { return false }
             included.insert(id)
             items.append(item)
+            return true
         }
 
         for bucket in buckets {
             var addedForBucket = 0
             for item in bucket.items {
-                note(item, bucket: bucket)
                 guard addedForBucket < bucket.limit else { continue }
-                let before = items.count
-                append(item)
-                if items.count > before { addedForBucket += 1 }
+                guard let id = item.videoID else { continue }
+                if included.contains(id) {
+                    noteSelected(item, bucket: bucket)
+                } else if append(item) {
+                    noteSelected(item, bucket: bucket)
+                    addedForBucket += 1
+                }
             }
         }
 
@@ -786,8 +791,8 @@ struct RecommendationEngine {
         var catCount: [String: Int] = [:]
         var classified = 0
         for doc in tasteDocs + likedDocs + savedDocs + searchDocs { if let c = classify(doc) { catCount[c, default: 0] += 1; classified += 1 } }
-        func categoryFit(_ doc: [String]) -> Double {
-            guard classified > 0, let c = classify(doc) else { return 1 }  // no signal → don't gate
+        func categoryFit(_ category: String?) -> Double {
+            guard classified > 0, let c = category else { return 1 }  // no signal → don't gate
             return Double(catCount[c] ?? 0) / Double(classified)
         }
         // How much of your taste is itself news/politics/war — decides whether to
@@ -829,18 +834,45 @@ struct RecommendationEngine {
 
         let maxAff = max(profile.channelAffinity.values.max() ?? 1, 1)
 
-        func score(_ item: StreamItem, _ doc: [String]) -> Double {
-            guard let v = vector(doc) else { return -1 }
+        func topThreeMeanSimilarity(to v: [Double], in candidates: [[Double]]) -> Double {
+            var first = -Double.infinity
+            var second = -Double.infinity
+            var third = -Double.infinity
+            var count = 0
+            for candidate in candidates {
+                let similarity = cosine(candidate, v)
+                count += 1
+                if similarity > first {
+                    third = second
+                    second = first
+                    first = similarity
+                } else if similarity > second {
+                    third = second
+                    second = similarity
+                } else if similarity > third {
+                    third = similarity
+                }
+            }
+            guard count > 0 else { return 0 }
+            let top = [first, second, third].prefix(min(3, count))
+            return top.reduce(0, +) / Double(top.count)
+        }
+
+        let candidateFeatures = zip(items, candDocs).map { item, doc in
+            let category = classify(doc)
+            return (item: item, vector: vector(doc), category: category, fit: categoryFit(category))
+        }
+
+        func score(_ item: StreamItem, vector v: [Double], category: String?, fit: Double) -> Double {
             let id = item.videoID ?? ""
             let sources = sourcesByID[id] ?? []
             // Mean of your 3 NEAREST interests: as sharp as a single max, but one
             // stray off-topic watch can't single-handedly magnet a candidate up.
-            let top = tasteVectors.map { cosine($0, v) }.sorted(by: >).prefix(3)
-            let topicSim = top.isEmpty ? 0 : top.reduce(0, +) / Double(top.count)
+            let topicSim = topThreeMeanSimilarity(to: v, in: tasteVectors)
             // Categorical gate: collapse the score of a video whose category you
             // essentially never watch (e.g. war/news for an all-tech history). The
             // 0.15 floor keeps it soft, so a misclassification can't fully erase it.
-            let gated = topicSim * (0.15 + 0.85 * categoryFit(doc))
+            let gated = topicSim * (0.15 + 0.85 * fit)
             let aff = (profile.channelAffinity[item.uploaderName ?? ""] ?? 0) / maxAff
             // Following a channel is an explicit interest — lift its uploads on top
             // of the topic match, so your subs surface even on a quieter topic day.
@@ -864,14 +896,18 @@ struct RecommendationEngine {
                 let dislikeSim = dislikedVectors.map { cosine($0, v) }.max() ?? 0
                 s -= 0.6 * max(0, dislikeSim)   // dislike weight: tunable knob
             }
-            if !dislikedCategories.isEmpty, let c = classify(doc), dislikedCategories.contains(c) {
+            if !dislikedCategories.isEmpty, let c = category, dislikedCategories.contains(c) {
                 s *= 0.2
             }
             return s
         }
 
-        return zip(items, candDocs)
-            .map { (item, doc) in (item, score(item, doc)) }
+        return candidateFeatures
+            .map { feature in
+                (feature.item, feature.vector.map {
+                    score(feature.item, vector: $0, category: feature.category, fit: feature.fit)
+                } ?? -1)
+            }
             .sorted { $0.1 > $1.1 }
             .map { $0.0 }
     }

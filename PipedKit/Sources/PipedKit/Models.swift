@@ -1,5 +1,63 @@
 import Foundation
 
+private struct AnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = "\(intValue)"
+        self.intValue = intValue
+    }
+}
+
+private struct AnyDecodableValue: Decodable {
+    init(from decoder: Decoder) throws {
+        if var array = try? decoder.unkeyedContainer() {
+            while !array.isAtEnd {
+                _ = try? array.decode(AnyDecodableValue.self)
+            }
+            return
+        }
+
+        if let object = try? decoder.container(keyedBy: AnyCodingKey.self) {
+            for key in object.allKeys {
+                _ = try? object.decode(AnyDecodableValue.self, forKey: key)
+            }
+            return
+        }
+
+        let value = try decoder.singleValueContainer()
+        if value.decodeNil() { return }
+        if (try? value.decode(Bool.self)) != nil { return }
+        if (try? value.decode(Double.self)) != nil { return }
+        if (try? value.decode(String.self)) != nil { return }
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLossyArray<Element: Decodable>(
+        _ type: [Element].Type,
+        forKey key: Key
+    ) throws -> [Element]? {
+        guard contains(key) else { return nil }
+        var container = try nestedUnkeyedContainer(forKey: key)
+        var output: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                output.append(element)
+            } else if (try? container.decode(AnyDecodableValue.self)) == nil {
+                break
+            }
+        }
+        return output
+    }
+}
+
 // MARK: - Stream list item
 // Shared shape returned by /search, /feed and a channel's relatedStreams.
 // Fields are widely optional on purpose: instances frequently return partial
@@ -179,6 +237,87 @@ public struct VideoDetail: Codable, Sendable {
     public let category: String?    // YouTube's own label, e.g. "News & politics"
     public let tags: [String]?      // creator-supplied keywords — clean, no ad copy
 
+    enum CodingKeys: String, CodingKey {
+        case title, description, uploader, uploaderUrl, uploaderAvatar, thumbnailUrl
+        case hls, duration, views, likes, uploaded, uploaderVerified, uploaderSubscriberCount
+        case creators, livestream, chapters, videoStreams, audioStreams, subtitles, relatedStreams
+        case category, tags
+    }
+
+    public init(
+        title: String?,
+        description: String?,
+        uploader: String?,
+        uploaderUrl: String?,
+        uploaderAvatar: String?,
+        thumbnailUrl: String?,
+        hls: String?,
+        duration: Int?,
+        views: Int?,
+        likes: Int?,
+        uploaded: Int64?,
+        uploaderVerified: Bool?,
+        uploaderSubscriberCount: Int?,
+        creators: [VideoCreator]?,
+        livestream: Bool?,
+        chapters: [VideoChapter]?,
+        videoStreams: [Stream]?,
+        audioStreams: [Stream]?,
+        subtitles: [Subtitle]?,
+        relatedStreams: [StreamItem]?,
+        category: String?,
+        tags: [String]?
+    ) {
+        self.title = title
+        self.description = description
+        self.uploader = uploader
+        self.uploaderUrl = uploaderUrl
+        self.uploaderAvatar = uploaderAvatar
+        self.thumbnailUrl = thumbnailUrl
+        self.hls = hls
+        self.duration = duration
+        self.views = views
+        self.likes = likes
+        self.uploaded = uploaded
+        self.uploaderVerified = uploaderVerified
+        self.uploaderSubscriberCount = uploaderSubscriberCount
+        self.creators = creators
+        self.livestream = livestream
+        self.chapters = chapters
+        self.videoStreams = videoStreams
+        self.audioStreams = audioStreams
+        self.subtitles = subtitles
+        self.relatedStreams = relatedStreams
+        self.category = category
+        self.tags = tags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.title = try values.decodeIfPresent(String.self, forKey: .title)
+        self.description = try values.decodeIfPresent(String.self, forKey: .description)
+        self.uploader = try values.decodeIfPresent(String.self, forKey: .uploader)
+        self.uploaderUrl = try values.decodeIfPresent(String.self, forKey: .uploaderUrl)
+        self.uploaderAvatar = try values.decodeIfPresent(String.self, forKey: .uploaderAvatar)
+        self.thumbnailUrl = try values.decodeIfPresent(String.self, forKey: .thumbnailUrl)
+        self.hls = try values.decodeIfPresent(String.self, forKey: .hls)
+        self.duration = try values.decodeIfPresent(Int.self, forKey: .duration)
+        self.views = try values.decodeIfPresent(Int.self, forKey: .views)
+        self.likes = try values.decodeIfPresent(Int.self, forKey: .likes)
+        self.uploaded = try values.decodeIfPresent(Int64.self, forKey: .uploaded)
+        self.uploaderVerified = try values.decodeIfPresent(Bool.self, forKey: .uploaderVerified)
+        self.uploaderSubscriberCount = try values.decodeIfPresent(Int.self, forKey: .uploaderSubscriberCount)
+        self.creators = try values.decodeIfPresent([VideoCreator].self, forKey: .creators)
+        self.livestream = try values.decodeIfPresent(Bool.self, forKey: .livestream)
+        self.chapters = try values.decodeLossyArray([VideoChapter].self, forKey: .chapters)
+        self.videoStreams = try values.decodeIfPresent([Stream].self, forKey: .videoStreams)
+        self.audioStreams = try values.decodeIfPresent([Stream].self, forKey: .audioStreams)
+        self.subtitles = try values.decodeIfPresent([Subtitle].self, forKey: .subtitles)
+        self.relatedStreams = try values.decodeIfPresent([StreamItem].self, forKey: .relatedStreams)
+        self.category = try values.decodeIfPresent(String.self, forKey: .category)
+        self.tags = try values.decodeIfPresent([String].self, forKey: .tags)
+    }
+
     public var channelID: String? { PipedID.channel(fromURL: uploaderUrl) }
 
     /// The video's real width/height ratio, from the first stream that reports a size.
@@ -353,6 +492,21 @@ public struct SponsorSegment: Codable, Hashable, Sendable {
 public struct SponsorSegmentsResponse: Codable, Sendable {
     public let segments: [SponsorSegment]?
     public let hash: String?
+
+    enum CodingKeys: String, CodingKey {
+        case segments, hash
+    }
+
+    public init(segments: [SponsorSegment]?, hash: String?) {
+        self.segments = segments
+        self.hash = hash
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.segments = try values.decodeLossyArray([SponsorSegment].self, forKey: .segments)
+        self.hash = try values.decodeIfPresent(String.self, forKey: .hash)
+    }
 }
 
 /// SponsorBlock's segment categories, by their API id. `label`/`skipLabel`

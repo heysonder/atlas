@@ -76,9 +76,27 @@ import PipedKit
     ], target: 5)
 
     #expect(pool.items.compactMap(\.videoID) == ["s1", "s2", "r1", "shared", "r2"])
-    #expect(pool.sourcesByID["shared"]?.contains(.subscription) == true)
+    #expect(pool.sourcesByID["shared"]?.contains(.subscription) != true)
     #expect(pool.sourcesByID["shared"]?.contains(.related) == true)
     #expect(pool.frequency["shared"] == 3)
+    #expect(pool.frequency["r2"] == nil)
+}
+
+@MainActor
+@Test func candidateMergeDoesNotDoubleCountFrequencyAcrossPools() throws {
+    let sharedA = try [streamItem("shared"), streamItem("a2")]
+    let sharedB = try [streamItem("shared"), streamItem("b2")]
+
+    let pool = RecommendationEngine.mergeCandidateSources([
+        CandidateSourceBucket(source: .related, items: sharedA,
+                              frequency: ["shared": 2], limit: 2),
+        CandidateSourceBucket(source: .exploration, items: sharedB,
+                              frequency: ["shared": 5], limit: 2),
+    ], target: 4)
+
+    #expect(pool.items.compactMap(\.videoID) == ["shared", "a2", "b2"])
+    #expect(pool.sourcesByID["shared"] == Set([.related, .exploration]))
+    #expect(pool.frequency["shared"] == 5)
 }
 
 @MainActor
