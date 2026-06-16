@@ -36,7 +36,7 @@ struct FeedView: View {
     /// one and bailing early doesn't count, so it stays/reappears until you
     /// actually get through it.
     private var watchedIDs: Set<String> { Set(history.filter(\.isWatched).map(\.videoID)) }
-    private func unwatched(_ videos: [StreamItem]) -> [StreamItem] {
+    private func unwatched(_ videos: [StreamItem], watchedIDs: Set<String>) -> [StreamItem] {
         videos.filter { item in
             guard let id = item.videoID else { return true }
             return !watchedIDs.contains(id)
@@ -44,8 +44,9 @@ struct FeedView: View {
     }
 
     /// What the feed actually shows: unwatched, with Shorts dropped if hidden.
-    private func visible(_ videos: [StreamItem]) -> [StreamItem] {
-        app.filteringShorts(unwatched(videos))
+    private func visible(_ videos: [StreamItem], watchedIDs: Set<String>? = nil) -> [StreamItem] {
+        let ids = watchedIDs ?? self.watchedIDs
+        return app.filteringShorts(unwatched(videos, watchedIDs: ids))
     }
 
     /// Reload when the mode changes or the subscription set changes.
@@ -68,7 +69,8 @@ struct FeedView: View {
             Group {
                 switch phase {
                 case .loaded(let videos):
-                    feedList(visible(videos))
+                    let watched = watchedIDs
+                    feedList(visible(videos, watchedIDs: watched))
                 case .failed(let message):
                     ErrorState(message: message) { await load() }
                 default:

@@ -26,7 +26,11 @@ struct AtlasApp: App {
         IntentDataStore.app = appModel
         AppDependencyManager.shared.add(dependency: appModel)
         AppDependencyManager.shared.add(dependency: downloadManager)
-        Task { @MainActor in SpotlightIndexer.reindexAll() }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            SpotlightIndexer.reindexAll()
+        }
     }
 
     /// Give the shared cache (used by `AsyncImage` and the thumbnail prefetcher)
