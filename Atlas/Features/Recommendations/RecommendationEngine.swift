@@ -173,20 +173,43 @@ struct RecommendationEngine {
     /// already watched), this injects genuinely new content matching explicit
     /// intent — "I searched X, now my feed has more X."
     func searchCandidates(_ queries: [String], excluding watched: Set<String>,
-                          perQuery: Int = 10) async -> [StreamItem] {
+                          perQuery: Int = 12, maxPages: Int = 2) async -> [StreamItem] {
+        guard let client = try? app.client else { return [] }
         var byID: [String: StreamItem] = [:]
         var ordered: [StreamItem] = []
         for query in queries {
-            let results = (try? await app.client.search(query, filter: "videos")) ?? []
-            for item in results.prefix(perQuery) where item.isVideo {
-                guard let id = item.videoID, !watched.contains(id) else { continue }
-                if byID[id] == nil {
-                    byID[id] = item
-                    ordered.append(item)
+            var token: String?
+            var taken = 0
+            for page in 0..<maxPages {
+                let response: SearchResponse?
+                if page == 0 {
+                    response = try? await client.searchPage(query, filter: "videos")
+                } else if let token {
+                    response = try? await client.searchNextPage(
+                        query, filter: "videos", nextpage: token)
+                } else {
+                    break
                 }
+                guard let response else { break }
+                for item in (response.items ?? []) where item.isVideo {
+                    guard let id = item.videoID, !watched.contains(id) else { continue }
+                    if byID[id] == nil {
+                        byID[id] = item
+                        ordered.append(item)
+                        taken += 1
+                    }
+                    if taken >= perQuery { break }
+                }
+                token = normalizedToken(response.nextpage)
+                if taken >= perQuery || token == nil { break }
             }
         }
         return ordered
+    }
+
+    private func normalizedToken(_ token: String?) -> String? {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     /// Candidates from the related-streams of saved (playlist) videos —
@@ -216,15 +239,41 @@ struct RecommendationEngine {
     /// whatever related-streams happen to bubble up.
     func subscriptionCandidates(_ channelIDs: [String], excluding watched: Set<String>,
                                 limit: Int = 40) async -> [StreamItem] {
-        guard !channelIDs.isEmpty else { return [] }
-        let videos = (try? await app.client.feed(channelIDs: channelIDs)) ?? []
+        guard !channelIDs.isEmpty, let client = try? app.client else { return [] }
+        // One `/channel` request per sub — `feed/unauthenticated` is empty on many
+        // instances. Page one (the channel's most recent uploads) is enough for a
+        // candidate pool; ranking reorders them anyway.
+        var lists: [[StreamItem]] = []
+        let cap = 6
+        for start in stride(from: 0, to: channelIDs.count, by: cap) {
+            let slice = Array(channelIDs[start..<min(start + cap, channelIDs.count)])
+            let fetched = await withTaskGroup(of: [StreamItem].self) { group in
+                for id in slice {
+                    group.addTask {
+                        let channel = try? await client.channel(id: id)
+                        return (channel?.relatedStreams ?? []).filter(\.isVideo)
+                    }
+                }
+                var out: [[StreamItem]] = []
+                for await result in group { out.append(result) }
+                return out
+            }
+            lists.append(contentsOf: fetched)
+        }
+        // Round-robin across channels so a prolific sub can't fill the pool before
+        // the others get a look in.
         var byID: [String: StreamItem] = [:]
         var ordered: [StreamItem] = []
-        for item in videos where item.isVideo {
-            guard let id = item.videoID, !watched.contains(id), byID[id] == nil else { continue }
-            byID[id] = item
-            ordered.append(item)
-            if byID.count >= limit { break }
+        let deepest = lists.map(\.count).max() ?? 0
+        for index in 0..<deepest {
+            for list in lists where index < list.count {
+                let item = list[index]
+                guard let id = item.videoID, !watched.contains(id), byID[id] == nil else { continue }
+                byID[id] = item
+                ordered.append(item)
+                if ordered.count >= limit { break }
+            }
+            if ordered.count >= limit { break }
         }
         return ordered
     }

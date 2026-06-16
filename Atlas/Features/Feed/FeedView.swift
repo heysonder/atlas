@@ -20,6 +20,17 @@ struct FeedView: View {
     /// Top For You items from the last successful render. Pull-to-refresh softly
     /// rotates these down so refresh can reveal the next good candidates.
     @State private var lastForYouTopIDs: [String] = []
+    /// Subscriptions feed: paginates each channel's uploads (the RSS-backed
+    /// `feed/unauthenticated` is empty/15-capped on many instances).
+    @State private var subsLoader: SubscriptionFeedLoader?
+    /// For You: the full ranked list, revealed a window at a time on scroll so the
+    /// feed doesn't hard-stop at the first screenful.
+    @State private var forYouRanked: [StreamItem] = []
+    @State private var forYouShown = forYouInitialWindow
+    @State private var isLoadingMore = false
+
+    private static let forYouInitialWindow = 40
+    private static let pageWindow = 20
 
     /// Videos that count as watched (≥80% seen) — hidden from the feed. Opening
     /// one and bailing early doesn't count, so it stays/reappears until you
@@ -85,9 +96,49 @@ struct FeedView: View {
                     .onScreenVideos(videos)
                     .padding(.horizontal)
                     .padding(.top, 8)
+                paginationFooter
             }
         }
         .refreshable { await load(refreshing: true) }
+    }
+
+    /// Infinite scroll for both modes: For You reveals more of its ranked list,
+    /// Subscriptions pulls the next merged page of channel uploads.
+    @ViewBuilder private var paginationFooter: some View {
+        if isLoadingMore {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+        } else if canLoadMore {
+            Color.clear
+                .frame(height: 1)
+                .id(loadMoreToken)
+                .onAppear { Task { await loadMore() } }
+        }
+    }
+
+    private var canLoadMore: Bool {
+        if feedMode.isForYou { return forYouShown < forYouRanked.count }
+        return subsLoader?.hasMore ?? false
+    }
+
+    /// Changes whenever a page lands, so the sentinel re-fires while still at the
+    /// bottom instead of latching after the first page.
+    private var loadMoreToken: String {
+        feedMode.isForYou ? "fy-\(forYouShown)" : "sub-\(subsLoader?.items.count ?? 0)"
+    }
+
+    private func loadMore() async {
+        guard !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        if feedMode.isForYou {
+            forYouShown = min(forYouShown + Self.pageWindow, forYouRanked.count)
+            phase = .loaded(Array(forYouRanked.prefix(forYouShown)))
+        } else if let loader = subsLoader, loader.hasMore {
+            await loader.loadMore()
+            phase = .loaded(loader.items)
+        }
     }
 
     private var subscriptionKey: String {
@@ -147,9 +198,17 @@ struct FeedView: View {
             return
         }
         do {
-            let videos = try await app.client.feed(channelIDs: ids)
-            phase = .loaded(videos)
-            await prefetch(visible(videos))
+            let loader = SubscriptionFeedLoader(client: try app.client, channelIDs: ids)
+            await loader.loadInitial()
+            subsLoader = loader
+            // If channel aggregation came back empty (e.g. a degraded instance),
+            // fall back to trending so the tab isn't blank.
+            if loader.items.isEmpty {
+                await loadDiscovery()
+            } else {
+                phase = .loaded(loader.items)
+                await prefetch(visible(loader.items))
+            }
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -169,6 +228,8 @@ struct FeedView: View {
     /// saves and subscriptions (plus feedback) — either Piped-related or our
     /// personalized topic match.
     private func loadForYou(recentTopIDs: Set<String> = []) async {
+        forYouShown = Self.forYouInitialWindow
+        subsLoader = nil
         let disliked = Set(feedback.filter { $0.signal < 0 }.map(\.videoID))
         let exclude = watchedIDs.union(disliked)
         let signals = feedback.map {
@@ -230,7 +291,7 @@ struct FeedView: View {
             let ranked = RecommendationEngine.rankRelated(pool, profile: profile)
             let rotated = RecommendationEngine.rotateRecentlyShown(
                 ranked, recentTopIDs: recentTopIDs)
-            phase = .loaded(Array(rotated.prefix(40)))
+            presentForYou(rotated)
             rememberForYouTop(rotated)
             await prefetch(visible(rotated))
         case .forYouCustom:
@@ -240,19 +301,26 @@ struct FeedView: View {
             let diverseCoarse = RecommendationEngine.diversify(coarse)
             let rotatedCoarse = RecommendationEngine.rotateRecentlyShown(
                 diverseCoarse, recentTopIDs: recentTopIDs)
-            phase = .loaded(Array(rotatedCoarse.prefix(40)))
+            presentForYou(rotatedCoarse)
             rememberForYouTop(rotatedCoarse)
             await prefetch(visible(rotatedCoarse))
             let refined = await engine.refineWithSignals(
                 Array(coarse.prefix(50)), profile: profile, sourcesByID: pool.sourcesByID)
             let rotatedRefined = RecommendationEngine.rotateRecentlyShown(
                 refined, recentTopIDs: recentTopIDs)
-            phase = .loaded(Array(rotatedRefined.prefix(40)))
+            presentForYou(rotatedRefined)
             rememberForYouTop(rotatedRefined)
             await prefetch(visible(rotatedRefined))
         case .subscriptions:
             break
         }
+    }
+
+    /// Stores the full ranked list and shows the current reveal window. The
+    /// `paginationFooter` widens `forYouShown` as the user scrolls.
+    private func presentForYou(_ ranked: [StreamItem]) {
+        forYouRanked = ranked
+        phase = .loaded(Array(ranked.prefix(forYouShown)))
     }
 
     private func rememberForYouTop(_ videos: [StreamItem]) {

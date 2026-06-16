@@ -71,13 +71,34 @@ public struct PipedClient: Sendable {
     // MARK: Endpoints
 
     /// `filter` is a Piped search filter: "videos", "channels", "playlists", "all".
+    /// Returns just the items; use `searchPage` when you also need the `nextpage`
+    /// token to paginate.
     public func search(_ query: String, filter: String = "videos") async throws -> [StreamItem] {
+        try await searchPage(query, filter: filter).items ?? []
+    }
+
+    /// First page of search results, keeping the `nextpage` token so callers can
+    /// continue with `searchNextPage`.
+    public func searchPage(_ query: String, filter: String = "videos") async throws -> SearchResponse {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-        let res: SearchResponse = try await get("search", query: [
-            "q": trimmed, "filter": filter
+        guard !trimmed.isEmpty else {
+            return SearchResponse(items: [], nextpage: nil, suggestion: nil, corrected: nil)
+        }
+        return try await get("search", query: ["q": trimmed, "filter": filter])
+    }
+
+    /// Continues a search with the `nextpage` token from a previous `searchPage`
+    /// (or `searchNextPage`). Piped's `/nextpage/search` still wants the original
+    /// `q` + `filter` alongside the token.
+    public func searchNextPage(_ query: String, filter: String = "videos",
+                               nextpage: String) async throws -> SearchResponse {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return SearchResponse(items: [], nextpage: nil, suggestion: nil, corrected: nil)
+        }
+        return try await get("nextpage/search", query: [
+            "nextpage": nextpage, "q": trimmed, "filter": filter
         ])
-        return res.items ?? []
     }
 
     /// Autocomplete suggestions for a partial query.
