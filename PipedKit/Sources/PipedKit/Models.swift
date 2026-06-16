@@ -52,6 +52,51 @@ public struct Stream: Codable, Hashable, Sendable {
     public let width: Int?
     public let height: Int?
     public let fps: Int?
+    public let audioTrackId: String?
+    public let audioTrackName: String?
+    public let audioTrackType: String?
+    public let audioTrackLocale: String?
+    public let language: String?
+    public let languageCode: String?
+    public let name: String?
+
+    public init(
+        url: String?,
+        format: String?,
+        quality: String?,
+        mimeType: String?,
+        codec: String?,
+        videoOnly: Bool?,
+        bitrate: Int?,
+        width: Int?,
+        height: Int?,
+        fps: Int?,
+        audioTrackId: String? = nil,
+        audioTrackName: String? = nil,
+        audioTrackType: String? = nil,
+        audioTrackLocale: String? = nil,
+        language: String? = nil,
+        languageCode: String? = nil,
+        name: String? = nil
+    ) {
+        self.url = url
+        self.format = format
+        self.quality = quality
+        self.mimeType = mimeType
+        self.codec = codec
+        self.videoOnly = videoOnly
+        self.bitrate = bitrate
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.audioTrackId = audioTrackId
+        self.audioTrackName = audioTrackName
+        self.audioTrackType = audioTrackType
+        self.audioTrackLocale = audioTrackLocale
+        self.language = language
+        self.languageCode = languageCode
+        self.name = name
+    }
 
     /// True when this progressive stream carries both audio and video.
     public var isProgressive: Bool { (videoOnly ?? false) == false }
@@ -71,6 +116,12 @@ public struct Stream: Codable, Hashable, Sendable {
     }
     /// Audio that AVPlayer can play (AAC/m4a in mp4), not Opus/WebM.
     public var isPlayableAudio: Bool { mimeLower.contains("mp4") && !mimeLower.contains("webm") }
+
+    public var audioLanguageHints: [String] {
+        [audioTrackId, audioTrackName, audioTrackType, audioTrackLocale, language, languageCode, name, quality]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
 }
 
 // MARK: - Full video details (/streams/{id})
@@ -168,7 +219,10 @@ public struct VideoDetail: Codable, Sendable {
     /// The highest-resolution video-only stream AVPlayer can decode, paired with
     /// the best audio stream, for an `AVMutableComposition`. `allowAV1` should
     /// reflect device hardware support. Returns nil if no compose-able pair exists.
-    public func bestComposedSource(allowAV1: Bool) -> (video: URL, audio: URL, height: Int)? {
+    public func bestComposedSource(
+        allowAV1: Bool,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> (video: URL, audio: URL, height: Int)? {
         let candidates = (videoStreams ?? []).filter { stream in
             guard !stream.isProgressive, stream.url?.isEmpty == false, !stream.isVP9OrWebM else { return false }
             return stream.isH264 || (allowAV1 && stream.isAV1)
@@ -178,10 +232,42 @@ public struct VideoDetail: Codable, Sendable {
 
         let audio = (audioStreams ?? [])
             .filter { $0.isPlayableAudio && $0.url?.isEmpty == false }
-            .max { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) }
+            .max {
+                Self.audioScore($0, preferredLanguages: preferredLanguages)
+                    < Self.audioScore($1, preferredLanguages: preferredLanguages)
+            }
         guard let audioURLString = audio?.url, let audioURL = URL(string: audioURLString) else { return nil }
 
         return (videoURL, audioURL, video.height ?? 0)
+    }
+
+    public static func audioScore(_ stream: Stream, preferredLanguages: [String] = Locale.preferredLanguages) -> Int {
+        let hints = stream.audioLanguageHints.map {
+            $0.replacingOccurrences(of: "_", with: "-").lowercased()
+        }
+        let preferred = preferredLanguagesWithEnglishFallback(preferredLanguages)
+        var languageScore = 0
+        for (index, language) in preferred.enumerated() {
+            let weight = max(0, 1_000 - index * 25)
+            if hints.contains(language) {
+                languageScore = max(languageScore, weight)
+            } else if hints.contains(where: { hint in
+                hint.hasPrefix(language + "-")
+                    || language.hasPrefix(hint + "-")
+                    || hint.localizedStandardContains(languageName(for: language))
+            }) {
+                languageScore = max(languageScore, weight - 10)
+            }
+        }
+        var result = languageScore * 1_000
+        if hints.contains(where: { $0.contains("original") }) {
+            result += 500
+        }
+        if hints.contains(where: { $0.contains("dub") }) {
+            result -= 500
+        }
+        result += min(max(stream.bitrate ?? 0, 0) / 1_000, 499)
+        return result
     }
 
     public func preferredSubtitle(preferredLanguages: [String] = Locale.preferredLanguages) -> Subtitle? {
@@ -211,6 +297,22 @@ public struct VideoDetail: Codable, Sendable {
             output.append(String(base))
         }
         return output
+    }
+
+    private static func preferredLanguagesWithEnglishFallback(_ preferredLanguages: [String]) -> [String] {
+        var output: [String] = []
+        for language in preferredLanguages.flatMap(languageCandidates) where !output.contains(language) {
+            output.append(language)
+        }
+        for language in ["en-us", "en"] where !output.contains(language) {
+            output.append(language)
+        }
+        return output
+    }
+
+    private static func languageName(for language: String) -> String {
+        let base = language.split(separator: "-").first.map(String.init) ?? language
+        return Locale(identifier: "en_US").localizedString(forLanguageCode: base)?.lowercased() ?? base
     }
 }
 
