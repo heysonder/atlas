@@ -78,6 +78,7 @@ import PipedKit
     #expect(pool.items.compactMap(\.videoID) == ["s1", "s2", "r1", "shared", "r2"])
     #expect(pool.sourcesByID["shared"]?.contains(.subscription) != true)
     #expect(pool.sourcesByID["shared"]?.contains(.related) == true)
+    #expect(pool.sourcesByID["r2"] == Set([.related]))
     #expect(pool.frequency["shared"] == 3)
     #expect(pool.frequency["r2"] == nil)
 }

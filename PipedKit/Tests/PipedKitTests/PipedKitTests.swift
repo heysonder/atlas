@@ -91,6 +91,12 @@ import Foundation
     #expect(segs.map(\.category) == ["sponsor", "intro"])
 }
 
+@Test func decodesNullSponsorSegmentsAsMissing() throws {
+    let json = #"{"segments":null}"#.data(using: .utf8)!
+    let res = try JSONDecoder().decode(SponsorSegmentsResponse.self, from: json)
+    #expect(res.segments == nil)
+}
+
 @Test func decodesVideoChapters() throws {
     let json = """
     {
@@ -129,6 +135,12 @@ import Foundation
     let chapters = try #require(detail.chapters)
     #expect(chapters.map(\.title) == ["Intro", "Main"])
     #expect(chapters.map(\.start) == [0, 42])
+}
+
+@Test func decodesNullVideoChaptersAsMissing() throws {
+    let json = #"{"title":"Chapter test","chapters":null}"#.data(using: .utf8)!
+    let detail = try JSONDecoder().decode(VideoDetail.self, from: json)
+    #expect(detail.chapters == nil)
 }
 
 @Test func extractsCommentTimestamps() throws {

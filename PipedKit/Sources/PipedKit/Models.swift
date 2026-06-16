@@ -45,6 +45,7 @@ private extension KeyedDecodingContainer {
         forKey key: Key
     ) throws -> [Element]? {
         guard contains(key) else { return nil }
+        if try decodeNil(forKey: key) { return nil }
         var container = try nestedUnkeyedContainer(forKey: key)
         var output: [Element] = []
         while !container.isAtEnd {
