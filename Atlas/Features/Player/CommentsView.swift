@@ -11,7 +11,7 @@ final class CommentsLoader {
     let client: PipedClient
     let videoID: String
 
-    private(set) var comments: [Comment] = []
+    private(set) var comments: [CommentDisplay] = []
     private(set) var nextpage: String?
     private(set) var disabled = false
     private(set) var commentCount = -1
@@ -29,7 +29,7 @@ final class CommentsLoader {
         isLoading = true
         defer { isLoading = false }
         if let page = try? await client.comments(videoID: videoID) {
-            comments = page.comments ?? []
+            comments = (page.comments ?? []).map(CommentDisplay.init)
             nextpage = page.nextpage
             disabled = page.disabled ?? false
             commentCount = page.commentCount ?? -1
@@ -45,12 +45,38 @@ final class CommentsLoader {
         defer { isLoading = false }
         do {
             let page = try await client.commentsNextPage(videoID: videoID, nextpage: token)
-            comments.append(contentsOf: page.comments ?? [])
+            comments.append(contentsOf: (page.comments ?? []).map(CommentDisplay.init))
             nextpage = page.nextpage
         } catch {
             nextpage = nil
         }
     }
+}
+
+/// UI-facing comment data with HTML stripping and timestamp extraction done once
+/// when comments are loaded, not on every SwiftUI render or playback-time tick.
+struct CommentDisplay: Identifiable {
+    let comment: Comment
+    let plainText: String
+    let timestamps: [CommentTimestamp]
+
+    init(_ comment: Comment) {
+        self.comment = comment
+        plainText = HTMLText.plain(comment.commentText ?? "")
+        timestamps = CommentTimestamp.extract(from: plainText)
+    }
+
+    var id: String { comment.id }
+    var thumbnail: String? { comment.thumbnail }
+    var author: String? { comment.author }
+    var commentedTime: String? { comment.commentedTime }
+    var repliesPage: String? { comment.repliesPage }
+    var hearted: Bool? { comment.hearted }
+    var likeCount: Int? { comment.likeCount }
+    var pinned: Bool? { comment.pinned }
+    var verified: Bool? { comment.verified }
+    var replyCount: Int? { comment.replyCount }
+    var hasReplies: Bool { comment.hasReplies }
 }
 
 /// The full, scrollable comment list, pushed from the info sheet's "View all
@@ -100,13 +126,13 @@ struct CommentsView: View {
 /// A single comment: avatar, author + metadata, body, like count, and an
 /// expandable replies thread (top-level comments only).
 struct CommentRow: View {
-    let comment: Comment
+    let comment: CommentDisplay
     let client: PipedClient
     let videoID: String
     var isReply = false
     var onTimestampTap: (Int) -> Void = { _ in }
 
-    @State private var replies: [Comment] = []
+    @State private var replies: [CommentDisplay] = []
     @State private var showReplies = false
     @State private var loadingReplies = false
 
@@ -214,7 +240,7 @@ struct CommentRow: View {
         if replies.isEmpty, let token = comment.repliesPage {
             loadingReplies = true
             let page = try? await client.commentsNextPage(videoID: videoID, nextpage: token)
-            replies = page?.comments ?? []
+            replies = (page?.comments ?? []).map(CommentDisplay.init)
             loadingReplies = false
         }
         showReplies = true

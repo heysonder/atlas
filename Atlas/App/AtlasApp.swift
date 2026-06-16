@@ -56,10 +56,7 @@ struct AtlasApp: App {
     /// in-memory storage and surface the problem so the saved data remains
     /// available for migration/backup recovery instead of being silently wiped.
     private static func makeModelContainer() -> ModelContainerResult {
-        let schema = Schema([SubscribedChannel.self, HistoryEntry.self, Playlist.self,
-                             PlaylistVideo.self, DownloadedVideo.self, Feedback.self,
-                             SearchEntry.self, VideoSignalCacheEntry.self,
-                             RecommendationProfileSnapshot.self])
+        let schema = AtlasModelSchema.schema
         let config = ModelConfiguration(schema: schema)
         do {
             return ModelContainerResult(

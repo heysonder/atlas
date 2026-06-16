@@ -36,9 +36,7 @@ enum IntentDataStore {
     /// so playlists/downloads/history are reachable from a background intent.
     static var container: ModelContainer? {
         if let injectedContainer { return injectedContainer }
-        injectedContainer = try? ModelContainer(
-            for: SubscribedChannel.self, HistoryEntry.self, Playlist.self,
-            PlaylistVideo.self, DownloadedVideo.self, Feedback.self, SearchEntry.self)
+        injectedContainer = try? ModelContainer(for: AtlasModelSchema.schema)
         return injectedContainer
     }
 
@@ -110,8 +108,7 @@ enum IntentDataStore {
 
     private static func playlist(id: UUID) -> Playlist? {
         guard let context else { return nil }
-        return (try? context.fetch(FetchDescriptor<Playlist>(
-            predicate: #Predicate { $0.id == id })))?.first
+        return PlaylistStore.playlist(id: id, in: context)
     }
 
     /// Adds a video to a playlist, de-duped by video id (mirrors the context
@@ -127,9 +124,7 @@ enum IntentDataStore {
         let playlist: Playlist
         if entity.isNew {
             // Reuse a same-named playlist if one was made in the meantime.
-            if let existing = playlists().first(where: {
-                $0.name.localizedCaseInsensitiveCompare(entity.name) == .orderedSame
-            }) {
+            if let existing = PlaylistStore.playlist(named: entity.name, in: context) {
                 playlist = existing
             } else {
                 playlist = Playlist(name: entity.name)
@@ -141,14 +136,14 @@ enum IntentDataStore {
             return .missing
         }
 
-        guard !playlist.videos.contains(where: { $0.videoID == video.id }) else { return .duplicate }
-        let entry = PlaylistVideo(videoID: video.id, title: video.title,
-                                  uploader: video.uploader, thumbnailURL: video.thumbnail)
-        entry.playlist = playlist
-        context.insert(entry)
-        // Save explicitly: the intent may run while the app is backgrounded, where
-        // autosave wouldn't have flushed before the process suspends.
-        try? context.save()
-        return .added
+        switch PlaylistStore.add(PlaylistVideoSnapshot(video: video), to: playlist,
+                                 in: context, save: true) {
+        case .added:
+            return .added
+        case .duplicate:
+            return .duplicate
+        case .missing:
+            return .missing
+        }
     }
 }

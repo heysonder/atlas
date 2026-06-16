@@ -32,12 +32,7 @@ struct HistoryView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                                app.playNext(entry.asPlayRequest)
-                            }
-                            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
-                                app.addToQueue(entry.asPlayRequest)
-                            }
+                            QueueMenuItems(request: entry.asPlayRequest)
                         }
                     }
                     .onDelete(perform: delete)
