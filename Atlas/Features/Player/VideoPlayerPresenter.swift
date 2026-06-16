@@ -53,6 +53,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var infoCommentTimeObserver: Any?
         private var detachedForBackground = false
         private static let minWatchSeconds: Double = 5
+        private static let minFastStartSecondsBeforeUpgrade: Double = 3
 
         // SponsorBlock: skippable segments + the overlay button that offers them.
         private var sponsorSegments: [SponsorSegment] = []
@@ -149,21 +150,28 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             do {
                 let detail = try await app.resolveStream(request.videoID)
                 guard !Task.isCancelled else { return }
-                guard let built = await Self.makePlayerItem(detail) else {
+                let baseMetadata = Self.metadata(detail, request)
+                let initialItem: AVPlayerItem
+                let startsComposed: Bool
+                if let fastItem = Self.makeFastStartPlayerItem(detail) {
+                    initialItem = fastItem
+                    startsComposed = false
+                } else if let composed = await Self.makeComposedPlayerItem(detail) {
+                    initialItem = composed
+                    startsComposed = true
+                } else {
                     showError(on: controller, PipedError.noPlayableStream.localizedDescription)
                     return
                 }
                 guard !Task.isCancelled else { return }
-                let item = built.item
-                usedComposition = built.composed
+                usedComposition = startsComposed
                 // TEST: leave preferredForwardBufferDuration at its default (0 = system-managed).
-                let baseMetadata = Self.metadata(detail, request)
-                item.externalMetadata = baseMetadata
-                player.replaceCurrentItem(with: item)
-                PlayerCaptionSelection.keepOffByDefault(for: item)
-                installEndObserver(for: item)
-                if built.composed { observeForFailure(item, detail: detail, player: player) }
-                attachArtwork(to: item,
+                initialItem.externalMetadata = baseMetadata
+                player.replaceCurrentItem(with: initialItem)
+                PlayerCaptionSelection.keepOffByDefault(for: initialItem)
+                installEndObserver(for: initialItem)
+                if startsComposed { observeForFailure(initialItem, detail: detail, player: player) }
+                attachArtwork(to: initialItem,
                               urlString: detail.thumbnailUrl ?? request.thumbnail,
                               base: baseMetadata)
 
@@ -179,6 +187,11 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 installProgressTracking(on: player)
                 loadSponsorSegments(for: request, player: player, controller: controller)
                 recordHistory(detail, request)
+                if !startsComposed {
+                    await upgradeToComposedPlaybackIfAvailable(
+                        detail: detail, request: request, metadata: baseMetadata,
+                        player: player, controller: controller)
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 showError(on: controller, error.localizedDescription)
@@ -741,12 +754,19 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
         private static let supportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
-        /// Builds the highest-quality playable item: first try composing the best
-        /// video-only + audio streams (1080p H.264, or AV1 4K where supported);
-        /// fall back to HLS / progressive (<=720p) if composition isn't possible.
-        /// `composed` indicates the high-quality path was taken (so callers can
-        /// watch for runtime failure and retry with the simple URL).
-        private static func makePlayerItem(_ detail: VideoDetail) async -> (item: AVPlayerItem, composed: Bool)? {
+        /// Builds the fastest item AVPlayer can open directly. HLS is adaptive, and
+        /// progressive mp4 is a simple fallback; neither requires probing separate
+        /// audio/video tracks before the first frame can start.
+        private static func makeFastStartPlayerItem(_ detail: VideoDetail) -> AVPlayerItem? {
+            guard let url = detail.playableURL else { return nil }
+            NSLog("Atlas.player: ▶️ fast-start URL = \(url.absoluteString.prefix(60))…")
+            return AVPlayerItem(url: url)
+        }
+
+        /// Builds the highest-quality composed item from video-only + audio streams
+        /// (1080p H.264, or AV1 4K where supported). This is intentionally kept off
+        /// the first-playback path when a fast-start URL exists.
+        private static func makeComposedPlayerItem(_ detail: VideoDetail) async -> AVPlayerItem? {
             // Diagnostic: what did the instance actually offer? Reveals whether
             // AV1 / >1080p streams even exist for this video on this instance.
             let inventory = (detail.videoStreams ?? [])
@@ -759,15 +779,64 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 NSLog("Atlas.player: best compose-able source = \(source.height)p (AV1 allowed: \(supportsAV1))")
                 if let composed = await composedItem(video: source.video, audio: source.audio) {
                     NSLog("Atlas.player: ✅ composed \(source.height)p item")
-                    return (composed, true)
+                    return composed
                 }
                 NSLog("Atlas.player: ⚠️ composition failed, falling back")
             } else {
                 NSLog("Atlas.player: no compose-able video-only+audio pair (HLS present: \(detail.hls?.isEmpty == false))")
             }
-            guard let url = detail.playableURL else { return nil }
-            NSLog("Atlas.player: ▶️ fallback URL = \(url.absoluteString.prefix(60))…")
-            return (AVPlayerItem(url: url), false)
+            return nil
+        }
+
+        private func upgradeToComposedPlaybackIfAvailable(
+            detail: VideoDetail,
+            request: PlayRequest,
+            metadata: [AVMetadataItem],
+            player: AVPlayer,
+            controller: AVPlayerViewController
+        ) async {
+            guard let composed = await Self.makeComposedPlayerItem(detail) else { return }
+            guard await waitForFastStartPlayback(player: player, request: request) else { return }
+            guard !Task.isCancelled,
+                  self.player === player,
+                  playerVC === controller,
+                  presentedID == request.videoID,
+                  currentRequest?.videoID == request.videoID else { return }
+
+            let resume = player.currentTime()
+            let shouldResume = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            composed.externalMetadata = metadata
+            usedComposition = true
+            player.replaceCurrentItem(with: composed)
+            PlayerCaptionSelection.keepOffByDefault(for: composed)
+            installEndObserver(for: composed)
+            observeForFailure(composed, detail: detail, player: player)
+            attachArtwork(to: composed,
+                          urlString: detail.thumbnailUrl ?? request.thumbnail,
+                          base: metadata)
+            await player.seek(to: resume)
+            if shouldResume {
+                player.playImmediately(atRate: 1.0)
+            }
+            NSLog("Atlas.player: ⬆️ upgraded active playback to composed item")
+        }
+
+        private func waitForFastStartPlayback(player: AVPlayer, request: PlayRequest) async -> Bool {
+            for _ in 0..<48 {
+                guard !Task.isCancelled,
+                      self.player === player,
+                      presentedID == request.videoID,
+                      currentRequest?.videoID == request.videoID else { return false }
+                if player.currentItem?.status == .failed {
+                    return true
+                }
+                let seconds = player.currentTime().seconds
+                if seconds.isFinite, seconds >= Self.minFastStartSecondsBeforeUpgrade {
+                    return true
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            return false
         }
 
         /// If a composed item fails to actually play, swap to the simple HLS/progressive URL.

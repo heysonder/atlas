@@ -324,6 +324,7 @@ final class EmbeddedPlayerModel {
     private var lastProgressSaveSeconds: Double?
 
     private static let minWatchSeconds: Double = 5
+    private static let minFastStartSecondsBeforeUpgrade: Double = 3
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
     var client: PipedClient { try! app.client }
@@ -350,17 +351,25 @@ final class EmbeddedPlayerModel {
         do {
             let detail = try await app.resolveStream(request.videoID)
             guard !Task.isCancelled else { return }
-            guard let built = await StreamComposer.makePlayerItem(detail, allowAV1: Self.supportsAV1) else {
+            let initialItem: AVPlayerItem
+            let startsComposed: Bool
+            if let fastItem = StreamComposer.makeFastStartPlayerItem(detail) {
+                initialItem = fastItem
+                startsComposed = false
+            } else if let composed = await StreamComposer.makeComposedPlayerItem(detail, allowAV1: Self.supportsAV1) {
+                initialItem = composed
+                startsComposed = true
+            } else {
                 errorMessage = PipedError.noPlayableStream.localizedDescription
                 return
             }
             guard !Task.isCancelled else { return }
-            usedComposition = built.composed
-            player.replaceCurrentItem(with: built.item)
-            PlayerCaptionSelection.keepOffByDefault(for: built.item)
-            installEndObserver(for: built.item)
+            usedComposition = startsComposed
+            player.replaceCurrentItem(with: initialItem)
+            PlayerCaptionSelection.keepOffByDefault(for: initialItem)
+            installEndObserver(for: initialItem)
             isReady = true
-            if built.composed { observeForFailure(built.item, detail: detail) }
+            if startsComposed { observeForFailure(initialItem, detail: detail) }
             self.detail = detail
             if let resume = savedPosition(for: request.videoID), resume >= Self.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
@@ -368,6 +377,9 @@ final class EmbeddedPlayerModel {
             player.play()
             installProgressTracking()
             recordHistory(detail)
+            if !startsComposed {
+                await upgradeToComposedPlaybackIfAvailable(detail: detail, requestID: request.videoID)
+            }
         } catch {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -399,6 +411,7 @@ final class EmbeddedPlayerModel {
         removeEndObserver()
         statusObservation?.invalidate()
         statusObservation = nil
+        usedComposition = false
         currentPlaybackSeconds = nil
         lastProgressSaveSeconds = nil
         player.pause()
@@ -607,19 +620,61 @@ final class EmbeddedPlayerModel {
             }
         }
     }
+
+    private func upgradeToComposedPlaybackIfAvailable(detail: VideoDetail, requestID: String) async {
+        guard let composed = await StreamComposer.makeComposedPlayerItem(
+            detail, allowAV1: Self.supportsAV1) else { return }
+        guard await waitForFastStartPlayback(requestID: requestID) else { return }
+        guard !Task.isCancelled,
+              request.videoID == requestID,
+              player.currentItem != nil else { return }
+
+        let resume = player.currentTime()
+        let shouldResume = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        usedComposition = true
+        player.replaceCurrentItem(with: composed)
+        PlayerCaptionSelection.keepOffByDefault(for: composed)
+        installEndObserver(for: composed)
+        observeForFailure(composed, detail: detail)
+        await player.seek(to: resume)
+        if shouldResume {
+            player.playImmediately(atRate: 1.0)
+        }
+    }
+
+    private func waitForFastStartPlayback(requestID: String) async -> Bool {
+        for _ in 0..<48 {
+            guard !Task.isCancelled,
+                  request.videoID == requestID,
+                  player.currentItem != nil else { return false }
+            if player.currentItem?.status == .failed {
+                return true
+            }
+            let seconds = player.currentTime().seconds
+            if seconds.isFinite, seconds >= Self.minFastStartSecondsBeforeUpgrade {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return false
+    }
 }
 
-/// Builds the highest-quality playable item the same way the full-screen player
-/// does (compose best video-only + audio; fall back to HLS/progressive). Kept
-/// self-contained here so the original `VideoPlayerPresenter` is left untouched.
+/// Builds player items the same way the full-screen player does. The simple URL
+/// item starts playback quickly; the composed item is prepared later as a
+/// quality upgrade when separate video-only + audio streams are available.
 private enum StreamComposer {
-    static func makePlayerItem(_ detail: VideoDetail, allowAV1: Bool) async -> (item: AVPlayerItem, composed: Bool)? {
+    static func makeFastStartPlayerItem(_ detail: VideoDetail) -> AVPlayerItem? {
+        guard let url = detail.playableURL else { return nil }
+        return AVPlayerItem(url: url)
+    }
+
+    static func makeComposedPlayerItem(_ detail: VideoDetail, allowAV1: Bool) async -> AVPlayerItem? {
         if let source = detail.bestComposedSource(allowAV1: allowAV1),
            let composed = await composedItem(video: source.video, audio: source.audio) {
-            return (composed, true)
+            return composed
         }
-        guard let url = detail.playableURL else { return nil }
-        return (AVPlayerItem(url: url), false)
+        return nil
     }
 
     private static func composedItem(video videoURL: URL, audio audioURL: URL) async -> AVPlayerItem? {
