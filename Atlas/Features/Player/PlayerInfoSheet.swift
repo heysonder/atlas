@@ -59,6 +59,7 @@ struct PlayerInfoSheet: View {
     let thumbnail: String?
     let duration: Int?
     let description: String
+    let chapters: [VideoChapter]
     let canSubscribe: Bool
     let isSubscribed: Bool
     let onToggleSubscribe: (Bool) -> Void
@@ -88,7 +89,8 @@ struct PlayerInfoSheet: View {
                     creators: creators,
                     subscriberCount: subscriberCount, uploaderVerified: uploaderVerified,
                     thumbnail: thumbnail, duration: duration,
-                    description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
+                    description: description, chapters: chapters,
+                    canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
                     feedback: feedback, onFeedback: onFeedback, queue: queue,
                     onQueuePlay: onQueuePlay, onQueuedVideoPlay: onQueuedVideoPlay,
@@ -133,6 +135,7 @@ struct PlayerInfoContent: View {
     let thumbnail: String?
     let duration: Int?
     let description: String
+    let chapters: [VideoChapter]
     let canSubscribe: Bool
     @State private var isSubscribed: Bool
     let onToggleSubscribe: (Bool) -> Void
@@ -166,6 +169,11 @@ struct PlayerInfoContent: View {
             QueueDisplayItem(position: $0.offset, queued: $0.element)
         }
     }
+    private var visibleChapters: [VideoChapter] {
+        chapters
+            .filter { $0.start >= 0 }
+            .sorted { $0.start < $1.start }
+    }
     private var streamCollaborators: [CreatorChannel] {
         creators.creatorChannels(verifiedChannelID: channelID,
                                   uploaderVerified: uploaderVerified)
@@ -184,7 +192,8 @@ struct PlayerInfoContent: View {
          uploaderAvatar: String?, channelID: String?, creators: [VideoCreator] = [],
          subscriberCount: Int?,
          uploaderVerified: Bool, thumbnail: String? = nil, duration: Int? = nil,
-         description: String, canSubscribe: Bool, isSubscribed: Bool,
+         description: String, chapters: [VideoChapter] = [],
+         canSubscribe: Bool, isSubscribed: Bool,
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
          onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
          onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
@@ -205,6 +214,7 @@ struct PlayerInfoContent: View {
         self.thumbnail = thumbnail
         self.duration = duration
         self.description = description
+        self.chapters = chapters
         self.canSubscribe = canSubscribe
         self._isSubscribed = State(initialValue: isSubscribed)
         self.onToggleSubscribe = onToggleSubscribe
@@ -233,6 +243,11 @@ struct PlayerInfoContent: View {
             Divider()
 
             descriptionBlock
+
+            if !visibleChapters.isEmpty {
+                Divider()
+                chaptersSection
+            }
 
             Divider()
 
@@ -429,7 +444,9 @@ struct PlayerInfoContent: View {
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text(description)
+                TimestampedText(
+                    text: description,
+                    onTimestampTap: onTimestampTap)
                     .font(.callout)
                     .textSelection(.enabled)
                     .lineLimit(descriptionExpanded ? nil : 3)
@@ -454,6 +471,63 @@ struct PlayerInfoContent: View {
     /// keeps comments reachable instead of buried under a wall of text.
     private var isDescriptionLong: Bool {
         description.count > 160 || description.filter { $0 == "\n" }.count >= 3
+    }
+
+    // MARK: Chapters
+
+    @ViewBuilder private var chaptersSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Text("Chapters")
+                    .font(.headline)
+                Text("\(visibleChapters.count)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(visibleChapters) { chapter in
+                    chapterRow(chapter)
+                }
+            }
+        }
+    }
+
+    private func chapterRow(_ chapter: VideoChapter) -> some View {
+        Button {
+            onTimestampTap(chapter.start)
+        } label: {
+            HStack(spacing: 10) {
+                ZStack(alignment: .bottomLeading) {
+                    Thumbnail(url: chapter.image ?? thumbnail)
+                        .aspectRatio(16 / 9, contentMode: .fill)
+                        .frame(width: 84, height: 47)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    Text(Format.clock(chapter.start))
+                        .font(.caption2.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.72), in: Capsule())
+                        .padding(5)
+                }
+
+                Text(chapter.title?.isEmpty == false ? chapter.title! : "Chapter")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Skip to \(chapter.title ?? "chapter") at \(Format.clock(chapter.start))")
     }
 
     // MARK: Comments

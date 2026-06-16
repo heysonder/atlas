@@ -33,6 +33,7 @@ import Foundation
         hls: "https://example.com/master.m3u8",
         duration: 1, views: nil, likes: nil, uploaded: nil,
         uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
+        chapters: nil,
         videoStreams: [Stream(url: "https://example.com/360.mp4", format: "MP4",
                               quality: "360p", mimeType: "video/mp4", codec: nil,
                               videoOnly: false, bitrate: nil, width: nil, height: 360, fps: nil)],
@@ -57,6 +58,28 @@ import Foundation
     #expect(segs[1].sponsorCategory == .selfpromo)
 }
 
+@Test func decodesVideoChapters() throws {
+    let json = """
+    {
+      "title": "WWDC 2026: Is Siri Actually Good Now?",
+      "duration": 6684,
+      "chapters": [
+        {"title": "Intro", "image": "https://pipedproxy.cmf.sh/intro.jpg", "start": 0},
+        {"title": "Did they even test this?", "image": "https://pipedproxy.cmf.sh/test.jpg", "start": 74},
+        {"title": "Vibe of WWDC", "start": 220}
+      ]
+    }
+    """.data(using: .utf8)!
+    let detail = try JSONDecoder().decode(VideoDetail.self, from: json)
+    let chapters = try #require(detail.chapters)
+    #expect(chapters.count == 3)
+    #expect(chapters[0].title == "Intro")
+    #expect(chapters[0].image == "https://pipedproxy.cmf.sh/intro.jpg")
+    #expect(chapters[0].start == 0)
+    #expect(chapters[1].start == 74)
+    #expect(chapters[2].title == "Vibe of WWDC")
+}
+
 @Test func extractsCommentTimestamps() throws {
     let json = """
     {"commentText":"Intro <a>1:23</a><br>Deep dive 1:02:03 and long one 123:45"}
@@ -64,6 +87,18 @@ import Foundation
     let comment = try JSONDecoder().decode(PipedKit.Comment.self, from: json)
     #expect(comment.timestamps.map { $0.seconds } == [83, 3723, 7425])
     #expect(comment.timestamps.map { $0.label } == ["1:23", "1:02:03", "123:45"])
+}
+
+@Test func extractsDescriptionChapterTimestamps() {
+    let description = """
+    Chapters
+    00:00 Intro
+    02:15 Setup
+    1:03:45 Full walkthrough
+    """
+    let timestamps = CommentTimestamp.extract(from: description)
+    #expect(timestamps.map(\.seconds) == [0, 135, 3825])
+    #expect(timestamps.map(\.label) == ["00:00", "02:15", "1:03:45"])
 }
 
 @Test func ignoresInvalidCommentTimestamps() throws {
@@ -87,6 +122,7 @@ import Foundation
         uploaderAvatar: nil, thumbnailUrl: nil, hls: "",
         duration: 1, views: nil, likes: nil, uploaded: nil,
         uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
+        chapters: nil,
         videoStreams: [
             Stream(url: "https://example.com/360.mp4", format: "MP4", quality: "360p",
                    mimeType: "video/mp4", codec: nil, videoOnly: false, bitrate: nil,

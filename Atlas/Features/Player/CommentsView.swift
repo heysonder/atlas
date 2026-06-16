@@ -118,10 +118,13 @@ struct CommentRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     metaLine
 
-                    TimestampedCommentText(
+                    TimestampedText(
                         text: comment.plainText,
                         timestamps: comment.timestamps,
                         onTimestampTap: onTimestampTap)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
 
                     footer
                 }
@@ -215,61 +218,5 @@ struct CommentRow: View {
             loadingReplies = false
         }
         showReplies = true
-    }
-}
-
-private struct TimestampedCommentText: View {
-    let text: String
-    let timestamps: [CommentTimestamp]
-    let onTimestampTap: (Int) -> Void
-
-    private static let urlScheme = "atlas-comment-timestamp"
-
-    var body: some View {
-        Text(attributedText)
-            .font(.callout)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-            .environment(\.openURL, OpenURLAction { url in
-                guard url.scheme == Self.urlScheme,
-                      let secondsText = URLComponents(
-                        url: url,
-                        resolvingAgainstBaseURL: false)?.host,
-                      let seconds = Int(secondsText) else {
-                    return .systemAction
-                }
-                onTimestampTap(seconds)
-                return .handled
-            })
-    }
-
-    private var attributedText: AttributedString {
-        guard !timestamps.isEmpty else { return AttributedString(text) }
-
-        var output = AttributedString()
-        var cursor = text.startIndex
-
-        for timestamp in timestamps {
-            guard let range = text.range(
-                of: timestamp.label,
-                range: cursor..<text.endIndex
-            ) else { continue }
-
-            if cursor < range.lowerBound {
-                output += AttributedString(String(text[cursor..<range.lowerBound]))
-            }
-
-            var linkedTimestamp = AttributedString(String(text[range]))
-            linkedTimestamp.link = URL(string: "\(Self.urlScheme)://\(timestamp.seconds)")
-            linkedTimestamp.foregroundColor = .accentColor
-            output += linkedTimestamp
-            cursor = range.upperBound
-        }
-
-        if cursor < text.endIndex {
-            output += AttributedString(String(text[cursor..<text.endIndex]))
-        }
-
-        return output
     }
 }

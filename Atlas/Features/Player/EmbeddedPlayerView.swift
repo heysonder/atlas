@@ -84,6 +84,7 @@ struct EmbeddedPlayerView: View {
                     thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
                     duration: detail.duration,
                     description: HTMLText.plain(detail.description ?? ""),
+                    chapters: detail.chapters ?? [],
                     canSubscribe: detail.channelID != nil,
                     isSubscribed: model.isSubscribed(detail.channelID),
                     onToggleSubscribe: { model.setSubscription($0, detail: detail) },
