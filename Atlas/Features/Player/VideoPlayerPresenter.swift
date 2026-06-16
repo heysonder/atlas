@@ -52,7 +52,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var timeControlObservation: NSKeyValueObservation?
         private var infoCommentTimeObserver: Any?
         private var detachedForBackground = false
-        private static let minWatchSeconds: Double = 5
         private static let minFastStartSecondsBeforeUpgrade: Double = 3
 
         // SponsorBlock: skippable segments + the overlay button that offers them.
@@ -180,7 +179,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 installInfoButton(on: controller)
                 // Resume from a saved position (ignore if we're at/near the end).
                 if let resume = savedPosition(for: request.videoID),
-                   resume >= Self.minWatchSeconds {
+                   resume >= PlaybackHistoryStore.minWatchSeconds {
                     await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
                 }
                 // TEST: default playback start (waits to minimize stalling) instead of playImmediately.
@@ -217,7 +216,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
             Task {
-                if let resume = savedPosition(for: request.videoID), resume >= Self.minWatchSeconds {
+                if let resume = savedPosition(for: request.videoID),
+                   resume >= PlaybackHistoryStore.minWatchSeconds {
                     await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
                 }
                 player.play()
@@ -228,11 +228,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         // MARK: Resume / progress tracking
 
         private func savedPosition(for videoID: String) -> Double? {
-            let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == videoID })
-            guard let entry = try? modelContext.fetch(descriptor).first else { return nil }
-            // Don't resume if they finished it (within 10s of the end).
-            if entry.durationSeconds > 0, entry.positionSeconds >= entry.durationSeconds - 10 { return nil }
-            return entry.positionSeconds
+            PlaybackHistoryStore.savedPosition(for: videoID, in: modelContext)
         }
 
         private func installProgressTracking(on player: AVPlayer) {
@@ -245,16 +241,12 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         private func savePosition(_ seconds: Double) {
-            guard let id = currentRequest?.videoID, seconds.isFinite,
-                  seconds >= Self.minWatchSeconds else { return }
-            let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-            guard let entry = try? modelContext.fetch(descriptor).first else { return }
-            entry.positionSeconds = seconds
-            if entry.durationSeconds == 0,
-               let d = player?.currentItem?.duration.seconds, d.isFinite, d > 0 {
-                entry.durationSeconds = d
-            }
-            entry.watchedAt = .now
+            guard let id = currentRequest?.videoID else { return }
+            PlaybackHistoryStore.savePosition(
+                seconds,
+                videoID: id,
+                duration: player?.currentItem?.duration.seconds,
+                in: modelContext)
         }
 
         // MARK: Queue advancement
@@ -513,30 +505,12 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         private func recordHistory(_ detail: VideoDetail, _ request: PlayRequest) {
-            let id = request.videoID
-            let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-            if let existing = try? modelContext.fetch(descriptor).first {
-                existing.watchedAt = .now
-            } else {
-                modelContext.insert(HistoryEntry(
-                    videoID: id,
-                    title: detail.title ?? request.title,
-                    uploader: detail.uploader ?? request.uploader,
-                    thumbnailURL: detail.thumbnailUrl ?? request.thumbnail))
-            }
+            PlaybackHistoryStore.record(request, detail: detail, in: modelContext)
         }
 
         /// History for offline playback, where only the request fields are known.
         private func recordHistory(_ request: PlayRequest) {
-            let id = request.videoID
-            let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-            if let existing = try? modelContext.fetch(descriptor).first {
-                existing.watchedAt = .now
-            } else {
-                modelContext.insert(HistoryEntry(
-                    videoID: id, title: request.title,
-                    uploader: request.uploader, thumbnailURL: request.thumbnail))
-            }
+            PlaybackHistoryStore.record(request, in: modelContext)
         }
 
         // MARK: Info panel (title · description · subscribe)
@@ -637,15 +611,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 showFeedback: FeedMode.current.isPersonalized,
                 feedback: currentFeedbackSignal(),
                 onFeedback: { [weak self] signal in self?.setFeedback(signal) },
-                queue: detail.relatedStreams ?? [],
-                onQueuePlay: { [weak self, weak host] item in
-                    guard let self else { return }
-                    if let sheet = host?.presentedViewController {
-                        sheet.dismiss(animated: true) { self.playQueued(item) }
-                    } else {
-                        self.playQueued(item)
-                    }
-                },
                 onQueuedVideoPlay: { [weak self, weak host] queued in
                     guard let self else { return }
                     if let sheet = host?.presentedViewController {
@@ -683,14 +648,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             player.play()
         }
 
-        private func playQueued(_ item: StreamItem) {
-            guard let request = PlayRequest(item: item) else { return }
-            if let player, let controller = playerVC {
-                restartPlayback(with: request, player: player, controller: controller)
-            }
-            app.nowPlaying = request
-        }
-
         private func playQueued(_ queued: QueuedVideo) {
             guard let request = app.removeFromQueue(queued) else { return }
             if let player, let controller = playerVC {
@@ -718,24 +675,16 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         private func isCurrentlySubscribed(_ channelID: String) -> Bool {
-            let descriptor = FetchDescriptor<SubscribedChannel>(
-                predicate: #Predicate { $0.channelID == channelID })
-            return ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
+            SubscriptionStore.isSubscribed(channelID, in: modelContext)
         }
 
         private func setSubscription(channelID: String?, name: String?, avatar: String?, subscribed: Bool) {
-            guard let channelID else { return }
-            let descriptor = FetchDescriptor<SubscribedChannel>(
-                predicate: #Predicate { $0.channelID == channelID })
-            let existing = (try? modelContext.fetch(descriptor))?.first
-            if subscribed {
-                if existing == nil {
-                    modelContext.insert(SubscribedChannel(
-                        channelID: channelID, name: name ?? "Channel", avatarURL: avatar))
-                }
-            } else if let existing {
-                modelContext.delete(existing)
-            }
+            SubscriptionStore.setSubscribed(
+                subscribed,
+                channelID: channelID,
+                name: name,
+                avatarURL: avatar,
+                in: modelContext)
         }
 
         private func currentFeedbackSignal() -> Int {

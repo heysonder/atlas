@@ -60,12 +60,7 @@ struct VideoContextMenu: ViewModifier {
 
     @ViewBuilder private var queueButtons: some View {
         if let request = playRequest {
-            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                app.playNext(request)
-            }
-            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
-                app.addToQueue(request)
-            }
+            QueueMenuItems(request: request)
         }
     }
 
@@ -96,24 +91,15 @@ struct VideoContextMenu: ViewModifier {
     }
 
     private func add(to playlist: Playlist) {
-        guard let videoID = item.videoID else { return }
-        guard !playlist.videos.contains(where: { $0.videoID == videoID }) else { return }
-        let video = PlaylistVideo(
-            videoID: videoID,
-            title: item.displayTitle,
-            uploader: item.uploaderName,
-            thumbnailURL: item.thumbnail,
-            duration: item.duration ?? 0)
-        video.playlist = playlist
-        context.insert(video)
+        guard let snapshot = PlaylistVideoSnapshot(item: item) else { return }
+        PlaylistStore.add(snapshot, to: playlist, in: context)
     }
 
     private func createAndAdd() {
         let name = newName.trimmingCharacters(in: .whitespaces)
         newName = ""
         guard !name.isEmpty else { return }
-        let playlist = Playlist(name: name)
-        context.insert(playlist)
+        guard let playlist = PlaylistStore.createPlaylist(named: name, in: context) else { return }
         add(to: playlist)
     }
 }

@@ -67,9 +67,6 @@ struct PlayerInfoSheet: View {
     let showFeedback: Bool
     let feedback: Int
     let onFeedback: (Int) -> Void
-    /// Related videos shown as the playback queue when present.
-    let queue: [StreamItem]
-    let onQueuePlay: (StreamItem) -> Void
     let onQueuedVideoPlay: (QueuedVideo) -> Void
     /// Used to fetch comments lazily once the sheet appears.
     let client: PipedClient
@@ -92,8 +89,8 @@ struct PlayerInfoSheet: View {
                     description: description, chapters: chapters,
                     canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
-                    feedback: feedback, onFeedback: onFeedback, queue: queue,
-                    onQueuePlay: onQueuePlay, onQueuedVideoPlay: onQueuedVideoPlay,
+                    feedback: feedback, onFeedback: onFeedback,
+                    onQueuedVideoPlay: onQueuedVideoPlay,
                     client: client, videoID: videoID,
                     currentPlaybackSeconds: playbackTime?.seconds,
                     onTimestampTap: onTimestampTap)
@@ -143,8 +140,6 @@ struct PlayerInfoContent: View {
     let showFeedback: Bool
     @State private var feedback: Int
     let onFeedback: (Int) -> Void
-    let queue: [StreamItem]
-    let onQueuePlay: (StreamItem) -> Void
     let onQueuedVideoPlay: (QueuedVideo) -> Void
     /// Used to fetch comments lazily once the view appears.
     let client: PipedClient
@@ -195,8 +190,7 @@ struct PlayerInfoContent: View {
          description: String, chapters: [VideoChapter] = [],
          canSubscribe: Bool, isSubscribed: Bool,
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
-         onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
-         onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
+         onFeedback: @escaping (Int) -> Void,
          onQueuedVideoPlay: @escaping (QueuedVideo) -> Void = { _ in },
          client: PipedClient, videoID: String,
          currentPlaybackSeconds: Double? = nil,
@@ -221,8 +215,6 @@ struct PlayerInfoContent: View {
         self.showFeedback = showFeedback
         self._feedback = State(initialValue: feedback)
         self.onFeedback = onFeedback
-        self.queue = queue
-        self.onQueuePlay = onQueuePlay
         self.onQueuedVideoPlay = onQueuedVideoPlay
         self.client = client
         self.videoID = videoID
@@ -411,27 +403,24 @@ struct PlayerInfoContent: View {
     }
 
     private func playlistContainsCurrentVideo(_ playlist: Playlist) -> Bool {
-        playlist.videos.contains { $0.videoID == videoID }
+        PlaylistStore.containsVideoID(videoID, in: playlist)
     }
 
     private func addCurrentVideo(to playlist: Playlist) {
-        guard !playlistContainsCurrentVideo(playlist) else { return }
-        let video = PlaylistVideo(
+        let snapshot = PlaylistVideoSnapshot(
             videoID: videoID,
             title: title,
             uploader: uploaderDisplayName ?? uploader,
             thumbnailURL: thumbnail,
             duration: duration ?? 0)
-        video.playlist = playlist
-        context.insert(video)
+        PlaylistStore.add(snapshot, to: playlist, in: context)
     }
 
     private func createAndAddToPlaylist() {
         let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
         newPlaylistName = ""
         guard !name.isEmpty else { return }
-        let playlist = Playlist(name: name)
-        context.insert(playlist)
+        guard let playlist = PlaylistStore.createPlaylist(named: name, in: context) else { return }
         addCurrentVideo(to: playlist)
     }
 
@@ -582,11 +571,11 @@ struct PlayerInfoContent: View {
             .foregroundStyle(.secondary)
     }
 
-    private func previewComments(_ loader: CommentsLoader) -> [Comment] {
+    private func previewComments(_ loader: CommentsLoader) -> [CommentDisplay] {
         let comments = loader.comments
         guard !comments.isEmpty else { return [] }
 
-        var selected: [Comment] = []
+        var selected: [CommentDisplay] = []
         if let pinned = comments.first(where: { $0.pinned == true }) {
             selected.append(pinned)
         } else if let first = comments.first {
@@ -604,11 +593,11 @@ struct PlayerInfoContent: View {
         return Array(selected.prefix(2))
     }
 
-    private func activeTimestampComment(in comments: [Comment]) -> Comment? {
+    private func activeTimestampComment(in comments: [CommentDisplay]) -> CommentDisplay? {
         guard let currentPlaybackSeconds, currentPlaybackSeconds.isFinite else { return nil }
         let playhead = Int(currentPlaybackSeconds.rounded(.down))
         let activeWindow = 10
-        var best: (comment: Comment, timestamp: CommentTimestamp, index: Int)?
+        var best: (comment: CommentDisplay, timestamp: CommentTimestamp, index: Int)?
 
         for (index, comment) in comments.enumerated() {
             for timestamp in comment.timestamps
@@ -750,8 +739,8 @@ struct PlayerInfoContent: View {
 
 }
 
-private extension [Comment] {
-    func containsComment(_ comment: Comment) -> Bool {
+private extension [CommentDisplay] {
+    func containsComment(_ comment: CommentDisplay) -> Bool {
         contains { $0.id == comment.id }
     }
 }

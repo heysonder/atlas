@@ -124,12 +124,7 @@ struct PlaylistDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                                app.playNext(playRequest(for: video))
-                            }
-                            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
-                                app.addToQueue(playRequest(for: video))
-                            }
+                            QueueMenuItems(request: playRequest(for: video))
                         }
                     }
                     .onDelete(perform: removeVideos)

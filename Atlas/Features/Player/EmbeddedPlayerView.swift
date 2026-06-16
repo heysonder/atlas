@@ -12,7 +12,6 @@ import PipedKit
 /// (`VideoPlayerPresenter`) is untouched and remains the default.
 struct EmbeddedPlayerView: View {
     @State private var model: EmbeddedPlayerModel
-    @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
@@ -71,35 +70,42 @@ struct EmbeddedPlayerView: View {
 
     @ViewBuilder private var infoArea: some View {
         if let detail = model.detail {
-            ScrollView {
-                PlayerInfoContent(
-                    title: detail.title ?? model.request.title,
-                    uploader: detail.uploader ?? model.request.uploader,
-                    uploaderDisplayName: model.request.uploader ?? detail.uploader,
-                    uploaderAvatar: detail.uploaderAvatar,
-                    channelID: detail.channelID,
-                    creators: detail.creators ?? [],
-                    subscriberCount: detail.uploaderSubscriberCount,
-                    uploaderVerified: detail.uploaderVerified ?? false,
-                    thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
-                    duration: detail.duration,
-                    description: HTMLText.plain(detail.description ?? ""),
-                    chapters: detail.chapters ?? [],
-                    canSubscribe: detail.channelID != nil,
-                    isSubscribed: model.isSubscribed(detail.channelID),
-                    onToggleSubscribe: { model.setSubscription($0, detail: detail) },
-                    showFeedback: FeedMode.current.isPersonalized,
-                    feedback: model.currentFeedbackSignal(),
-                    onFeedback: { model.setFeedback($0, detail: detail) },
-                    queue: detail.relatedStreams ?? [],
-                    onQueuePlay: { app.play($0) },
-                    onQueuedVideoPlay: { model.playQueued($0) },
-                    client: model.client,
-                    videoID: model.request.videoID,
-                    currentPlaybackSeconds: model.currentPlaybackSeconds,
-                    onTimestampTap: { model.seek(to: $0) },
-                    inline: true)
-                    .padding()
+            if let client = model.client {
+                ScrollView {
+                    PlayerInfoContent(
+                        title: detail.title ?? model.request.title,
+                        uploader: detail.uploader ?? model.request.uploader,
+                        uploaderDisplayName: model.request.uploader ?? detail.uploader,
+                        uploaderAvatar: detail.uploaderAvatar,
+                        channelID: detail.channelID,
+                        creators: detail.creators ?? [],
+                        subscriberCount: detail.uploaderSubscriberCount,
+                        uploaderVerified: detail.uploaderVerified ?? false,
+                        thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
+                        duration: detail.duration,
+                        description: HTMLText.plain(detail.description ?? ""),
+                        chapters: detail.chapters ?? [],
+                        canSubscribe: detail.channelID != nil,
+                        isSubscribed: model.isSubscribed(detail.channelID),
+                        onToggleSubscribe: { model.setSubscription($0, detail: detail) },
+                        showFeedback: FeedMode.current.isPersonalized,
+                        feedback: model.currentFeedbackSignal(),
+                        onFeedback: { model.setFeedback($0, detail: detail) },
+                        onQueuedVideoPlay: { model.playQueued($0) },
+                        client: client,
+                        videoID: model.request.videoID,
+                        currentPlaybackSeconds: model.currentPlaybackSeconds,
+                        onTimestampTap: { model.seek(to: $0) },
+                        inline: true)
+                        .padding()
+                }
+            } else {
+                ContentUnavailableView {
+                    Label("Comments unavailable", systemImage: "bubble.left.and.bubble.right")
+                } description: {
+                    Text(AppModel.missingInstanceMessage)
+                }
+                .padding()
             }
         } else if let message = model.errorMessage {
             Spacer()
@@ -278,6 +284,7 @@ final class EmbeddedPlayerModel {
     private(set) var detail: VideoDetail?
     private(set) var errorMessage: String?
     private(set) var currentPlaybackSeconds: Double?
+    private(set) var client: PipedClient?
     /// Flips true the moment a player item is set, so the inline controller is
     /// only attached to a player that has something to play.
     private(set) var isReady = false
@@ -292,11 +299,8 @@ final class EmbeddedPlayerModel {
     private var started = false
     private var lastProgressSaveSeconds: Double?
 
-    private static let minWatchSeconds: Double = 5
     private static let minFastStartSecondsBeforeUpgrade: Double = 3
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
-
-    var client: PipedClient { try! app.client }
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
         self.request = request
@@ -318,6 +322,7 @@ final class EmbeddedPlayerModel {
 
     private func load() async {
         do {
+            let client = try app.client
             let detail = try await app.resolveStream(request.videoID)
             guard !Task.isCancelled else { return }
             let initialItem: AVPlayerItem
@@ -340,8 +345,10 @@ final class EmbeddedPlayerModel {
             installEndObserver(for: initialItem)
             isReady = true
             if startsComposed { observeForFailure(initialItem, detail: detail) }
+            self.client = client
             self.detail = detail
-            if let resume = savedPosition(for: request.videoID), resume >= Self.minWatchSeconds {
+            if let resume = savedPosition(for: request.videoID),
+               resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
             player.play()
@@ -364,7 +371,8 @@ final class EmbeddedPlayerModel {
         isReady = true
         recordHistoryLocal()
         Task {
-            if let resume = savedPosition(for: request.videoID), resume >= Self.minWatchSeconds {
+            if let resume = savedPosition(for: request.videoID),
+               resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
             player.play()
@@ -383,6 +391,7 @@ final class EmbeddedPlayerModel {
         statusObservation = nil
         usedComposition = false
         currentPlaybackSeconds = nil
+        client = nil
         lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -445,6 +454,7 @@ final class EmbeddedPlayerModel {
         detail = nil
         errorMessage = nil
         currentPlaybackSeconds = nil
+        client = nil
         lastProgressSaveSeconds = nil
         isReady = false
         player.replaceCurrentItem(with: nil)
@@ -453,10 +463,7 @@ final class EmbeddedPlayerModel {
     // MARK: Resume / progress (shared with the full-screen player via HistoryEntry)
 
     private func savedPosition(for videoID: String) -> Double? {
-        let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == videoID })
-        guard let entry = try? modelContext.fetch(descriptor).first else { return nil }
-        if entry.durationSeconds > 0, entry.positionSeconds >= entry.durationSeconds - 10 { return nil }
-        return entry.positionSeconds
+        PlaybackHistoryStore.savedPosition(for: videoID, in: modelContext)
     }
 
     private func installProgressTracking() {
@@ -471,9 +478,9 @@ final class EmbeddedPlayerModel {
     private func handleProgressTick(_ seconds: Double) {
         guard seconds.isFinite else { return }
         currentPlaybackSeconds = seconds
-        guard seconds >= Self.minWatchSeconds else { return }
+        guard seconds >= PlaybackHistoryStore.minWatchSeconds else { return }
         if lastProgressSaveSeconds == nil
-            || abs(seconds - (lastProgressSaveSeconds ?? 0)) >= Self.minWatchSeconds {
+            || abs(seconds - (lastProgressSaveSeconds ?? 0)) >= PlaybackHistoryStore.minWatchSeconds {
             lastProgressSaveSeconds = seconds
             savePosition(seconds)
         }
@@ -490,68 +497,34 @@ final class EmbeddedPlayerModel {
     }
 
     private func savePosition(_ seconds: Double) {
-        let id = request.videoID
-        guard seconds.isFinite, seconds >= Self.minWatchSeconds else { return }
-        let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-        guard let entry = try? modelContext.fetch(descriptor).first else { return }
-        entry.positionSeconds = seconds
-        if entry.durationSeconds == 0,
-           let d = player.currentItem?.duration.seconds, d.isFinite, d > 0 {
-            entry.durationSeconds = d
-        }
-        entry.watchedAt = .now
+        PlaybackHistoryStore.savePosition(
+            seconds,
+            videoID: request.videoID,
+            duration: player.currentItem?.duration.seconds,
+            in: modelContext)
     }
 
     private func recordHistory(_ detail: VideoDetail) {
-        let id = request.videoID
-        let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-        if let existing = try? modelContext.fetch(descriptor).first {
-            existing.watchedAt = .now
-        } else {
-            modelContext.insert(HistoryEntry(
-                videoID: id,
-                title: detail.title ?? request.title,
-                uploader: detail.uploader ?? request.uploader,
-                thumbnailURL: detail.thumbnailUrl ?? request.thumbnail))
-        }
+        PlaybackHistoryStore.record(request, detail: detail, in: modelContext)
     }
 
     private func recordHistoryLocal() {
-        let id = request.videoID
-        let descriptor = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.videoID == id })
-        if let existing = try? modelContext.fetch(descriptor).first {
-            existing.watchedAt = .now
-        } else {
-            modelContext.insert(HistoryEntry(
-                videoID: id, title: request.title,
-                uploader: request.uploader, thumbnailURL: request.thumbnail))
-        }
+        PlaybackHistoryStore.record(request, in: modelContext)
     }
 
     // MARK: Subscribe / feedback (shared stores with the full-screen player)
 
     func isSubscribed(_ channelID: String?) -> Bool {
-        guard let channelID else { return false }
-        let descriptor = FetchDescriptor<SubscribedChannel>(
-            predicate: #Predicate { $0.channelID == channelID })
-        return ((try? modelContext.fetchCount(descriptor)) ?? 0) > 0
+        SubscriptionStore.isSubscribed(channelID, in: modelContext)
     }
 
     func setSubscription(_ subscribed: Bool, detail: VideoDetail) {
-        guard let channelID = detail.channelID else { return }
-        let descriptor = FetchDescriptor<SubscribedChannel>(
-            predicate: #Predicate { $0.channelID == channelID })
-        let existing = (try? modelContext.fetch(descriptor))?.first
-        if subscribed {
-            if existing == nil {
-                modelContext.insert(SubscribedChannel(
-                    channelID: channelID,
-                    name: detail.uploader ?? request.uploader ?? "Channel",
-                    avatarURL: detail.uploaderAvatar))
-            }
-        } else if let existing {
-            modelContext.delete(existing)
-        }
+        SubscriptionStore.setSubscribed(
+            subscribed,
+            channelID: detail.channelID,
+            name: detail.uploader ?? request.uploader,
+            avatarURL: detail.uploaderAvatar,
+            in: modelContext)
     }
 
     func currentFeedbackSignal() -> Int {
