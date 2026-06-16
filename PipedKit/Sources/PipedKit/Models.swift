@@ -96,6 +96,14 @@ public struct Subtitle: Codable, Hashable, Sendable {
     }
 }
 
+public struct VideoChapter: Codable, Hashable, Identifiable, Sendable {
+    public let title: String?
+    public let image: String?
+    public let start: Int
+
+    public var id: String { "\(start)|\(title ?? "")" }
+}
+
 public struct VideoDetail: Codable, Sendable {
     public let title: String?
     public let description: String?
@@ -112,6 +120,7 @@ public struct VideoDetail: Codable, Sendable {
     public let uploaderSubscriberCount: Int?
     public let creators: [VideoCreator]?
     public let livestream: Bool?
+    public let chapters: [VideoChapter]?
     public let videoStreams: [Stream]?
     public let audioStreams: [Stream]?
     public let subtitles: [Subtitle]?

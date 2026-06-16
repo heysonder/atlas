@@ -627,6 +627,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 thumbnail: detail.thumbnailUrl ?? currentRequest?.thumbnail,
                 duration: detail.duration,
                 description: HTMLText.plain(detail.description ?? ""),
+                chapters: detail.chapters ?? [],
                 canSubscribe: channelID != nil,
                 isSubscribed: channelID.map(isCurrentlySubscribed) ?? false,
                 onToggleSubscribe: { [weak self] subscribed in
