@@ -110,7 +110,7 @@ struct PlayerInfoSheet: View {
 }
 
 /// The contents of the player's "Info" panel: the title, a channel row with
-/// avatar + subscribe toggle, optional feedback buttons, a collapsible
+/// avatar + subscribe toggle, video actions, a collapsible
 /// description, the video's comments, and the upcoming queue. Used both inside
 /// `PlayerInfoSheet` (over the full-screen player) and inline beneath the
 /// embedded player.
@@ -223,10 +223,6 @@ struct PlayerInfoContent: View {
                 channelRow(creator)
             }
 
-            if !inline {
-                playlistMenu
-            }
-
             Divider()
 
             descriptionBlock
@@ -287,10 +283,11 @@ struct PlayerInfoContent: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 8) {
-                if showFeedback {
+                if inline && showFeedback {
                     feedbackButton(more: true)
                     feedbackButton(more: false)
                 }
+                if !inline { videoActionsMenu }
                 if canSubscribe { subscribeButton }
             }
         }
@@ -346,29 +343,50 @@ struct PlayerInfoContent: View {
 
     // MARK: Playlist
 
-    private var playlistMenu: some View {
+    private var videoActionsMenu: some View {
         Menu {
-            Button("New Playlist…", systemImage: "plus") { creatingPlaylist = true }
-            if !playlists.isEmpty { Divider() }
-            ForEach(playlists) { playlist in
-                let containsVideo = playlistContainsCurrentVideo(playlist)
-                Button {
-                    addCurrentVideo(to: playlist)
-                } label: {
-                    Label(playlist.name, systemImage: containsVideo ? "checkmark" : "music.note.list")
-                }
-                .disabled(containsVideo)
+            if showFeedback {
+                feedbackMenuButton(more: true)
+                feedbackMenuButton(more: false)
+                Divider()
             }
+            playlistMenuItems
         } label: {
-            Label("Add to Playlist", systemImage: "text.badge.plus")
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityLabel("Add to Playlist")
+        .glassEffect(.regular.interactive(), in: Circle())
+        .accessibilityLabel("More video actions")
+    }
+
+    @ViewBuilder private func feedbackMenuButton(more: Bool) -> some View {
+        let active = more ? feedback > 0 : feedback < 0
+        let target = more ? 1 : -1
+        Button {
+            feedback = (feedback == target) ? 0 : target
+            onFeedback(feedback)
+        } label: {
+            Label(more ? "Suggest More" : "Suggest Less",
+                  systemImage: more ? (active ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                    : (active ? "hand.thumbsdown.fill" : "hand.thumbsdown"))
+        }
+    }
+
+    @ViewBuilder private var playlistMenuItems: some View {
+        Button("New Playlist…", systemImage: "plus") { creatingPlaylist = true }
+        if !playlists.isEmpty { Divider() }
+        ForEach(playlists) { playlist in
+            let containsVideo = playlistContainsCurrentVideo(playlist)
+            Button {
+                addCurrentVideo(to: playlist)
+            } label: {
+                Label(playlist.name, systemImage: containsVideo ? "checkmark" : "music.note.list")
+            }
+            .disabled(containsVideo)
+        }
     }
 
     private func playlistContainsCurrentVideo(_ playlist: Playlist) -> Bool {
