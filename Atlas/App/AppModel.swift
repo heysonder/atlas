@@ -281,6 +281,15 @@ final class AppModel {
         queuedVideos.append(QueuedVideo(request))
     }
 
+    func removeFromQueue(_ queued: QueuedVideo) -> PlayRequest? {
+        guard let index = queuedVideos.firstIndex(where: { $0.id == queued.id }) else { return nil }
+        return queuedVideos.remove(at: index).request
+    }
+
+    func moveQueuedVideos(from offsets: IndexSet, to destination: Int) {
+        queuedVideos.move(fromOffsets: offsets, toOffset: destination)
+    }
+
     func dequeueNext() -> PlayRequest? {
         guard !queuedVideos.isEmpty else { return nil }
         return queuedVideos.removeFirst().request

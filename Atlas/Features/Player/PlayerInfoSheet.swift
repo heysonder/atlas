@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 import PipedKit
 
 /// Drives the in-player "Info" button. While the video plays the button shows
@@ -68,6 +69,7 @@ struct PlayerInfoSheet: View {
     /// Related videos shown as the playback queue when present.
     let queue: [StreamItem]
     let onQueuePlay: (StreamItem) -> Void
+    let onQueuedVideoPlay: (QueuedVideo) -> Void
     /// Used to fetch comments lazily once the sheet appears.
     let client: PipedClient
     let videoID: String
@@ -89,7 +91,8 @@ struct PlayerInfoSheet: View {
                     description: description, canSubscribe: canSubscribe, isSubscribed: isSubscribed,
                     onToggleSubscribe: onToggleSubscribe, showFeedback: showFeedback,
                     feedback: feedback, onFeedback: onFeedback, queue: queue,
-                    onQueuePlay: onQueuePlay, client: client, videoID: videoID,
+                    onQueuePlay: onQueuePlay, onQueuedVideoPlay: onQueuedVideoPlay,
+                    client: client, videoID: videoID,
                     currentPlaybackSeconds: playbackTime?.seconds,
                     onTimestampTap: onTimestampTap)
                     .padding()
@@ -139,6 +142,7 @@ struct PlayerInfoContent: View {
     let onFeedback: (Int) -> Void
     let queue: [StreamItem]
     let onQueuePlay: (StreamItem) -> Void
+    let onQueuedVideoPlay: (QueuedVideo) -> Void
     /// Used to fetch comments lazily once the view appears.
     let client: PipedClient
     let videoID: String
@@ -155,6 +159,7 @@ struct PlayerInfoContent: View {
     @State private var creatingPlaylist = false
     @State private var newPlaylistName = ""
     @State private var fallbackCollaborators: [CreatorChannel] = []
+    @State private var draggedQueuedVideoID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var queueItems: [QueueDisplayItem] {
         app.queuedVideos.enumerated().map {
@@ -183,6 +188,7 @@ struct PlayerInfoContent: View {
          onToggleSubscribe: @escaping (Bool) -> Void, showFeedback: Bool, feedback: Int,
          onFeedback: @escaping (Int) -> Void, queue: [StreamItem] = [],
          onQueuePlay: @escaping (StreamItem) -> Void = { _ in },
+         onQueuedVideoPlay: @escaping (QueuedVideo) -> Void = { _ in },
          client: PipedClient, videoID: String,
          currentPlaybackSeconds: Double? = nil,
          onTimestampTap: @escaping (Int) -> Void = { _ in },
@@ -207,6 +213,7 @@ struct PlayerInfoContent: View {
         self.onFeedback = onFeedback
         self.queue = queue
         self.onQueuePlay = onQueuePlay
+        self.onQueuedVideoPlay = onQueuedVideoPlay
         self.client = client
         self.videoID = videoID
         self.currentPlaybackSeconds = currentPlaybackSeconds
@@ -231,9 +238,8 @@ struct PlayerInfoContent: View {
 
             commentsSection
 
-            if !inline && !queueItems.isEmpty {
+            if !queueItems.isEmpty {
                 Divider()
-
                 queueSection
             }
         }
@@ -597,53 +603,77 @@ struct PlayerInfoContent: View {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(queueItems) { item in
                     queueRow(item.queued, position: item.position)
+                        .onDrag {
+                            draggedQueuedVideoID = item.id
+                            return NSItemProvider(object: item.id.uuidString as NSString)
+                        }
+                        .onDrop(
+                            of: [UTType.text],
+                            delegate: QueueDropDelegate(
+                                item: item,
+                                draggedQueuedVideoID: $draggedQueuedVideoID,
+                                app: app))
                 }
             }
         }
     }
 
     private func queueRow(_ queued: QueuedVideo, position: Int) -> some View {
-        HStack(spacing: 10) {
-            ZStack(alignment: .topLeading) {
-                Thumbnail(url: queued.request.thumbnail)
-                    .aspectRatio(16 / 9, contentMode: .fill)
-                    .frame(width: 84, height: 47)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        Button {
+            onQueuedVideoPlay(queued)
+        } label: {
+            HStack(spacing: 10) {
+                queueThumbnail(queued, position: position)
 
-                Text("\(position + 1)")
-                    .font(.caption2.weight(.bold))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.72), in: Capsule())
-                    .padding(5)
-            }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(queued.request.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(queued.request.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 6) {
-                    if let uploader = queued.request.uploader, !uploader.isEmpty {
-                        Text(uploader)
-                            .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let uploader = queued.request.uploader, !uploader.isEmpty {
+                            Text(uploader)
+                                .lineLimit(1)
+                        }
+                        if queued.request.localURL != nil {
+                            Label("Downloaded", systemImage: "arrow.down.circle.fill")
+                        }
                     }
-                    if queued.request.localURL != nil {
-                        Label("Downloaded", systemImage: "arrow.down.circle.fill")
-                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .accessibilityLabel("Play \(queued.request.title)")
     }
+
+    private func queueThumbnail(_ queued: QueuedVideo, position: Int) -> some View {
+        ZStack(alignment: .topLeading) {
+            Thumbnail(url: queued.request.thumbnail)
+                .aspectRatio(16 / 9, contentMode: .fill)
+                .frame(width: 84, height: 47)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Text("\(position + 1)")
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.72), in: Capsule())
+                .padding(5)
+        }
+    }
+
 }
 
 private extension [Comment] {
@@ -657,4 +687,29 @@ private struct QueueDisplayItem: Identifiable {
     let queued: QueuedVideo
 
     var id: UUID { queued.id }
+}
+
+private struct QueueDropDelegate: DropDelegate {
+    let item: QueueDisplayItem
+    @Binding var draggedQueuedVideoID: UUID?
+    let app: AppModel
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedQueuedVideoID,
+              draggedQueuedVideoID != item.id,
+              let source = app.queuedVideos.firstIndex(where: { $0.id == draggedQueuedVideoID }),
+              let destination = app.queuedVideos.firstIndex(where: { $0.id == item.id })
+        else { return }
+
+        withAnimation(.snappy) {
+            app.moveQueuedVideos(
+                from: IndexSet(integer: source),
+                to: destination > source ? destination + 1 : destination)
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedQueuedVideoID = nil
+        return true
+    }
 }
