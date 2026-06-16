@@ -3,8 +3,8 @@ import AppIntents
 import PipedKit
 
 extension View {
-    /// Records the videos currently on screen so Siri / App Intents can resolve
-    /// nearby video actions from the visible registry.
+    /// Records recently visible videos so App Intents can resolve their ids from
+    /// the in-memory registry without another network lookup.
     func onScreenVideos(_ videos: [StreamItem]) -> some View {
         modifier(OnScreenVideos(videos: videos))
     }

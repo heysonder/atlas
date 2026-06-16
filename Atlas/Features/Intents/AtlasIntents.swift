@@ -34,16 +34,49 @@ struct OpenForYouIntent: AppIntent {
     }
 }
 
-/// "Open my downloads" — deep-links into the Library → Downloads screen.
-struct OpenDownloadsIntent: AppIntent {
-    static let title: LocalizedStringResource = "Open Downloads"
-    static let description = IntentDescription("See your offline downloads.")
+/// Fixed set of Library destinations worth exposing outside the app. These are
+/// screens with concrete saved content, not every tab or settings pane.
+enum LibraryDestination: String, AppEnum {
+    case downloads
+    case history
+    case playlists
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Library Section")
+
+    static let caseDisplayRepresentations: [LibraryDestination: DisplayRepresentation] = [
+        .downloads: DisplayRepresentation(title: "Downloads",
+                                          subtitle: "Offline videos"),
+        .history: DisplayRepresentation(title: "History",
+                                        subtitle: "Recently watched videos"),
+        .playlists: DisplayRepresentation(title: "Playlists",
+                                          subtitle: "Saved video lists"),
+    ]
+
+    var libraryTarget: LibraryTarget {
+        switch self {
+        case .downloads: .downloads
+        case .history: .history
+        case .playlists: .playlists
+        }
+    }
+}
+
+/// "Open Downloads / History / Playlists" — deep-links into a specific Library
+/// screen without exposing every internal navigation route.
+struct OpenLibraryIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Library"
+    static let description = IntentDescription("Open a section of your Atlas library.")
     static let openAppWhenRun = true
+
+    @Parameter(title: "Section", default: .downloads,
+               requestValueDialog: "Which Library section?")
+    var destination: LibraryDestination
 
     @Dependency var app: AppModel
 
     func perform() async throws -> some IntentResult {
-        await MainActor.run { app.pendingIntent = .openDownloads }
+        let target = destination.libraryTarget
+        await MainActor.run { app.pendingIntent = .openLibrary(target) }
         return .result()
     }
 }
@@ -93,10 +126,10 @@ struct ResumeWatchingIntent: AppIntent {
     }
 }
 
-// MARK: - Contextual actions (operate on a video — incl. on-screen "this")
+// MARK: - Video actions
 
-/// "Play this" — plays a video entity (the one on screen, or one you name).
-/// Prefers the offline file when the video is downloaded.
+/// Plays a selected video entity, preferring the offline file when that video is
+/// already downloaded.
 struct PlayVideoIntent: AppIntent {
     static let title: LocalizedStringResource = "Play Video"
     static let description = IntentDescription("Play a video in Atlas.")
@@ -116,7 +149,7 @@ struct PlayVideoIntent: AppIntent {
     }
 }
 
-/// "Download this" — saves a video for offline playback.
+/// Saves a selected video for offline playback.
 struct DownloadVideoIntent: AppIntent {
     static let title: LocalizedStringResource = "Download Video"
     static let description = IntentDescription("Save a video for offline viewing.")
@@ -136,9 +169,9 @@ struct DownloadVideoIntent: AppIntent {
     }
 }
 
-/// "Add this to <playlist>" — saves a video to one of your playlists. Both the
-/// video (often the on-screen one) and the playlist resolve as entities, so the
-/// playlist name can be spoken right in the phrase.
+/// Saves a selected video to one of your playlists. Both the video and the
+/// playlist resolve as entities, so the playlist name can be spoken in the
+/// phrase and the video can be chosen by search.
 struct AddToPlaylistIntent: AppIntent {
     static let title: LocalizedStringResource = "Add to Playlist"
     static let description = IntentDescription("Save a video to one of your playlists.")

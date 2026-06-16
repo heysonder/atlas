@@ -3,15 +3,12 @@ import Foundation
 import PipedKit
 
 /// A video exposed to Siri / App Intents. Carries just enough to play, download,
-/// or describe a video without another network round-trip. Backs both the
-/// parameterized intents ("Play this", "Download this") and — on iOS 27 — the
-/// on-screen awareness annotations on the feed, where Siri resolves "this" to the
-/// entity the user is looking at.
+/// or describe a video without another network round-trip.
 struct VideoEntity: AppEntity, Identifiable {
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Video")
     static let defaultQuery = VideoEntityQuery()
 
-    /// The YouTube video id — also the Spotlight item / on-screen selection id.
+    /// The YouTube video id — also the Spotlight item and registry id.
     let id: String
     let title: String
     let uploader: String?
@@ -44,9 +41,8 @@ struct VideoEntity: AppEntity, Identifiable {
     }
 }
 
-/// In-memory cache of videos currently visible in the UI, so the entity query can
-/// resolve an on-screen selection id back to a full `VideoEntity` without hitting
-/// the network. The feed records its items here as they appear.
+/// In-memory cache of recently visible videos, so the entity query can resolve a
+/// known video id back to a full `VideoEntity` without hitting the network.
 @MainActor
 final class VisibleVideoRegistry {
     static let shared = VisibleVideoRegistry()
@@ -69,7 +65,7 @@ final class VisibleVideoRegistry {
     func entity(for id: String) -> VideoEntity? { byID[id] }
 }
 
-/// Resolves `VideoEntity` ids from what's on screen and from downloads, and —
+/// Resolves `VideoEntity` ids from recently visible videos and downloads, and —
 /// because it's an `EntityStringQuery` — lets Siri resolve a *described* video by
 /// running a search. That's what makes "add a SwiftUI tutorial to Watch Later"
 /// work: Siri fills the video parameter by searching, then hands it to the

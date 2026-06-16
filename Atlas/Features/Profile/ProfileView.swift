@@ -87,7 +87,7 @@ struct ProfileView: View {
                 ChannelDetailView(channelID: id)
             }
         }
-        // Deep-link from Siri / "Open Downloads": push the requested sub-screen.
+        // Deep-link from Siri / App Shortcuts: push the requested Library sub-screen.
         .onAppear { applyLibraryTarget() }
         .onChange(of: app.libraryTarget) { _, _ in applyLibraryTarget() }
     }
