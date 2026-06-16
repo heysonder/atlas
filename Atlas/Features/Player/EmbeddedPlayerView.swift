@@ -299,7 +299,6 @@ final class EmbeddedPlayerModel {
     private var started = false
     private var lastProgressSaveSeconds: Double?
 
-    private static let minFastStartSecondsBeforeUpgrade: Double = 3
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
@@ -325,26 +324,23 @@ final class EmbeddedPlayerModel {
             let client = try app.client
             let detail = try await app.resolveStream(request.videoID)
             guard !Task.isCancelled else { return }
-            let initialItem: AVPlayerItem
-            let startsComposed: Bool
-            if let fastItem = StreamPlaybackBuilder.makeFastStartPlayerItem(detail) {
-                initialItem = fastItem
-                startsComposed = false
-            } else if let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-                detail, allowAV1: Self.supportsAV1) {
-                initialItem = composed
-                startsComposed = true
-            } else {
+            guard let playback = await StreamPlaybackBuilder.makePlayerItem(
+                detail,
+                allowAV1: Self.supportsAV1
+            ) else {
                 errorMessage = PipedError.noPlayableStream.localizedDescription
                 return
             }
             guard !Task.isCancelled else { return }
-            usedComposition = startsComposed
+            let initialItem = playback.item
+            await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
+            guard !Task.isCancelled else { return }
+            usedComposition = playback.composed
             player.replaceCurrentItem(with: initialItem)
             PlayerCaptionSelection.keepOffByDefault(for: initialItem)
             installEndObserver(for: initialItem)
             isReady = true
-            if startsComposed { observeForFailure(initialItem, detail: detail) }
+            if playback.composed { observeForFailure(initialItem, detail: detail) }
             self.client = client
             self.detail = detail
             if let resume = savedPosition(for: request.videoID),
@@ -354,9 +350,6 @@ final class EmbeddedPlayerModel {
             player.play()
             installProgressTracking()
             recordHistory(detail)
-            if !startsComposed {
-                await upgradeToComposedPlaybackIfAvailable(detail: detail, requestID: request.videoID)
-            }
         } catch {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
@@ -555,6 +548,7 @@ final class EmbeddedPlayerModel {
                 self.statusObservation = nil
                 let resume = self.player.currentTime()
                 guard let fallback = StreamPlaybackBuilder.fallbackPlayerItem(for: detail) else { return }
+                await PlayerAudioSelection.selectPreferredAudio(for: fallback)
                 self.player.replaceCurrentItem(with: fallback)
                 PlayerCaptionSelection.keepOffByDefault(for: fallback)
                 self.installEndObserver(for: fallback)
@@ -562,43 +556,5 @@ final class EmbeddedPlayerModel {
                 self.player.playImmediately(atRate: 1.0)
             }
         }
-    }
-
-    private func upgradeToComposedPlaybackIfAvailable(detail: VideoDetail, requestID: String) async {
-        guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-            detail, allowAV1: Self.supportsAV1) else { return }
-        guard await waitForFastStartPlayback(requestID: requestID) else { return }
-        guard !Task.isCancelled,
-              request.videoID == requestID,
-              player.currentItem != nil else { return }
-
-        let resume = player.currentTime()
-        let shouldResume = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        usedComposition = true
-        player.replaceCurrentItem(with: composed)
-        PlayerCaptionSelection.keepOffByDefault(for: composed)
-        installEndObserver(for: composed)
-        observeForFailure(composed, detail: detail)
-        await player.seek(to: resume)
-        if shouldResume {
-            player.playImmediately(atRate: 1.0)
-        }
-    }
-
-    private func waitForFastStartPlayback(requestID: String) async -> Bool {
-        for _ in 0..<48 {
-            guard !Task.isCancelled,
-                  request.videoID == requestID,
-                  player.currentItem != nil else { return false }
-            if player.currentItem?.status == .failed {
-                return true
-            }
-            let seconds = player.currentTime().seconds
-            if seconds.isFinite, seconds >= Self.minFastStartSecondsBeforeUpgrade {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-        }
-        return false
     }
 }

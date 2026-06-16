@@ -152,6 +152,61 @@ import Foundation
     #expect(preferred.url == "https://example.com/manual.ttml")
 }
 
+@Test func decodesAudioLanguageMetadata() throws {
+    let json = """
+    {
+      "url": "https://example.com/en.m4a",
+      "mimeType": "audio/mp4",
+      "bitrate": 128000,
+      "audioTrackId": "en.0",
+      "audioTrackName": "English original",
+      "audioTrackType": "original",
+      "audioTrackLocale": "en-US",
+      "language": "English",
+      "languageCode": "en",
+      "name": "English"
+    }
+    """.data(using: .utf8)!
+
+    let stream = try JSONDecoder().decode(Stream.self, from: json)
+    #expect(stream.audioTrackName == "English original")
+    #expect(stream.audioTrackType == "original")
+    #expect(stream.audioTrackLocale == "en-US")
+    #expect(stream.languageCode == "en")
+    #expect(stream.audioLanguageHints.contains("English original"))
+    #expect(stream.audioLanguageHints.contains("en-US"))
+}
+
+@Test func prefersAudioLanguageOverBitrateForComposedSource() throws {
+    let detail = VideoDetail(
+        title: "x", description: nil, uploader: nil, uploaderUrl: nil,
+        uploaderAvatar: nil, thumbnailUrl: nil, hls: nil,
+        duration: 1, views: nil, likes: nil, uploaded: nil,
+        uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
+        chapters: nil,
+        videoStreams: [
+            Stream(url: "https://example.com/1080.mp4", format: "MP4", quality: "1080p",
+                   mimeType: "video/mp4", codec: "avc1.640028", videoOnly: true,
+                   bitrate: nil, width: 1920, height: 1080, fps: 30)
+        ],
+        audioStreams: [
+            Stream(url: "https://example.com/es-dubbed.m4a", format: "M4A", quality: nil,
+                   mimeType: "audio/mp4", codec: nil, videoOnly: nil, bitrate: 256000,
+                   width: nil, height: nil, fps: nil,
+                   audioTrackName: "Spanish dubbed", audioTrackType: "dubbed", languageCode: "es"),
+            Stream(url: "https://example.com/en-original.m4a", format: "M4A", quality: nil,
+                   mimeType: "audio/mp4", codec: nil, videoOnly: nil, bitrate: 128000,
+                   width: nil, height: nil, fps: nil,
+                   audioTrackName: "English original", audioTrackType: "original", languageCode: "en")
+        ],
+        subtitles: nil, relatedStreams: nil, category: nil, tags: nil)
+
+    let source = try #require(detail.bestComposedSource(allowAV1: false, preferredLanguages: ["en-US"]))
+    #expect(source.audio.absoluteString == "https://example.com/en-original.m4a")
+    #expect(VideoDetail.audioScore(detail.audioStreams![1], preferredLanguages: ["en-US"])
+            > VideoDetail.audioScore(detail.audioStreams![0], preferredLanguages: ["en-US"]))
+}
+
 @Test func surfacesScheduledLiveStreamErrors() {
     let data = """
     {"error":"org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException: Got error LIVE_STREAM_OFFLINE: \\"This live event will begin in 34 hours.\\""}
