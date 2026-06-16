@@ -631,6 +631,14 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                         self.playQueued(item)
                     }
                 },
+                onQueuedVideoPlay: { [weak self, weak host] queued in
+                    guard let self else { return }
+                    if let sheet = host?.presentedViewController {
+                        sheet.dismiss(animated: true) { self.playQueued(queued) }
+                    } else {
+                        self.playQueued(queued)
+                    }
+                },
                 client: client,
                 videoID: videoID,
                 playbackTime: infoPlaybackTime,
@@ -662,6 +670,14 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
         private func playQueued(_ item: StreamItem) {
             guard let request = PlayRequest(item: item) else { return }
+            if let player, let controller = playerVC {
+                restartPlayback(with: request, player: player, controller: controller)
+            }
+            app.nowPlaying = request
+        }
+
+        private func playQueued(_ queued: QueuedVideo) {
+            guard let request = app.removeFromQueue(queued) else { return }
             if let player, let controller = playerVC {
                 restartPlayback(with: request, player: player, controller: controller)
             }

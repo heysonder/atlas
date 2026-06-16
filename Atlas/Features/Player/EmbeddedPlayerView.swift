@@ -92,6 +92,7 @@ struct EmbeddedPlayerView: View {
                     onFeedback: { model.setFeedback($0, detail: detail) },
                     queue: detail.relatedStreams ?? [],
                     onQueuePlay: { app.play($0) },
+                    onQueuedVideoPlay: { model.playQueued($0) },
                     client: model.client,
                     videoID: model.request.videoID,
                     currentPlaybackSeconds: model.currentPlaybackSeconds,
@@ -442,6 +443,11 @@ final class EmbeddedPlayerModel {
         } else {
             loadTask = Task { await load() }
         }
+    }
+
+    func playQueued(_ queued: QueuedVideo) {
+        guard let request = app.removeFromQueue(queued) else { return }
+        playQueued(request)
     }
 
     private func resetForItemReplacement() {
