@@ -13,6 +13,11 @@ struct SearchView: View {
     @State private var phase: LoadPhase<Results> = .idle
     @State private var suggestions: [String] = []
     @State private var suggestTask: Task<Void, Never>?
+    /// The query the current results belong to + the `nextpage` cursor for the
+    /// next batch. `isLoadingMore` gates the infinite-scroll footer.
+    @State private var activeQuery = ""
+    @State private var nextpage: String?
+    @State private var isLoadingMore = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -58,6 +63,7 @@ struct SearchView: View {
         suggestions = []
         query = ""
         phase = .idle
+        nextpage = nil
         searchFocused = true
     }
 
@@ -95,10 +101,27 @@ struct SearchView: View {
                     }
                     // Then videos.
                     GroupedVideoList(items: videos) { app.play($0) }
+                    paginationFooter
                 }
                 .padding(.horizontal)
                 .padding(.top, 8)
             }
+        }
+    }
+
+    /// Infinite scroll: a 1pt sentinel at the end of the list pulls the next
+    /// page as it scrolls into view. Re-`id`'d on the result count so it fires
+    /// again for each subsequent page while you're still at the bottom.
+    @ViewBuilder private var paginationFooter: some View {
+        if isLoadingMore {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+        } else if nextpage != nil, case .loaded(let results) = phase {
+            Color.clear
+                .frame(height: 1)
+                .id(results.videos.count + results.channels.count)
+                .onAppear { Task { await loadMore() } }
         }
     }
 
@@ -132,8 +155,12 @@ struct SearchView: View {
         guard !q.isEmpty else { phase = .idle; return }
         recordSearch(q)
         phase = .loading
+        nextpage = nil
         do {
-            let all = try await app.client.search(q, filter: "all")
+            let res = try await app.client.searchPage(q, filter: "all")
+            let all = res.items ?? []
+            activeQuery = q
+            nextpage = normalizedNextpage(res.nextpage)
             let channels = all.filter { $0.isChannel }
             let videos = all.filter { $0.isVideo }
             phase = .loaded(Results(channels: channels, videos: videos))
@@ -141,6 +168,31 @@ struct SearchView: View {
         } catch {
             phase = .failed(error.localizedDescription)
         }
+    }
+
+    /// Appends the next page of results, de-duped against what's already shown.
+    /// On failure it stops paginating rather than dropping the current results.
+    private func loadMore() async {
+        guard let token = nextpage, !isLoadingMore,
+              case .loaded(var results) = phase else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let res = try await app.client.searchNextPage(activeQuery, filter: "all", nextpage: token)
+            let seen = Set((results.channels + results.videos).map(\.id))
+            let fresh = (res.items ?? []).filter { !seen.contains($0.id) }
+            results.channels.append(contentsOf: fresh.filter { $0.isChannel })
+            results.videos.append(contentsOf: fresh.filter { $0.isVideo })
+            nextpage = normalizedNextpage(res.nextpage)
+            phase = .loaded(results)
+        } catch {
+            nextpage = nil
+        }
+    }
+
+    private func normalizedNextpage(_ token: String?) -> String? {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     /// Persist the query as a personalization signal: upsert so repeats bump a
