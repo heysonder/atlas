@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import PipedKit
 
 /// One row in a feed: a full-width video, a run of Shorts (1–2 per row), or a
@@ -91,8 +92,19 @@ struct GroupedVideoList: View {
     /// iPhone (compact) stays a single column; iPad and larger (regular) break the
     /// feed into a 2–4 column grid sized to the available width.
     @Environment(\.horizontalSizeClass) private var hSize
+    @Query(sort: \Playlist.createdAt, order: .reverse) private var menuPlaylists: [Playlist]
+    @Query private var menuFeedback: [Feedback]
+    @Query(sort: \DownloadedVideo.createdAt, order: .reverse) private var menuDownloads: [DownloadedVideo]
     /// Measured width of the list, used to pick the grid's column count.
     @State private var gridWidth: CGFloat = 0
+
+    private var menuFeedbackByVideoID: [String: Int] {
+        Dictionary(uniqueKeysWithValues: menuFeedback.map { ($0.videoID, $0.signal) })
+    }
+
+    private var menuDownloadsByVideoID: [String: DownloadedVideo] {
+        Dictionary(uniqueKeysWithValues: menuDownloads.map { ($0.videoID, $0) })
+    }
 
     var body: some View {
         if hSize == .regular {
@@ -114,13 +126,20 @@ struct GroupedVideoList: View {
                     HStack(alignment: .top, spacing: 12) {
                         ForEach(pair) { short in
                             ShortPoster(item: short, watched: isWatched(short)) { onPlay(short) }
-                                .videoContextMenu(short)
+                                .videoContextMenu(
+                                    short,
+                                    playlists: menuPlaylists,
+                                    feedbackByVideoID: menuFeedbackByVideoID,
+                                    downloadsByVideoID: menuDownloadsByVideoID)
                         }
                         if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
                     }
                     .onAppear { pair.forEach(appeared) }
                 case .shelf(let shorts):
                     ShortsShelf(items: shorts, watchedIDs: watchedIDs,
+                                playlists: menuPlaylists,
+                                feedbackByVideoID: menuFeedbackByVideoID,
+                                downloadsByVideoID: menuDownloadsByVideoID,
                                 onAppearItem: onAppearItem, onPlay: onPlay)
                 }
             }
@@ -150,6 +169,9 @@ struct GroupedVideoList: View {
             }
             if !shorts.isEmpty {
                 ShortsShelf(items: shorts, watchedIDs: watchedIDs,
+                            playlists: menuPlaylists,
+                            feedbackByVideoID: menuFeedbackByVideoID,
+                            downloadsByVideoID: menuDownloadsByVideoID,
                             onAppearItem: onAppearItem, onPlay: onPlay)
             }
             if !rest.isEmpty {
@@ -167,7 +189,11 @@ struct GroupedVideoList: View {
                  avatarFallback: avatarFallback,
                  channelIDFallback: channelIDFallback,
                  watched: isWatched(item)) { onPlay(item) }
-            .videoContextMenu(item)
+            .videoContextMenu(
+                item,
+                playlists: menuPlaylists,
+                feedbackByVideoID: menuFeedbackByVideoID,
+                downloadsByVideoID: menuDownloadsByVideoID)
             .onAppear { appeared(item) }
     }
 
@@ -200,6 +226,9 @@ struct GroupedVideoList: View {
 private struct ShortsShelf: View {
     let items: [StreamItem]
     var watchedIDs: Set<String> = []
+    var playlists: [Playlist] = []
+    var feedbackByVideoID: [String: Int] = [:]
+    var downloadsByVideoID: [String: DownloadedVideo] = [:]
     var onAppearItem: ((StreamItem) -> Void)? = nil
     let onPlay: (StreamItem) -> Void
 
@@ -214,7 +243,11 @@ private struct ShortsShelf: View {
                     ForEach(items) { short in
                         ShortPoster(item: short,
                                     watched: short.videoID.map(watchedIDs.contains) ?? false) { onPlay(short) }
-                            .videoContextMenu(short)
+                            .videoContextMenu(
+                                short,
+                                playlists: playlists,
+                                feedbackByVideoID: feedbackByVideoID,
+                                downloadsByVideoID: downloadsByVideoID)
                             .frame(width: cardWidth)
                             .onAppear { onAppearItem?(short) }
                     }

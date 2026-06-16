@@ -6,19 +6,20 @@ import PipedKit
 /// add to a playlist. Shared by every card list via `.videoContextMenu(item)`.
 struct VideoContextMenu: ViewModifier {
     let item: StreamItem
+    let playlists: [Playlist]
+    let feedbackByVideoID: [String: Int]
+    let downloadsByVideoID: [String: DownloadedVideo]
 
     @Environment(AppModel.self) private var app
     @Environment(DownloadManager.self) private var downloads
     @Environment(\.modelContext) private var context
     @AppStorage("feedMode") private var feedMode: FeedMode = .subscriptions
-    @Query(sort: \Playlist.createdAt, order: .reverse) private var playlists: [Playlist]
-    @Query private var feedback: [Feedback]
     @State private var creatingNew = false
     @State private var newName = ""
 
     /// Current thumbs state for this video: +1, −1, or 0.
     private var currentSignal: Int {
-        feedback.first { $0.videoID == item.videoID }?.signal ?? 0
+        item.videoID.flatMap { feedbackByVideoID[$0] } ?? 0
     }
 
     func body(content: Content) -> some View {
@@ -66,7 +67,7 @@ struct VideoContextMenu: ViewModifier {
 
     @ViewBuilder private var downloadButton: some View {
         if let videoID = item.videoID {
-            if downloads.isDownloaded(videoID) {
+            if downloadsByVideoID[videoID] != nil {
                 Button("Remove Download", systemImage: "trash", role: .destructive) {
                     downloads.remove(videoID)
                 }
@@ -83,10 +84,7 @@ struct VideoContextMenu: ViewModifier {
 
     private var playRequest: PlayRequest? {
         guard let request = PlayRequest(item: item) else { return nil }
-        let videoID = request.videoID
-        let descriptor = FetchDescriptor<DownloadedVideo>(
-            predicate: #Predicate { $0.videoID == videoID })
-        guard let download = try? context.fetch(descriptor).first else { return request }
+        guard let download = downloadsByVideoID[request.videoID] else { return request }
         return PlayRequest(download: download, fallbackThumbnail: request.thumbnail)
     }
 
@@ -106,7 +104,16 @@ struct VideoContextMenu: ViewModifier {
 
 extension View {
     /// Adds the long-press card menu (download + add to playlist) for a video.
-    func videoContextMenu(_ item: StreamItem) -> some View {
-        modifier(VideoContextMenu(item: item))
+    func videoContextMenu(
+        _ item: StreamItem,
+        playlists: [Playlist] = [],
+        feedbackByVideoID: [String: Int] = [:],
+        downloadsByVideoID: [String: DownloadedVideo] = [:]
+    ) -> some View {
+        modifier(VideoContextMenu(
+            item: item,
+            playlists: playlists,
+            feedbackByVideoID: feedbackByVideoID,
+            downloadsByVideoID: downloadsByVideoID))
     }
 }

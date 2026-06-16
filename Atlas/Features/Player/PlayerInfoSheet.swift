@@ -158,6 +158,7 @@ struct PlayerInfoContent: View {
     @State private var newPlaylistName = ""
     @State private var fallbackCollaborators: [CreatorChannel] = []
     @State private var draggedQueuedVideoID: UUID?
+    @State private var timestampPreviewIndex = TimestampCommentPreviewIndex()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var queueItems: [QueueDisplayItem] {
         app.queuedVideos.enumerated().map {
@@ -595,22 +596,8 @@ struct PlayerInfoContent: View {
 
     private func activeTimestampComment(in comments: [CommentDisplay]) -> CommentDisplay? {
         guard let currentPlaybackSeconds, currentPlaybackSeconds.isFinite else { return nil }
-        let playhead = Int(currentPlaybackSeconds.rounded(.down))
-        let activeWindow = 10
-        var best: (comment: CommentDisplay, timestamp: CommentTimestamp, index: Int)?
-
-        for (index, comment) in comments.enumerated() {
-            for timestamp in comment.timestamps
-                where playhead >= timestamp.seconds && playhead < timestamp.seconds + activeWindow {
-                if best == nil
-                    || timestamp.seconds > best!.timestamp.seconds
-                    || (timestamp.seconds == best!.timestamp.seconds && index < best!.index) {
-                    best = (comment, timestamp, index)
-                }
-            }
-        }
-
-        return best?.comment
+        timestampPreviewIndex.updateIfNeeded(comments)
+        return timestampPreviewIndex.activeComment(at: Int(currentPlaybackSeconds.rounded(.down)))
     }
 
     /// All comments, expanded in place and paginated as the user scrolls — used
@@ -742,6 +729,53 @@ struct PlayerInfoContent: View {
 private extension [CommentDisplay] {
     func containsComment(_ comment: CommentDisplay) -> Bool {
         contains { $0.id == comment.id }
+    }
+}
+
+struct TimestampCommentPreviewIndex {
+    private struct Entry {
+        let comment: CommentDisplay
+        let timestamp: CommentTimestamp
+        let commentIndex: Int
+    }
+
+    private var signature = ""
+    private var entries: [Entry] = []
+    private let activeWindow = 10
+
+    mutating func updateIfNeeded(_ comments: [CommentDisplay]) {
+        let newSignature = signature(for: comments)
+        guard newSignature != signature else { return }
+        signature = newSignature
+        entries = comments.enumerated().flatMap { index, comment in
+            comment.timestamps.map { Entry(comment: comment, timestamp: $0, commentIndex: index) }
+        }
+        .sorted {
+            if $0.timestamp.seconds == $1.timestamp.seconds {
+                return $0.commentIndex < $1.commentIndex
+            }
+            return $0.timestamp.seconds < $1.timestamp.seconds
+        }
+    }
+
+    func activeComment(at playhead: Int) -> CommentDisplay? {
+        var best: Entry?
+        for entry in entries {
+            if entry.timestamp.seconds > playhead { break }
+            guard playhead < entry.timestamp.seconds + activeWindow else { continue }
+            if best == nil
+                || entry.timestamp.seconds > best!.timestamp.seconds
+                || (entry.timestamp.seconds == best!.timestamp.seconds
+                    && entry.commentIndex < best!.commentIndex) {
+                best = entry
+            }
+        }
+        return best?.comment
+    }
+
+    private func signature(for comments: [CommentDisplay]) -> String {
+        guard let first = comments.first else { return "empty" }
+        return "\(comments.count)|\(first.id)|\(comments.last?.id ?? "")"
     }
 }
 
