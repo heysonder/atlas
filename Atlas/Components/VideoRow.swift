@@ -15,6 +15,10 @@ struct VideoRow: View {
     var channelIDFallback: String? = nil
     /// Marks the thumbnail as already watched (dimmed, with a "Watched" badge).
     var watched: Bool = false
+    /// Reserves space for a full two-line title even when the title is one line,
+    /// so cards keep a uniform height when tiled in a grid — otherwise short
+    /// titles leave ragged gaps and the columns drift into a masonry look.
+    var reservesTitleSpace: Bool = false
     var onPlay: () -> Void
     @State private var collaborators: [CreatorChannel] = []
 
@@ -69,7 +73,7 @@ struct VideoRow: View {
         Button(action: onPlay) {
             Text(item.displayTitle)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: reservesTitleSpace)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
