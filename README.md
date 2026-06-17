@@ -26,7 +26,7 @@ SwiftUI + Liquid Glass, targeting iOS 26.
 - **`PipedKit/`** — Codable models, `PipedClient`, instance directory, and
   stream-selection logic.
 - **`Atlas/`** — the SwiftUI app, organized as:
-  - `App/` — entry point, `@Observable` `AppModel`, root view, orientation gate
+  - `App/` — entry point, `@Observable` `AppModel`, and root view
   - `Models/` — SwiftData `@Model` types (one per file: subscriptions, playlists, history)
   - `Features/` — feature-grouped screens (Feed, Channels, Search, Player, Downloads, Playlists, Profile, Recommendations)
   - `Components/` — reusable views (`VideoRow`, `Thumbnail`, `Avatar`, `CreatorChannelControl`, `GroupedVideoList`, …)
