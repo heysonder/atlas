@@ -6,6 +6,7 @@ import PipedKit
 struct SearchView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var hSize
 
     struct Results { var channels: [StreamItem]; var videos: [StreamItem] }
 
@@ -88,14 +89,7 @@ struct SearchView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Matching channels first.
-                    ForEach(results.channels.prefix(3)) { item in
-                        if let id = item.ownChannelID {
-                            NavigationLink(value: id) { ChannelResultRow(item: item) }
-                                .buttonStyle(.plain)
-                            Divider().padding(.leading, 76)
-                        }
-                    }
+                    channelResults(results.channels)
                     if !results.channels.isEmpty {
                         Color.clear.frame(height: 12)
                     }
@@ -106,6 +100,32 @@ struct SearchView: View {
                 }
                 .padding(.horizontal)
                 .padding(.top, 8)
+            }
+        }
+    }
+
+    /// The top matching channels. iPhone shows divider-separated rows; iPad tiles
+    /// them into the same adaptive card grid the rest of the library uses.
+    @ViewBuilder private func channelResults(_ channels: [StreamItem]) -> some View {
+        let top = Array(channels.prefix(3))
+        if hSize == .regular {
+            LazyVGrid(columns: LibraryGrid.columns(minCardWidth: 320), spacing: LibraryGrid.spacing) {
+                ForEach(top) { item in
+                    if let id = item.ownChannelID {
+                        NavigationLink(value: id) {
+                            ChannelResultRow(item: item).libraryCard()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        } else {
+            ForEach(top) { item in
+                if let id = item.ownChannelID {
+                    NavigationLink(value: id) { ChannelResultRow(item: item) }
+                        .buttonStyle(.plain)
+                    Divider().padding(.leading, 76)
+                }
             }
         }
     }

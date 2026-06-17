@@ -7,6 +7,7 @@ struct DownloadsView: View {
     @Environment(AppModel.self) private var app
     @Environment(DownloadManager.self) private var downloads
     @Environment(\.modelContext) private var context
+    @Environment(\.horizontalSizeClass) private var hSize
     @Query(sort: \DownloadedVideo.createdAt, order: .reverse) private var saved: [DownloadedVideo]
 
     private var inFlight: [DownloadManager.ActiveDownload] {
@@ -19,6 +20,8 @@ struct DownloadsView: View {
                 ContentUnavailableView("No downloads",
                     systemImage: "arrow.down.circle",
                     description: Text("Long-press any video and choose Download to save it for offline."))
+            } else if hSize == .regular {
+                gridLayout
             } else {
                 List {
                     if !inFlight.isEmpty {
@@ -49,6 +52,49 @@ struct DownloadsView: View {
         }
         .navigationTitle("Downloads")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// iPad: in-flight downloads stay full-width (their progress bars want the
+    /// room); finished downloads tile into the adaptive multi-column grid.
+    private var gridLayout: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if !inFlight.isEmpty {
+                    sectionHeader("Downloading")
+                    ForEach(inFlight) { item in
+                        ActiveRow(item: item,
+                                  onCancel: { downloads.cancel(item.id) },
+                                  onDismiss: { downloads.dismissFailed(item.id) })
+                            .libraryCard()
+                    }
+                }
+                if !saved.isEmpty {
+                    if !inFlight.isEmpty { sectionHeader("Saved") }
+                    LazyVGrid(columns: LibraryGrid.columns(), spacing: LibraryGrid.spacing) {
+                        ForEach(saved) { video in
+                            Button { app.playDownloaded(video) } label: {
+                                SavedRow(video: video).libraryCard()
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                QueueMenuItems(request: playRequest(for: video))
+                                Button(role: .destructive) { downloads.remove(video.videoID) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func deleteSaved(_ offsets: IndexSet) {

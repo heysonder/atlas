@@ -164,7 +164,7 @@ struct GroupedVideoList: View {
         return LazyVStack(spacing: spacing) {
             if !lead.isEmpty {
                 LazyVGrid(columns: track, spacing: spacing) {
-                    ForEach(lead) { videoCell($0) }
+                    ForEach(lead) { videoCell($0, reservesTitleSpace: true) }
                 }
             }
             if !shorts.isEmpty {
@@ -176,19 +176,21 @@ struct GroupedVideoList: View {
             }
             if !rest.isEmpty {
                 LazyVGrid(columns: track, spacing: spacing) {
-                    ForEach(rest) { videoCell($0) }
+                    ForEach(rest) { videoCell($0, reservesTitleSpace: true) }
                 }
             }
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { gridWidth = $0 }
     }
 
-    /// One video card, shared by the stack and grid layouts.
-    private func videoCell(_ item: StreamItem) -> some View {
+    /// One video card, shared by the stack and grid layouts. The grid reserves a
+    /// two-line title height so every card matches, keeping the columns aligned.
+    private func videoCell(_ item: StreamItem, reservesTitleSpace: Bool = false) -> some View {
         VideoRow(item: item,
                  avatarFallback: avatarFallback,
                  channelIDFallback: channelIDFallback,
-                 watched: isWatched(item)) { onPlay(item) }
+                 watched: isWatched(item),
+                 reservesTitleSpace: reservesTitleSpace) { onPlay(item) }
             .videoContextMenu(
                 item,
                 playlists: menuPlaylists,
