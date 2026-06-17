@@ -6,8 +6,8 @@ import VideoToolbox
 import PipedKit
 
 /// Presents the native fullscreen `AVPlayerViewController` directly (no SwiftUI
-/// cover), so there's a single slide-up/down. Handles Picture-in-Picture:
-/// keeps the player alive when PiP takes over and re-attaches on restore.
+/// cover), so there's a single slide-up/down. AVKit owns system Now Playing
+/// state and keeps the player attached for background audio and PiP.
 struct VideoPlayerPresenter: UIViewControllerRepresentable {
     @Binding var request: PlayRequest?
     let app: AppModel
@@ -53,11 +53,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
         private let infoButtonModel = InfoButtonModel()
         private let debugModel = PlayerDebugModel()
-        private let nowPlayingSession = PlayerNowPlayingSession()
         private let infoPlaybackTime = PlayerPlaybackTime()
         private var timeControlObservation: NSKeyValueObservation?
         private var infoCommentTimeObserver: Any?
-        private var detachedForBackground = false
         // SponsorBlock: skippable segments + the overlay button that offers them.
         private var sponsorSegments: [SponsorSegment] = []
         private var sponsorObserver: Any?
@@ -69,45 +67,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             self.modelContext = modelContext
             self.clearRequest = clearRequest
             super.init()
-            observeAppLifecycle()
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-
-        // MARK: Background audio
-        //
-        // A fullscreen-presented `AVPlayerViewController` is paused by the system
-        // when the app backgrounds (it isn't "inline", so PiP doesn't auto-start).
-        // To keep *audio* going, we detach the player from the controller on the
-        // way to the background — an unattached `AVPlayer` keeps playing under the
-        // `.playback` audio session — and reattach the video when we return.
-
-        private func observeAppLifecycle() {
-            let nc = NotificationCenter.default
-            nc.addObserver(self, selector: #selector(appDidEnterBackground),
-                           name: UIApplication.didEnterBackgroundNotification, object: nil)
-            nc.addObserver(self, selector: #selector(appWillEnterForeground),
-                           name: UIApplication.willEnterForegroundNotification, object: nil)
-        }
-
-        @objc private func appDidEnterBackground(_ note: Notification) { handleEnterBackground() }
-        @objc private func appWillEnterForeground(_ note: Notification) { handleEnterForeground() }
-
-        private func handleEnterBackground() {
-            guard !pipActive, let player, playerVC != nil,
-                  player.timeControlStatus != .paused else { return }
-            playerVC?.player = nil
-            detachedForBackground = true
-            player.play()
-            nowPlayingSession.refresh()
-        }
-
-        private func handleEnterForeground() {
-            guard detachedForBackground, let player else { return }
-            detachedForBackground = false
-            playerVC?.player = player
         }
 
         func sync(request: PlayRequest?) {
@@ -134,12 +93,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             controller.delegate = self
             controller.allowsPictureInPicturePlayback = true
             controller.canStartPictureInPictureAutomaticallyFromInline = true
-            // PlayerNowPlayingSession owns system metadata and remote commands.
-            // This controller is detached from the player while backgrounded; if
-            // AVPlayerViewController also publishes Now Playing state, it can
-            // overwrite the live session with a nil/stale player and disable
-            // Lock Screen / Control Center controls.
-            controller.updatesNowPlayingInfoCenter = false
+            controller.updatesNowPlayingInfoCenter = true
             controller.modalPresentationStyle = .fullScreen
             self.player = player
             self.playerVC = controller
@@ -174,11 +128,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 // TEST: leave preferredForwardBufferDuration at its default (0 = system-managed).
                 initialItem.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: initialItem)
-                nowPlayingSession.activate(
-                    player: player,
-                    title: detail.title ?? request.title,
-                    artist: detail.uploader ?? request.uploader,
-                    artworkURLString: detail.thumbnailUrl ?? request.thumbnail)
                 PlayerCaptionSelection.keepOffByDefault(for: initialItem)
                 installEndObserver(for: initialItem)
                 installItemDiagnostics(
@@ -232,11 +181,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             let item = AVPlayerItem(url: fileURL)
             item.externalMetadata = metadata
             player.replaceCurrentItem(with: item)
-            nowPlayingSession.activate(
-                player: player,
-                title: request.title,
-                artist: request.uploader,
-                artworkURLString: request.thumbnail)
             PlayerCaptionSelection.keepOffByDefault(for: item)
             installEndObserver(for: item)
             installItemDiagnostics(for: item, videoID: request.videoID, source: "local")
@@ -495,7 +439,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             sponsorModel.prompt = nil
             removeEndObserver()
             removeItemDiagnostics()
-            nowPlayingSession.deactivate()
             statusObservation?.invalidate()
             statusObservation = nil
             timeControlObservation?.invalidate()
@@ -677,7 +620,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             infoCommentTimeObserver = nil
             removeEndObserver()
             removeItemDiagnostics()
-            nowPlayingSession.deactivate()
             sponsorSegments = []
             sponsorModel.prompt = nil
             statusObservation?.invalidate()
@@ -708,7 +650,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             currentRequest = nil
             currentDetail = nil
             pipActive = false
-            detachedForBackground = false
         }
 
         private func showError(on controller: AVPlayerViewController, _ message: String) {

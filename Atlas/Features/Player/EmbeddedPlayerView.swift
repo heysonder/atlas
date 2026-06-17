@@ -163,8 +163,7 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
         let controller = InlinePlayerController()
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
-        // EmbeddedPlayerModel publishes Now Playing through PlayerNowPlayingSession.
-        controller.updatesNowPlayingInfoCenter = false
+        controller.updatesNowPlayingInfoCenter = true
         controller.videoGravity = .resizeAspect
         controller.onClose = onClose
         if isReady { controller.player = player }
@@ -308,7 +307,6 @@ final class EmbeddedPlayerModel {
     private var started = false
     private var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
-    private let nowPlayingSession = PlayerNowPlayingSession()
 
     private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
@@ -350,11 +348,6 @@ final class EmbeddedPlayerModel {
             let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
             initialItem.externalMetadata = baseMetadata
             player.replaceCurrentItem(with: initialItem)
-            nowPlayingSession.activate(
-                player: player,
-                title: detail.title ?? request.title,
-                artist: detail.uploader ?? request.uploader,
-                artworkURLString: detail.thumbnailUrl ?? request.thumbnail)
             PlayerCaptionSelection.keepOffByDefault(for: initialItem)
             installEndObserver(for: initialItem)
             installItemDiagnostics(
@@ -393,11 +386,6 @@ final class EmbeddedPlayerModel {
         let item = AVPlayerItem(url: fileURL)
         item.externalMetadata = metadata
         player.replaceCurrentItem(with: item)
-        nowPlayingSession.activate(
-            player: player,
-            title: request.title,
-            artist: request.uploader,
-            artworkURLString: request.thumbnail)
         PlayerCaptionSelection.keepOffByDefault(for: item)
         installEndObserver(for: item)
         installItemDiagnostics(for: item, videoID: request.videoID, source: "local")
@@ -427,7 +415,6 @@ final class EmbeddedPlayerModel {
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
         removeEndObserver()
         removeItemDiagnostics()
-        nowPlayingSession.deactivate()
         statusObservation?.invalidate()
         statusObservation = nil
         timeControlObservation?.invalidate()
@@ -608,7 +595,6 @@ final class EmbeddedPlayerModel {
                 : currentMetadata
             self.usedComposition = true
             self.player.replaceCurrentItem(with: composed)
-            self.nowPlayingSession.refresh()
             PlayerCaptionSelection.keepOffByDefault(for: composed)
             self.installEndObserver(for: composed)
             self.installItemDiagnostics(for: composed, videoID: videoID, source: "composed-upgrade")
@@ -659,7 +645,6 @@ final class EmbeddedPlayerModel {
         timeObserver = nil
         removeEndObserver()
         removeItemDiagnostics()
-        nowPlayingSession.deactivate()
         statusObservation?.invalidate()
         statusObservation = nil
         timeControlObservation?.invalidate()
@@ -782,7 +767,6 @@ final class EmbeddedPlayerModel {
                     : currentMetadata
                 await PlayerAudioSelection.selectPreferredAudio(for: fallback)
                 self.player.replaceCurrentItem(with: fallback)
-                self.nowPlayingSession.refresh()
                 PlayerCaptionSelection.keepOffByDefault(for: fallback)
                 self.installEndObserver(for: fallback)
                 self.installItemDiagnostics(for: fallback, videoID: self.request.videoID, source: "fallback-direct")
