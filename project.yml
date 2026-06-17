@@ -35,8 +35,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         # iPad: all four orientations are required for multitasking (Split View /
-        # Slide Over) unless the app is full-screen-only. OrientationGate returns
-        # .all on iPad, so runtime behavior already matches this declaration.
+        # Slide Over) unless the app is full-screen-only.
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -52,11 +51,8 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
-        # 1 = iPhone, 2 = iPad → Universal. Mac is delivered via Catalyst below.
+        # 1 = iPhone, 2 = iPad → Universal.
         TARGETED_DEVICE_FAMILY: "1,2"
-        SUPPORTS_MACCATALYST: YES
-        # Keep one bundle id across iPhone/iPad/Mac (enables universal purchase).
-        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
 

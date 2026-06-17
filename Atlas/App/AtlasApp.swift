@@ -7,7 +7,6 @@ import AppIntents
 struct AtlasApp: App {
     @State private var app: AppModel
     @State private var downloads: DownloadManager
-    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let modelContainer: ModelContainer
 
     init() {

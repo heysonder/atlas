@@ -7,6 +7,7 @@ xcuserdata/
 
 # Codex local workspace state
 .codex/
+.claude/
 
 # xcodegen output (regenerate with `xcodegen generate`)
 Atlas.xcodeproj/
