@@ -45,9 +45,8 @@ enum IntentDataStore {
     /// Nil means the user has not opted into online Piped calls.
     static var client: PipedClient? {
         if let app { return try? app.client }
-        let raw = UserDefaults.standard.string(forKey: AppModel.instanceKey)
-        let normalized = raw.map(AppModel.normalize) ?? ""
-        return PipedClient(instanceString: normalized)
+        let instanceURL = InstanceStore.live.load()
+        return PipedClient(instanceString: instanceURL)
     }
 
     private static var context: ModelContext? { container?.mainContext }

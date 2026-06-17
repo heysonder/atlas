@@ -26,7 +26,11 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Atlas connects to self-hosted Piped instances on your local network.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

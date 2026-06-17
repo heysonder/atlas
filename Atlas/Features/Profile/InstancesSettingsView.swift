@@ -30,7 +30,7 @@ struct InstancesSettingsView: View {
             } header: {
                 Text("Custom instance")
             } footer: {
-                Text("Point Atlas at your own HTTPS self-hosted Piped API for the most reliable experience.")
+                Text("Use HTTPS for hosted instances. Local and private-network HTTP URLs are allowed for self-hosted Piped APIs.")
             }
         }
         .navigationTitle("Instance")

@@ -91,14 +91,10 @@ final class AppModel {
     /// Persisted instance api_url. Empty means the user has not opted into a
     /// Piped instance, so online surfaces must not create a network client.
     var instanceURLString: String {
-        didSet {
-            if instanceURLString.isEmpty {
-                UserDefaults.standard.removeObject(forKey: Self.instanceKey)
-            } else {
-                UserDefaults.standard.set(instanceURLString, forKey: Self.instanceKey)
-            }
-        }
+        didSet { instanceStore.save(instanceURLString) }
     }
+
+    @ObservationIgnored private let instanceStore: InstanceStore
 
     /// Set to present the player from anywhere.
     var nowPlaying: PlayRequest?
@@ -190,15 +186,12 @@ final class AppModel {
     /// pushes the matching route, then clears it.
     var libraryTarget: LibraryTarget?
 
-    static let instanceKey = "atlas.instanceURL"
+    static let instanceKey = InstanceStore.defaultsKey
     nonisolated static let missingInstanceMessage = "Set a Piped instance in Settings before using online video features."
-    private static let retiredBundledDefaults: Set<String> = [
-        "https://api.piped.private.coffee",
-        "https://pipedapi.cmf.sh",
-    ]
 
-    init(persistenceRecoveryMessage: String? = nil) {
+    init(persistenceRecoveryMessage: String? = nil, instanceStore: InstanceStore = .live) {
         let defaults = UserDefaults.standard
+        self.instanceStore = instanceStore
         self.persistenceRecoveryMessage = persistenceRecoveryMessage
         hideShorts = defaults.bool(forKey: Self.hideShortsKey)
         shortsLayout = defaults.string(forKey: Self.shortsLayoutKey)
@@ -213,16 +206,7 @@ final class AppModel {
         } else {
             sponsorCategories = Self.defaultSponsorCategories
         }
-        let stored = defaults.string(forKey: Self.instanceKey).map(Self.normalize) ?? ""
-        let resolved = Self.retiredBundledDefaults.contains(stored) || !Self.isValidInstanceURL(stored)
-            ? "" : stored
-        instanceURLString = resolved
-        // Self-heal a previously-saved value that was missing its scheme.
-        if resolved.isEmpty {
-            defaults.removeObject(forKey: Self.instanceKey)
-        } else {
-            defaults.set(resolved, forKey: Self.instanceKey)
-        }
+        instanceURLString = instanceStore.load()
     }
 
     /// A client for the currently selected instance.
@@ -272,24 +256,12 @@ final class AppModel {
         Task { _ = try? await resolveStream(videoID) }
     }
 
-    /// Ensures an instance string is a usable absolute URL:
-    /// trims whitespace, drops a trailing slash, and adds `https://` when no scheme is present.
     static func normalize(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return "" }
-        if s.hasSuffix("/") { s.removeLast() }
-        let lower = s.lowercased()
-        if !lower.hasPrefix("http://") && !lower.hasPrefix("https://") {
-            s = "https://" + s
-        }
-        return s
+        InstanceStore.normalize(raw)
     }
 
     static func isValidInstanceURL(_ raw: String) -> Bool {
-        guard let url = URL(string: normalize(raw)),
-              url.scheme?.lowercased() == "https",
-              url.host?.isEmpty == false else { return false }
-        return true
+        InstanceStore.isValidInstanceURL(raw)
     }
 
     func play(_ item: StreamItem) {
