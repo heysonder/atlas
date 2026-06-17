@@ -4,7 +4,7 @@ import PipedKit
 
 /// The contents of the player's "Info" panel: the title, a channel row with
 /// avatar + subscribe toggle, video actions, a collapsible
-/// description, the video's comments, and the upcoming queue. Used both inside
+/// description, the video's comments, chapters, and the upcoming queue. Used both inside
 /// `PlayerInfoSheet` (over the full-screen player) and inline beneath the
 /// embedded player.
 struct PlayerInfoContent: View {
@@ -125,13 +125,6 @@ struct PlayerInfoContent: View {
 
             descriptionBlock
 
-            if !visibleChapters.isEmpty {
-                Divider()
-                chaptersSection
-            }
-
-            Divider()
-
             PlayerInfoCommentsSection(
                 loader: loader,
                 videoID: videoID,
@@ -139,6 +132,11 @@ struct PlayerInfoContent: View {
                 inline: inline,
                 timestampPreviewIndex: $timestampPreviewIndex,
                 onTimestampTap: onTimestampTap)
+
+            if !visibleChapters.isEmpty {
+                Divider()
+                chaptersSection
+            }
 
             if !app.queuedVideos.isEmpty {
                 Divider()

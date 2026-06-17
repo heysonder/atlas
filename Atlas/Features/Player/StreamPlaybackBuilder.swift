@@ -3,23 +3,62 @@ import CoreMedia
 import PipedKit
 
 enum StreamPlaybackBuilder {
-    /// Builds the highest-quality playable item: first try composing the best
-    /// video-only + audio streams, then fall back to HLS/progressive playback.
+    enum PlaybackSource: Equatable {
+        case direct(URL)
+        case composed(video: URL, audio: URL)
+    }
+
+    /// Builds the fastest playable item first. Direct HLS/progressive playback
+    /// lets AVPlayer start buffering immediately; composing separate video/audio
+    /// tracks is kept only for videos that expose no direct playable URL.
     static func makePlayerItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
         preferredLanguages: [String] = Locale.preferredLanguages
     ) async -> (item: AVPlayerItem, composed: Bool)? {
-        if let source = detail.bestComposedSource(allowAV1: allowAV1, preferredLanguages: preferredLanguages),
-           let composed = await composedItem(video: source.video, audio: source.audio) {
+        switch preferredSource(detail, allowAV1: allowAV1, preferredLanguages: preferredLanguages) {
+        case .direct(let url):
+            return (AVPlayerItem(url: url), false)
+        case .composed(let video, let audio):
+            guard let composed = await composedItem(video: video, audio: audio) else { return nil }
             return (composed, true)
+        case nil:
+            return nil
         }
-        guard let fallback = fallbackPlayerItem(for: detail) else { return nil }
-        return (fallback, false)
+    }
+
+    static func preferredSource(
+        _ detail: VideoDetail,
+        allowAV1: Bool,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> PlaybackSource? {
+        if let url = detail.playableURL { return .direct(url) }
+        guard let source = detail.bestComposedSource(
+            allowAV1: allowAV1,
+            preferredLanguages: preferredLanguages
+        ) else {
+            return nil
+        }
+        return .composed(video: source.video, audio: source.audio)
     }
 
     static func fallbackPlayerItem(for detail: VideoDetail) -> AVPlayerItem? {
         makeFastStartPlayerItem(detail)
+    }
+
+    static func makeComposedPlayerItem(
+        _ detail: VideoDetail,
+        allowAV1: Bool,
+        preferredLanguages: [String] = Locale.preferredLanguages,
+        timeout: TimeInterval? = nil
+    ) async -> AVPlayerItem? {
+        guard let source = detail.bestComposedSource(
+            allowAV1: allowAV1,
+            preferredLanguages: preferredLanguages
+        ) else {
+            return nil
+        }
+        return await composedItem(video: source.video, audio: source.audio, timeout: timeout)
     }
 
     /// Builds the fastest item AVPlayer can open directly. HLS is adaptive, and
@@ -30,9 +69,21 @@ enum StreamPlaybackBuilder {
         return AVPlayerItem(url: url)
     }
 
-    private static func composedItem(video videoURL: URL, audio audioURL: URL) async -> AVPlayerItem? {
+    private static func composedItem(
+        video videoURL: URL,
+        audio audioURL: URL,
+        timeout: TimeInterval? = nil
+    ) async -> AVPlayerItem? {
         let videoAsset = AVURLAsset(url: videoURL)
         let audioAsset = AVURLAsset(url: audioURL)
+        let timeoutTask = Task {
+            guard let timeout else { return }
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            videoAsset.cancelLoading()
+            audioAsset.cancelLoading()
+        }
+        defer { timeoutTask.cancel() }
+
         let composition = AVMutableComposition()
         do {
             guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,

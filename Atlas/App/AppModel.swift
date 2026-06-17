@@ -114,6 +114,12 @@ final class AppModel {
     }
     static let playerStyleKey = "atlas.playerStyle"
 
+    /// Shows an opt-in playback diagnostics HUD over the player.
+    var statsForNerdsEnabled: Bool {
+        didSet { UserDefaults.standard.set(statsForNerdsEnabled, forKey: Self.statsForNerdsKey) }
+    }
+    static let statsForNerdsKey = "atlas.player.statsForNerds"
+
     /// When on, YouTube Shorts are hidden from the feed, search, and channels.
     var hideShorts: Bool {
         didSet { UserDefaults.standard.set(hideShorts, forKey: Self.hideShortsKey) }
@@ -198,6 +204,7 @@ final class AppModel {
             .flatMap(ShortsLayout.init(rawValue:)) ?? .inline
         playerStyle = defaults.string(forKey: Self.playerStyleKey)
             .flatMap(PlayerStyle.init(rawValue:)) ?? .fullscreen
+        statsForNerdsEnabled = defaults.bool(forKey: Self.statsForNerdsKey)
         // SponsorBlock defaults to on; absent key means a fresh install.
         sponsorBlockEnabled = defaults.object(forKey: Self.sponsorBlockKey) == nil
             ? true : defaults.bool(forKey: Self.sponsorBlockKey)

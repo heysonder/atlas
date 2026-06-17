@@ -42,12 +42,18 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var pipActive = false
         private var timeObserver: Any?
         private var endObserver: NSObjectProtocol?
+        private var itemDiagnosticObservers: [NSObjectProtocol] = []
         private var statusObservation: NSKeyValueObservation?
+        private var compositionUpgradeTask: Task<Void, Never>?
+        private var activePlaybackSource = "unknown"
         private var currentRequest: PlayRequest?
         private var currentDetail: VideoDetail?
         private var usedComposition = false
         private var infoButtonHost: UIHostingController<InfoOverlayButton>?
+        private var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
         private let infoButtonModel = InfoButtonModel()
+        private let debugModel = PlayerDebugModel()
+        private let nowPlayingSession = PlayerNowPlayingSession()
         private let infoPlaybackTime = PlayerPlaybackTime()
         private var timeControlObservation: NSKeyValueObservation?
         private var infoCommentTimeObserver: Any?
@@ -95,6 +101,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             playerVC?.player = nil
             detachedForBackground = true
             player.play()
+            nowPlayingSession.refresh()
         }
 
         private func handleEnterForeground() {
@@ -127,12 +134,16 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             controller.delegate = self
             controller.allowsPictureInPicturePlayback = true
             controller.canStartPictureInPictureAutomaticallyFromInline = true
-            controller.updatesNowPlayingInfoCenter = true
+            // PlayerNowPlayingSession owns system metadata and remote commands.
+            // This controller is detached from the player while backgrounded; if
+            // AVPlayerViewController also publishes Now Playing state, it can
+            // overwrite the live session with a nil/stale player and disable
+            // Lock Screen / Control Center controls.
+            controller.updatesNowPlayingInfoCenter = false
             controller.modalPresentationStyle = .fullScreen
             self.player = player
             self.playerVC = controller
 
-            Orientation.allowVideo()
             presenter.presentModal(controller)
 
             loadTask?.cancel()
@@ -147,7 +158,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             do {
                 let detail = try await app.resolveStream(request.videoID)
                 guard !Task.isCancelled else { return }
-                let baseMetadata = Self.metadata(detail, request)
+                let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
                 guard let playback = await StreamPlaybackBuilder.makePlayerItem(
                     detail,
                     allowAV1: Self.supportsAV1
@@ -163,14 +174,27 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 // TEST: leave preferredForwardBufferDuration at its default (0 = system-managed).
                 initialItem.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: initialItem)
+                nowPlayingSession.activate(
+                    player: player,
+                    title: detail.title ?? request.title,
+                    artist: detail.uploader ?? request.uploader,
+                    artworkURLString: detail.thumbnailUrl ?? request.thumbnail)
                 PlayerCaptionSelection.keepOffByDefault(for: initialItem)
                 installEndObserver(for: initialItem)
+                installItemDiagnostics(
+                    for: initialItem,
+                    videoID: request.videoID,
+                    source: playback.composed ? "composed-initial" : "direct-initial")
+                debugModel.configure(detail: detail, composed: playback.composed, allowAV1: Self.supportsAV1)
+                NSLog("Atlas.player: start videoID=\(request.videoID) source=\(playback.composed ? "composed" : "direct")")
                 if playback.composed { observeForFailure(initialItem, detail: detail, player: player) }
-                attachArtwork(to: initialItem,
-                              urlString: detail.thumbnailUrl ?? request.thumbnail,
-                              base: baseMetadata)
+                PlayerNowPlayingMetadata.attachArtwork(
+                    to: initialItem,
+                    urlString: detail.thumbnailUrl ?? request.thumbnail,
+                    base: baseMetadata)
 
                 currentDetail = detail
+                installDebugOverlay(on: controller)
                 installInfoButton(on: controller)
                 // Resume from a saved position (ignore if we're at/near the end).
                 if let resume = savedPosition(for: request.videoID),
@@ -180,6 +204,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 // TEST: default playback start (waits to minimize stalling) instead of playImmediately.
                 player.play()
                 installProgressTracking(on: player)
+                if !playback.composed {
+                    startComposedUpgradeIfAvailable(
+                        detail: detail,
+                        request: request,
+                        baseMetadata: baseMetadata,
+                        player: player)
+                }
                 loadSponsorSegments(for: request, player: player, controller: controller)
                 recordHistory(detail, request)
             } catch {
@@ -197,13 +228,22 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             player: AVPlayer,
             controller: AVPlayerViewController
         ) {
-            let metadata = Self.localMetadata(request)
+            let metadata = PlayerNowPlayingMetadata.local(request)
             let item = AVPlayerItem(url: fileURL)
             item.externalMetadata = metadata
             player.replaceCurrentItem(with: item)
+            nowPlayingSession.activate(
+                player: player,
+                title: request.title,
+                artist: request.uploader,
+                artworkURLString: request.thumbnail)
             PlayerCaptionSelection.keepOffByDefault(for: item)
             installEndObserver(for: item)
-            attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
+            installItemDiagnostics(for: item, videoID: request.videoID, source: "local")
+            debugModel.configureLocal()
+            NSLog("Atlas.player: start videoID=\(request.videoID) source=local")
+            installDebugOverlay(on: controller)
+            PlayerNowPlayingMetadata.attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
             Task {
                 if let resume = savedPosition(for: request.videoID),
@@ -226,7 +266,14 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main
             ) { [weak self] time in
-                MainActor.assumeIsolated { self?.savePosition(time.seconds) }
+                let seconds = time.seconds
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.savePosition(seconds)
+                    if let player = self.player {
+                        self.debugModel.update(player: player, source: self.activePlaybackSource)
+                    }
+                }
             }
         }
 
@@ -248,7 +295,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 object: item,
                 queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated {
+                Task { @MainActor [weak self] in
                     self?.playbackEndedNaturally()
                 }
             }
@@ -258,6 +305,162 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             if let endObserver {
                 NotificationCenter.default.removeObserver(endObserver)
                 self.endObserver = nil
+            }
+        }
+
+        private func installItemDiagnostics(for item: AVPlayerItem, videoID: String, source: String) {
+            removeItemDiagnostics()
+            activePlaybackSource = source
+            let center = NotificationCenter.default
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: item,
+                queue: .main
+            ) { [weak item] _ in
+                Task { @MainActor [weak item] in
+                    NSLog("Atlas.player: stalled videoID=\(videoID) source=\(source) error=\(Self.itemErrorSummary(item))")
+                }
+            })
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak item] note in
+                let notificationError = (note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
+                    .localizedDescription ?? "none"
+                Task { @MainActor [weak item] in
+                    NSLog("Atlas.player: failedToPlayToEnd videoID=\(videoID) source=\(source) notificationError=\(notificationError) itemError=\(Self.itemErrorSummary(item))")
+                }
+            })
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemNewErrorLogEntry,
+                object: item,
+                queue: .main
+            ) { [weak item] _ in
+                Task { @MainActor [weak item] in
+                    NSLog("Atlas.player: errorLog videoID=\(videoID) source=\(source) error=\(Self.itemErrorSummary(item))")
+                }
+            })
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemNewAccessLogEntry,
+                object: item,
+                queue: .main
+            ) { [weak self, weak item] _ in
+                Task { @MainActor [weak self, weak item] in
+                    self?.debugModel.updateAccessLog(item)
+                    NSLog("Atlas.player: accessLog videoID=\(videoID) source=\(source) \(Self.accessLogSummary(item))")
+                }
+            })
+        }
+
+        private func removeItemDiagnostics() {
+            for observer in itemDiagnosticObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            itemDiagnosticObservers.removeAll()
+        }
+
+        private static func itemErrorSummary(_ item: AVPlayerItem?) -> String {
+            guard let item else { return "missing item" }
+            if let event = item.errorLog()?.events.last {
+                return "status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(event.errorComment ?? "none") uri=\(event.uri ?? "none")"
+            }
+            return item.error?.localizedDescription ?? "no item error"
+        }
+
+        private static func accessLogSummary(_ item: AVPlayerItem?) -> String {
+            guard let event = item?.accessLog()?.events.last else { return "no access log" }
+            return "indicatedBitrate=\(Int(event.indicatedBitrate)) observedBitrate=\(Int(event.observedBitrate)) stalls=\(event.numberOfStalls) bytes=\(event.numberOfBytesTransferred) uri=\(event.uri ?? "none")"
+        }
+
+        private static func itemStateSummary(_ item: AVPlayerItem?) -> String {
+            guard let item else { return "missing item" }
+            let bufferEnd = item.loadedTimeRanges
+                .map(\.timeRangeValue)
+                .map { $0.start.seconds + $0.duration.seconds }
+                .filter(\.isFinite)
+                .max()
+            let bufferEndText = bufferEnd.map { String($0) } ?? "none"
+            return "itemStatus=\(itemStatusName(item.status)) likely=\(item.isPlaybackLikelyToKeepUp) bufferEmpty=\(item.isPlaybackBufferEmpty) bufferFull=\(item.isPlaybackBufferFull) bufferEnd=\(bufferEndText) error=\(itemErrorSummary(item))"
+        }
+
+        private static func itemStatusName(_ status: AVPlayerItem.Status) -> String {
+            switch status {
+            case .unknown: "unknown"
+            case .readyToPlay: "ready"
+            case .failed: "failed"
+            @unknown default: "unrecognized"
+            }
+        }
+
+        private static func timeControlStatusName(_ status: AVPlayer.TimeControlStatus) -> String {
+            switch status {
+            case .paused: "paused"
+            case .waitingToPlayAtSpecifiedRate: "waiting"
+            case .playing: "playing"
+            @unknown default: "unrecognized"
+            }
+        }
+
+        private func logTimeControl(_ player: AVPlayer) {
+            let videoID = currentRequest?.videoID ?? presentedID ?? "unknown"
+            let reason = player.reasonForWaitingToPlay?.rawValue ?? "none"
+            let seconds = player.currentTime().seconds
+            let secondsText = seconds.isFinite ? String(seconds) : "none"
+            debugModel.update(player: player, source: activePlaybackSource)
+            NSLog("Atlas.player: timeControl videoID=\(videoID) source=\(activePlaybackSource) status=\(Self.timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate) seconds=\(secondsText) \(Self.itemStateSummary(player.currentItem))")
+        }
+
+        private func startComposedUpgradeIfAvailable(
+            detail: VideoDetail,
+            request: PlayRequest,
+            baseMetadata: [AVMetadataItem],
+            player: AVPlayer
+        ) {
+            guard detail.bestComposedSource(allowAV1: Self.supportsAV1) != nil else { return }
+            NSLog("Atlas.player: composed upgrade scheduled videoID=\(request.videoID)")
+            compositionUpgradeTask?.cancel()
+            let videoID = request.videoID
+            compositionUpgradeTask = Task { [weak self, weak player] in
+                let startedAt = Date()
+                guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
+                    detail,
+                    allowAV1: Self.supportsAV1,
+                    timeout: 20
+                ) else {
+                    NSLog("Atlas.player: composed upgrade unavailable videoID=\(videoID) elapsed=\(Date().timeIntervalSince(startedAt))")
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await PlayerAudioSelection.selectPreferredAudio(for: composed)
+                guard !Task.isCancelled,
+                      let self,
+                      let player,
+                      self.presentedID == videoID,
+                      self.currentRequest?.videoID == videoID,
+                      !self.usedComposition else {
+                    return
+                }
+
+                let resume = player.currentTime()
+                let wasPlaying = player.timeControlStatus != .paused
+                let currentMetadata = player.currentItem?.externalMetadata ?? []
+                composed.externalMetadata = currentMetadata.isEmpty ? baseMetadata : currentMetadata
+                self.usedComposition = true
+                player.replaceCurrentItem(with: composed)
+                PlayerCaptionSelection.keepOffByDefault(for: composed)
+                self.installEndObserver(for: composed)
+                self.installItemDiagnostics(for: composed, videoID: videoID, source: "composed-upgrade")
+                self.debugModel.configure(detail: detail, composed: true, allowAV1: Self.supportsAV1)
+                self.observeForFailure(composed, detail: detail, player: player)
+                if resume.isValid && resume.seconds.isFinite {
+                    await player.seek(
+                        to: resume,
+                        toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                        toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+                }
+                if wasPlaying { player.playImmediately(atRate: 1.0) }
+                NSLog("Atlas.player: composed upgrade swapped videoID=\(videoID) seconds=\(resume.seconds) elapsed=\(Date().timeIntervalSince(startedAt))")
             }
         }
 
@@ -280,6 +483,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func resetForItemReplacement(on player: AVPlayer) {
             loadTask?.cancel()
             loadTask = nil
+            compositionUpgradeTask?.cancel()
+            compositionUpgradeTask = nil
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
             if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
@@ -289,18 +494,26 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             sponsorSegments = []
             sponsorModel.prompt = nil
             removeEndObserver()
+            removeItemDiagnostics()
+            nowPlayingSession.deactivate()
             statusObservation?.invalidate()
             statusObservation = nil
             timeControlObservation?.invalidate()
             timeControlObservation = nil
             infoButtonModel.isPaused = false
             infoPlaybackTime.seconds = nil
+            activePlaybackSource = "unknown"
+            debugModel.reset()
             usedComposition = false
             currentDetail = nil
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
             infoButtonHost?.removeFromParent()
             infoButtonHost = nil
+            debugOverlayHost?.willMove(toParent: nil)
+            debugOverlayHost?.view.removeFromSuperview()
+            debugOverlayHost?.removeFromParent()
+            debugOverlayHost = nil
             skipButtonHost?.willMove(toParent: nil)
             skipButtonHost?.view.removeFromSuperview()
             skipButtonHost?.removeFromParent()
@@ -346,7 +559,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             sponsorObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main
             ) { [weak self] time in
-                MainActor.assumeIsolated { self?.updateSponsorPrompt(at: time.seconds) }
+                let seconds = time.seconds
+                Task { @MainActor [weak self] in
+                    self?.updateSponsorPrompt(at: seconds)
+                }
             }
         }
 
@@ -443,12 +659,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
         private func cleanup() {
             hardStop()
-            Orientation.lockPortrait()
         }
 
         private func hardStop() {
             loadTask?.cancel()
             loadTask = nil
+            compositionUpgradeTask?.cancel()
+            compositionUpgradeTask = nil
             if let player {
                 if let t = player.currentTime().seconds as Double?, t.isFinite { savePosition(t) }
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -459,6 +676,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             sponsorObserver = nil
             infoCommentTimeObserver = nil
             removeEndObserver()
+            removeItemDiagnostics()
+            nowPlayingSession.deactivate()
             sponsorSegments = []
             sponsorModel.prompt = nil
             statusObservation?.invalidate()
@@ -467,11 +686,17 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             timeControlObservation = nil
             infoButtonModel.isPaused = false
             infoPlaybackTime.seconds = nil
+            activePlaybackSource = "unknown"
+            debugModel.reset()
             usedComposition = false
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
             infoButtonHost?.removeFromParent()
             infoButtonHost = nil
+            debugOverlayHost?.willMove(toParent: nil)
+            debugOverlayHost?.view.removeFromSuperview()
+            debugOverlayHost?.removeFromParent()
+            debugOverlayHost = nil
             skipButtonHost?.willMove(toParent: nil)
             skipButtonHost?.view.removeFromSuperview()
             skipButtonHost?.removeFromParent()
@@ -504,6 +729,29 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         // MARK: Info panel (title · description · subscribe)
+
+        private func installDebugOverlay(on controller: AVPlayerViewController) {
+            guard app.statsForNerdsEnabled,
+                  debugOverlayHost == nil,
+                  let overlay = controller.contentOverlayView else { return }
+            let host = UIHostingController(rootView: PlayerDebugOverlay(model: debugModel))
+            host.view.backgroundColor = .clear
+            host.view.translatesAutoresizingMaskIntoConstraints = false
+            controller.addChild(host)
+            overlay.addSubview(host.view)
+            host.didMove(toParent: controller)
+            let guide = overlay.safeAreaLayoutGuide
+            NSLayoutConstraint.activate([
+                host.view.topAnchor.constraint(equalTo: guide.topAnchor),
+                host.view.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+                host.view.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+                host.view.trailingAnchor.constraint(equalTo: guide.trailingAnchor)
+            ])
+            if let player = controller.player {
+                debugModel.update(player: player, source: activePlaybackSource)
+            }
+            overlay.bringSubviewToFront(host.view)
+        }
 
         /// iOS's `AVPlayerViewController` has no public API to add transport-bar
         /// buttons (those are tvOS-only), so we layer a small Liquid Glass "Info"
@@ -538,10 +786,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             timeControlObservation?.invalidate()
             guard let player else { return }
             infoButtonModel.isPaused = player.timeControlStatus == .paused
+            logTimeControl(player)
             timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) {
-                [weak self] player, _ in
-                MainActor.assumeIsolated {
-                    self?.infoButtonModel.isPaused = player.timeControlStatus == .paused
+                [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, let player = self.player else { return }
+                    self.infoButtonModel.isPaused = player.timeControlStatus == .paused
+                    self.logTimeControl(player)
                 }
             }
         }
@@ -553,7 +804,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             infoCommentTimeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 1, preferredTimescale: 2), queue: .main
             ) { [weak self] time in
-                MainActor.assumeIsolated { self?.updateInfoPlaybackTime(time.seconds) }
+                let seconds = time.seconds
+                Task { @MainActor [weak self] in
+                    self?.updateInfoPlaybackTime(seconds)
+                }
             }
         }
 
@@ -700,76 +954,30 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
                     let resume = player.currentTime()
-                    fallback.externalMetadata = Self.metadata(detail, self.currentRequest ?? PlayRequest(
-                        videoID: detail.channelID ?? "", title: detail.title ?? ""))
+                    NSLog("Atlas.player: composed status failed videoID=\(self.currentRequest?.videoID ?? "unknown") error=\(Self.itemErrorSummary(item))")
+                    let currentMetadata = player.currentItem?.externalMetadata ?? []
+                    fallback.externalMetadata = currentMetadata.isEmpty
+                        ? PlayerNowPlayingMetadata.streaming(
+                            detail,
+                            request: self.currentRequest ?? PlayRequest(
+                                videoID: detail.channelID ?? "",
+                                title: detail.title ?? ""))
+                        : currentMetadata
                     await PlayerAudioSelection.selectPreferredAudio(for: fallback)
                     player.replaceCurrentItem(with: fallback)
                     PlayerCaptionSelection.keepOffByDefault(for: fallback)
                     self.installEndObserver(for: fallback)
+                    self.installItemDiagnostics(
+                        for: fallback,
+                        videoID: self.currentRequest?.videoID ?? "unknown",
+                        source: "fallback-direct")
+                    self.debugModel.configure(detail: detail, composed: false, allowAV1: Self.supportsAV1)
                     await player.seek(to: resume)
                     player.playImmediately(atRate: 1.0)
                 }
             }
         }
 
-        /// Fetches the thumbnail and attaches it as artwork so the lock screen /
-        /// Now Playing shows the video image. Done after playback starts so it
-        /// never delays the video.
-        private func attachArtwork(to item: AVPlayerItem, urlString: String?, base: [AVMetadataItem]) {
-            guard let urlString, let url = URL(string: urlString) else { return }
-            Task { [weak item] in
-                let data: Data? = url.isFileURL
-                    ? try? Data(contentsOf: url)
-                    : (try? await URLSession.shared.data(from: url))?.0
-                guard let data, let image = UIImage(data: data),
-                      let jpeg = image.jpegData(compressionQuality: 0.9) else { return }
-                let art = AVMutableMetadataItem()
-                art.identifier = .commonIdentifierArtwork
-                art.value = jpeg as NSData
-                art.dataType = kCMMetadataBaseDataType_JPEG as String
-                art.extendedLanguageTag = "und"
-                await MainActor.run {
-                    guard let item else { return }
-                    item.externalMetadata = base + [art]
-                }
-            }
-        }
-
-        /// Now Playing metadata for an offline file, built from the request alone.
-        private static func localMetadata(_ request: PlayRequest) -> [AVMetadataItem] {
-            func item(_ identifier: AVMetadataIdentifier, _ value: String?) -> AVMetadataItem? {
-                guard let value, !value.isEmpty else { return nil }
-                let m = AVMutableMetadataItem()
-                m.identifier = identifier
-                m.value = value as NSString
-                m.extendedLanguageTag = "und"
-                m.dataType = kCMMetadataBaseDataType_UTF8 as String
-                return m
-            }
-            return [
-                item(.commonIdentifierTitle, request.title),
-                item(.iTunesMetadataTrackSubTitle, request.uploader)
-            ].compactMap { $0 }
-        }
-
-        private static func metadata(_ detail: VideoDetail, _ request: PlayRequest) -> [AVMetadataItem] {
-            let descLen = HTMLText.plain(detail.description ?? "").count
-            NSLog("Atlas.player: description length from instance = \(descLen) chars")
-            func item(_ identifier: AVMetadataIdentifier, _ value: String?) -> AVMetadataItem? {
-                guard let value, !value.isEmpty else { return nil }
-                let m = AVMutableMetadataItem()
-                m.identifier = identifier
-                m.value = value as NSString
-                m.extendedLanguageTag = "und"
-                m.dataType = kCMMetadataBaseDataType_UTF8 as String
-                return m
-            }
-            return [
-                item(.commonIdentifierTitle, detail.title ?? request.title),
-                item(.iTunesMetadataTrackSubTitle, detail.uploader ?? request.uploader),
-                item(.commonIdentifierDescription, HTMLText.plain(detail.description ?? ""))
-            ].compactMap { $0 }
-        }
     }
 }
 

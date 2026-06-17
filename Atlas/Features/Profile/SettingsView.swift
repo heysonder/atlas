@@ -56,10 +56,13 @@ struct SettingsView: View {
                 Picker("Player", selection: $app.playerStyle) {
                     ForEach(PlayerStyle.allCases) { Text($0.label).tag($0) }
                 }
+                Toggle("Stats for Nerds", isOn: $app.statsForNerdsEnabled)
             } header: {
                 Text("Playback")
             } footer: {
-                Text(app.playerStyle.blurb)
+                Text(app.statsForNerdsEnabled
+                     ? "Shows a playback diagnostics button over videos with resolution, codec, stream, buffer, and stall details."
+                     : app.playerStyle.blurb)
             }
 
             Section {
