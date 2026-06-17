@@ -20,6 +20,7 @@ final class PlayerPlaybackTime {
 struct InfoOverlayButton: View {
     let model: InfoButtonModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let expandedFootprintWidth: CGFloat = 88
 
     var body: some View {
         Button(action: model.onTap) {
@@ -27,7 +28,7 @@ struct InfoOverlayButton: View {
                 Image(systemName: "info.circle")
                 if model.isPaused {
                     Text("Info")
-                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
+                        .transition(.blurReplace)
                 }
             }
             .font(.subheadline.weight(.semibold))
@@ -37,6 +38,8 @@ struct InfoOverlayButton: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
+        .frame(minWidth: expandedFootprintWidth, alignment: .trailing)
+        .accessibilityLabel("Info")
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: model.isPaused)
     }
 }
