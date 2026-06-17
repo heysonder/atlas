@@ -27,8 +27,9 @@ targets:
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
-        # iPhone: portrait while browsing; the player adds landscape at runtime
-        # (see OrientationGate). Upside-down is intentionally omitted on iPhone.
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Atlas connects to self-hosted Piped instances on your local network.
+        # iPhone supports portrait and landscape. Upside-down is intentionally omitted.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
