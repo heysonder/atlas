@@ -11,7 +11,7 @@ enum StreamPlaybackBuilder {
     enum FailureFallback: Equatable {
         case none
         case direct
-        case hlsOrComposed
+        case composedOrHLS
     }
 
     struct PreparedPlayback {
@@ -22,9 +22,9 @@ enum StreamPlaybackBuilder {
         let selectsPreferredAudio: Bool
     }
 
-    /// Builds the fastest playable item first. Direct HLS/progressive playback
-    /// lets AVPlayer start buffering immediately; composing separate video/audio
-    /// tracks is kept only for videos that expose no direct playable URL.
+    /// Builds the cleanest playable item first. AV1 HLS stays first when the
+    /// instance supports it; otherwise the composed video/audio pair wins over
+    /// regular direct URLs because Piped's direct stream is often lower quality.
     static func makePlayerItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
@@ -48,7 +48,7 @@ enum StreamPlaybackBuilder {
                 item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
                 composed: false,
                 sourceName: usesAV1HLS ? "direct-av1-hls" : "direct-initial",
-                failureFallback: usesAV1HLS ? .hlsOrComposed : .none,
+                failureFallback: usesAV1HLS ? .composedOrHLS : .none,
                 selectsPreferredAudio: true)
         case .composed(let video, let audio):
             guard let composed = await composedItem(video: video, audio: audio) else { return nil }
@@ -56,7 +56,7 @@ enum StreamPlaybackBuilder {
                 item: composed,
                 composed: true,
                 sourceName: "composed-initial",
-                failureFallback: av1HLSURL == nil ? .direct : .none,
+                failureFallback: .direct,
                 selectsPreferredAudio: true)
         case nil:
             return nil
@@ -71,17 +71,17 @@ enum StreamPlaybackBuilder {
         preferredLanguages: [String] = Locale.preferredLanguages
     ) -> PlaybackSource? {
         if let av1HLSURL { return .direct(av1HLSURL) }
+        let composedSource = detail.bestComposedSource(
+            allowAV1: allowAV1,
+            preferredLanguages: preferredLanguages)
+        if let source = composedSource {
+            return .composed(video: source.video, audio: source.audio)
+        }
         if let url = playlistURL(from: detail) {
             return .direct(url)
         }
         if allowProgressiveFallback, let url = detail.playableURL { return .direct(url) }
-        let composedSource = detail.bestComposedSource(
-            allowAV1: allowAV1,
-            preferredLanguages: preferredLanguages)
-        guard let source = composedSource else {
-            return nil
-        }
-        return .composed(video: source.video, audio: source.audio)
+        return nil
     }
 
     static func makeDirectFailureFallbackItem(for detail: VideoDetail) -> PreparedPlayback? {
@@ -95,7 +95,7 @@ enum StreamPlaybackBuilder {
             selectsPreferredAudio: true)
     }
 
-    static func makeHLSOrComposedFailureFallbackItem(
+    static func makeComposedOrHLSFailureFallbackItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
         preferredLanguages: [String] = Locale.preferredLanguages
