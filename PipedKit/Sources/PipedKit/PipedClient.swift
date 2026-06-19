@@ -127,6 +127,14 @@ public struct PipedClient: Sendable {
         try await get("streams/\(videoID)")
     }
 
+    public func av1HLSMasterURL(videoID: String) -> URL {
+        baseURL
+            .appendingPathComponent("hls")
+            .appendingPathComponent("av1")
+            .appendingPathComponent(videoID)
+            .appendingPathComponent("master.m3u8")
+    }
+
     public func channel(id: String) async throws -> Channel {
         try await get("channel/\(id)")
     }
@@ -135,6 +143,16 @@ public struct PipedClient: Sendable {
     /// `/channel/:channelId` or a previous channel next-page response.
     public func channelNextPage(id: String, nextpage: String) async throws -> Channel {
         try await get("nextpage/channel/\(id)", query: ["nextpage": nextpage])
+    }
+
+    /// Loads one of the channel tabs advertised by `/channel/:channelId`, such as
+    /// the Shorts tab. Pass the tab's raw `data` value back to Piped unchanged.
+    public func channelTab(data: String, nextpage: String? = nil) async throws -> ChannelTabPage {
+        var query = ["data": data]
+        if let nextpage {
+            query["nextpage"] = nextpage
+        }
+        return try await get("channels/tabs", query: query)
     }
 
     /// First page of a video's comments. `CommentsPage.disabled` is true when the
