@@ -415,7 +415,6 @@ struct PlayerDebugOverlay: View {
         case "fallback-hls": "HLS fallback"
         case "fallback-composed": "Composed fallback"
         case "composed-initial": "Composed"
-        case "composed-upgrade": "Composed upgrade"
         case "local": "Local"
         case "unknown": "Pending"
         default: cleanToken(source)

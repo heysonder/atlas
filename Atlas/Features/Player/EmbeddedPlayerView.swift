@@ -769,8 +769,8 @@ final class EmbeddedPlayerModel {
             return
         case .direct:
             fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail)
-        case .hlsOrComposed:
-            fallbackPlayback = await StreamPlaybackBuilder.makeHLSOrComposedFailureFallbackItem(
+        case .composedOrHLS:
+            fallbackPlayback = await StreamPlaybackBuilder.makeComposedOrHLSFailureFallbackItem(
                 detail,
                 allowAV1: Self.supportsAV1)
         }
