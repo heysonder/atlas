@@ -11,7 +11,7 @@ enum StreamPlaybackBuilder {
     enum FailureFallback: Equatable {
         case none
         case direct
-        case composedOrHLS
+        case composedOrDirect
     }
 
     struct PreparedPlayback {
@@ -22,8 +22,9 @@ enum StreamPlaybackBuilder {
         let selectsPreferredAudio: Bool
     }
 
-    /// Builds the cleanest playable item first. AV1 HLS stays first when the
-    /// instance supports it; otherwise the composed video/audio pair wins over
+    /// Builds the cleanest playable item first. AV1 HLS is tried optimistically
+    /// from the selected instance URL; runtime fallback handles instances that
+    /// do not actually serve it. Without AV1, composed video/audio wins over
     /// regular direct URLs because Piped's direct stream is often lower quality.
     static func makePlayerItem(
         _ detail: VideoDetail,
@@ -31,27 +32,30 @@ enum StreamPlaybackBuilder {
         av1HLSURL: URL? = nil,
         preferredLanguages: [String] = Locale.preferredLanguages
     ) async -> PreparedPlayback? {
-        let validatedAV1HLSURL = await usableAV1HLSURL(av1HLSURL)
-        if let av1HLSURL, validatedAV1HLSURL == nil {
-            NSLog("Atlas.player: av1 hls unavailable candidate=\(av1HLSURL.absoluteString)")
+        if let av1HLSURL {
+            clearCachedAV1HLSResponses()
+            NSLog("Atlas.player: av1 hls candidate url=\(av1HLSURL.absoluteString)")
         }
         switch preferredSource(
             detail,
             allowAV1: allowAV1,
-            av1HLSURL: validatedAV1HLSURL,
+            av1HLSURL: av1HLSURL,
             allowProgressiveFallback: av1HLSURL == nil,
             preferredLanguages: preferredLanguages
         ) {
         case .direct(let url):
-            let usesAV1HLS = url == validatedAV1HLSURL
+            let usesAV1HLS = url == av1HLSURL
             return PreparedPlayback(
                 item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
                 composed: false,
                 sourceName: usesAV1HLS ? "direct-av1-hls" : "direct-initial",
-                failureFallback: usesAV1HLS ? .composedOrHLS : .none,
+                failureFallback: usesAV1HLS ? .composedOrDirect : .none,
                 selectsPreferredAudio: true)
         case .composed(let video, let audio):
-            guard let composed = await composedItem(video: video, audio: audio) else { return nil }
+            guard let composed = await composedItem(video: video, audio: audio) else {
+                NSLog("Atlas.player: composed startup assembly failed; falling back to direct")
+                return makeDirectFailureFallbackItem(for: detail)
+            }
             return PreparedPlayback(
                 item: composed,
                 composed: true,
@@ -95,65 +99,32 @@ enum StreamPlaybackBuilder {
             selectsPreferredAudio: true)
     }
 
-    static func makeComposedOrHLSFailureFallbackItem(
+    static func makeComposedOrDirectFailureFallbackItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
         preferredLanguages: [String] = Locale.preferredLanguages
     ) async -> PreparedPlayback? {
-        switch preferredSource(
-            detail,
+        let composedSource = detail.bestComposedSource(
             allowAV1: allowAV1,
-            allowProgressiveFallback: false,
-            preferredLanguages: preferredLanguages
-        ) {
-        case .direct(let url):
-            let usesHLS = isHLSPlaylist(url)
-            return PreparedPlayback(
-                item: playerItem(forDirectURL: url, usesAV1HLS: false),
-                composed: false,
-                sourceName: usesHLS ? "fallback-hls" : "fallback-direct",
-                failureFallback: .none,
-                selectsPreferredAudio: true)
-        case .composed(let video, let audio):
-            guard let composed = await composedItem(video: video, audio: audio) else { return nil }
-            return PreparedPlayback(
-                item: composed,
-                composed: true,
-                sourceName: "fallback-composed",
-                failureFallback: .none,
-                selectsPreferredAudio: true)
-        case nil:
-            return nil
+            preferredLanguages: preferredLanguages)
+        if let source = composedSource {
+            if let composed = await composedItem(video: source.video, audio: source.audio) {
+                return PreparedPlayback(
+                    item: composed,
+                    composed: true,
+                    sourceName: "fallback-composed",
+                    failureFallback: .none,
+                    selectsPreferredAudio: true)
+            }
+            NSLog("Atlas.player: fallback composed assembly failed; falling back to direct")
         }
+        return makeDirectFailureFallbackItem(for: detail)
     }
 
     static func manifestAdvertisesAV1Video(_ manifest: String) -> Bool {
         manifest.range(of: "#EXTM3U", options: .caseInsensitive) != nil
             && manifest.range(of: "#EXT-X-STREAM-INF", options: .caseInsensitive) != nil
             && manifest.range(of: "av01", options: .caseInsensitive) != nil
-    }
-
-    private static func usableAV1HLSURL(_ url: URL?) async -> URL? {
-        guard let url else { return nil }
-        clearCachedAV1HLSResponses()
-        let request = av1HLSManifestRequest(for: url)
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                NSLog("Atlas.player: av1 hls manifest http=\(http.statusCode) url=\(url.absoluteString)")
-                return nil
-            }
-            guard let manifest = String(data: data, encoding: .utf8),
-                  manifestAdvertisesAV1Video(manifest) else {
-                NSLog("Atlas.player: av1 hls manifest missing av01 url=\(url.absoluteString)")
-                return nil
-            }
-            NSLog("Atlas.player: av1 hls master ready url=\(url.absoluteString)")
-            return url
-        } catch {
-            NSLog("Atlas.player: av1 hls validation failed url=\(url.absoluteString) error=\(error.localizedDescription)")
-            return nil
-        }
     }
 
     private static func playerItem(forDirectURL url: URL, usesAV1HLS: Bool) -> AVPlayerItem {
@@ -163,20 +134,6 @@ enum StreamPlaybackBuilder {
             item.preferredForwardBufferDuration = 0
         }
         return item
-    }
-
-    private static func av1HLSManifestRequest(for url: URL) -> URLRequest {
-        hlsManifestRequest(for: url)
-    }
-
-    private static func hlsManifestRequest(for url: URL) -> URLRequest {
-        var request = URLRequest(
-            url: url,
-            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
-            timeoutInterval: 5)
-        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
-        return request
     }
 
     private static func av1HLSAsset(url: URL) -> AVURLAsset {
