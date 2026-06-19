@@ -90,13 +90,11 @@ struct GroupedVideoList: View {
     let onPlay: (StreamItem) -> Void
 
     /// iPhone (compact) stays a single column; iPad and larger (regular) break the
-    /// feed into a 2–4 column grid sized to the available width.
+    /// feed into an adaptive grid that fits as many columns as the width allows.
     @Environment(\.horizontalSizeClass) private var hSize
     @Query(sort: \Playlist.createdAt, order: .reverse) private var menuPlaylists: [Playlist]
     @Query private var menuFeedback: [Feedback]
     @Query(sort: \DownloadedVideo.createdAt, order: .reverse) private var menuDownloads: [DownloadedVideo]
-    /// Measured width of the list, used to pick the grid's column count.
-    @State private var gridWidth: CGFloat = 0
 
     private var menuFeedbackByVideoID: [String: Int] {
         Dictionary(uniqueKeysWithValues: menuFeedback.map { ($0.videoID, $0.signal) })
@@ -147,17 +145,17 @@ struct GroupedVideoList: View {
     }
 
     /// Multi-column feed (iPad and larger): regular videos flow into an adaptive
-    /// grid; Shorts collapse into a single horizontal shelf placed after the first
-    /// row (their tall 9:16 posters don't tile cleanly beside wide 16:9 cards).
+    /// grid that fits as many ~300pt columns as the width allows; Shorts collapse
+    /// into a single horizontal shelf near the top (their tall 9:16 posters don't
+    /// tile cleanly beside wide 16:9 cards).
     private var gridLayout: some View {
-        let columns = columnCount(for: gridWidth)
-        let track = Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
-                          count: columns)
+        let track = [GridItem(.adaptive(minimum: 300), spacing: 16, alignment: .top)]
         let shorts = items.filter { $0.isShort == true }
         let videos = items.filter { $0.isShort != true }
-        // Lead with one full row of videos, then the shelf, then the rest — so the
-        // feed opens on real videos rather than a wall of Shorts.
-        let leadCount = shorts.isEmpty ? videos.count : min(columns, videos.count)
+        // Lead with a few videos, then the shelf, then the rest — so the feed opens
+        // on real videos rather than a wall of Shorts. With an adaptive column count
+        // we no longer know the row size, so we lead with a fixed handful.
+        let leadCount = shorts.isEmpty ? videos.count : min(4, videos.count)
         let lead = videos.prefix(leadCount)
         let rest = videos.dropFirst(leadCount)
 
@@ -180,7 +178,6 @@ struct GroupedVideoList: View {
                 }
             }
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { gridWidth = $0 }
     }
 
     /// One video card, shared by the stack and grid layouts. The grid reserves a
@@ -197,13 +194,6 @@ struct GroupedVideoList: View {
                 feedbackByVideoID: menuFeedbackByVideoID,
                 downloadsByVideoID: menuDownloadsByVideoID)
             .onAppear { appeared(item) }
-    }
-
-    /// Columns scale with width: ~one card per 300pt, capped at 4. Defaults to 2
-    /// before the first width measurement (we're already at regular width here).
-    private func columnCount(for width: CGFloat) -> Int {
-        guard width > 0 else { return 2 }
-        return min(4, max(1, Int(width / 300)))
     }
 
     private func isWatched(_ item: StreamItem) -> Bool {

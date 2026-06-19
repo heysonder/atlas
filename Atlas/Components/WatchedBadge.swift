@@ -12,6 +12,18 @@ struct WatchedBadge: View {
     }
 }
 
+struct LiveBadge: View {
+    var body: some View {
+        Text("LIVE")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundStyle(.white)
+            .background(.red, in: Capsule())
+            .accessibilityLabel("Live")
+    }
+}
+
 struct ThumbnailChip<Content: View>: View {
     @ViewBuilder var content: Content
 

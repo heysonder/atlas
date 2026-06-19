@@ -12,8 +12,11 @@ struct ChannelDetailView: View {
     @Query private var history: [HistoryEntry]
 
     @State private var phase: LoadPhase<Channel> = .idle
-    @State private var videos: [StreamItem] = []
-    @State private var nextpage: String?
+    @State private var regularVideos: [StreamItem] = []
+    @State private var shorts: [StreamItem] = []
+    @State private var videoNextpage: String?
+    @State private var shortsTabData: String?
+    @State private var shortsNextpage: String?
     @State private var isLoadingNextPage = false
 
     private var subscription: SubscribedChannel? {
@@ -55,13 +58,14 @@ struct ChannelDetailView: View {
                 Divider()
                     .padding(.horizontal)
 
-                let shown = app.filteringShorts(videos)
+                let shown = app.filteringShorts(displayItems)
                 if shown.isEmpty {
                     emptyState
                 } else {
                     GroupedVideoList(items: shown,
                                      avatarFallback: channel.avatarUrl,
                                      channelIDFallback: channelID,
+                                     shortsLayout: .carousel,
                                      watchedIDs: watchedIDs,
                                      onAppearItem: { handleAppear($0, visibleItems: shown) }) { app.play($0) }
                         .padding(.horizontal)
@@ -79,7 +83,7 @@ struct ChannelDetailView: View {
             ProgressView()
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
-                .task(id: nextpage) { await loadNextPage() }
+                .task(id: loadMoreToken) { await loadNextPage() }
         } else {
             ContentUnavailableView("No videos to show", systemImage: "play.slash",
                 description: Text("This instance returned no uploads for this channel. Try another instance in Settings."))
@@ -96,7 +100,7 @@ struct ChannelDetailView: View {
         } else if hasNextPage {
             Color.clear
                 .frame(height: 1)
-                .id(nextpage)
+                .id(loadMoreToken)
                 .onAppear { Task { await loadNextPage() } }
         }
     }
@@ -166,7 +170,23 @@ struct ChannelDetailView: View {
     }
 
     private var hasNextPage: Bool {
-        nextpage?.isEmpty == false
+        videoNextpage?.isEmpty == false || (!app.hideShorts && shortsNextpage?.isEmpty == false)
+    }
+
+    private var loadMoreToken: String {
+        [
+            videoNextpage ?? "videos-end",
+            shortsNextpage ?? "shorts-end",
+            "\(regularVideos.count)",
+            "\(shorts.count)"
+        ].joined(separator: "|")
+    }
+
+    private var displayItems: [StreamItem] {
+        let leadCount = min(3, regularVideos.count)
+        return Array(regularVideos.prefix(leadCount))
+            + shorts
+            + Array(regularVideos.dropFirst(leadCount))
     }
 
     private func normalizedNextpage(_ token: String?) -> String? {
@@ -196,18 +216,28 @@ struct ChannelDetailView: View {
         if !alreadyLoaded { phase = .loading }
         do {
             let channel = try await app.client.channel(id: channelID)
-            // The channel "Videos" tab is currently broken upstream in Piped —
-            // `relatedStreams` comes back empty network-wide — so fall back to the
-            // RSS-based feed endpoint, which still returns the channel's recent
-            // uploads on a healthy instance.
             var loaded = channel.relatedStreams ?? []
             if loaded.isEmpty {
                 loaded = (try? await app.client.feed(channelIDs: [channelID])) ?? []
             }
+            let split = splitUploads(loaded)
+            let tabData = channel.shortsTabData
+            var loadedShorts = split.shorts
+            var loadedShortsNextpage: String?
+            if !app.hideShorts, let tabData {
+                let shortsPage = try? await app.client.channelTab(data: tabData)
+                let tabShorts = splitUploads(shortsPage?.content ?? []).shorts
+                let loadedIDs = Set((split.regular + loadedShorts).map(\.id))
+                loadedShorts.append(contentsOf: unique(tabShorts, excluding: loadedIDs))
+                loadedShortsNextpage = normalizedNextpage(shortsPage?.nextpage)
+            }
             phase = .loaded(channel)
-            videos = loaded
-            nextpage = normalizedNextpage(channel.nextpage)
-            await prefetchThumbnails(app.filteringShorts(loaded))
+            regularVideos = split.regular
+            shorts = loadedShorts
+            videoNextpage = normalizedNextpage(channel.nextpage)
+            shortsTabData = tabData
+            shortsNextpage = loadedShortsNextpage
+            await prefetchThumbnails(app.filteringShorts(displayItems))
         } catch is CancellationError {
             return
         } catch {
@@ -217,15 +247,29 @@ struct ChannelDetailView: View {
     }
 
     private func loadNextPage() async {
-        guard let token = nextpage, !isLoadingNextPage else { return }
+        guard hasNextPage, !isLoadingNextPage else { return }
         isLoadingNextPage = true
         defer { isLoadingNextPage = false }
 
+        var appended: [StreamItem] = []
         do {
-            let page = try await app.client.channelNextPage(id: channelID, nextpage: token)
-            let newToken = normalizedNextpage(page.nextpage)
-            let appended = appendUnique(page.relatedStreams ?? [])
-            nextpage = appended.isEmpty && newToken == token ? nil : newToken
+            if let token = videoNextpage {
+                let page = try await app.client.channelNextPage(id: channelID, nextpage: token)
+                let split = splitUploads(page.relatedStreams ?? [])
+                let newRegular = appendUniqueRegular(split.regular)
+                let newShorts = appendUniqueShorts(split.shorts)
+                appended.append(contentsOf: newRegular + newShorts)
+                let newToken = normalizedNextpage(page.nextpage)
+                videoNextpage = (newRegular + newShorts).isEmpty && newToken == token ? nil : newToken
+            }
+
+            if !app.hideShorts, let data = shortsTabData, let token = shortsNextpage {
+                let page = try await app.client.channelTab(data: data, nextpage: token)
+                let newShorts = appendUniqueShorts(splitUploads(page.content ?? []).shorts)
+                appended.append(contentsOf: newShorts)
+                let newToken = normalizedNextpage(page.nextpage)
+                shortsNextpage = newShorts.isEmpty && newToken == token ? nil : newToken
+            }
             await prefetchThumbnails(appended)
         } catch is CancellationError {
             return
@@ -235,15 +279,38 @@ struct ChannelDetailView: View {
     }
 
     @discardableResult
-    private func appendUnique(_ newVideos: [StreamItem]) -> [StreamItem] {
-        var existingIDs = Set(videos.map(\.id))
-        let unique = newVideos.filter { item in
-            guard !existingIDs.contains(item.id) else { return false }
-            existingIDs.insert(item.id)
+    private func appendUniqueRegular(_ newVideos: [StreamItem]) -> [StreamItem] {
+        let unique = unique(newVideos, excluding: loadedIDs)
+        regularVideos.append(contentsOf: unique)
+        return unique
+    }
+
+    @discardableResult
+    private func appendUniqueShorts(_ newShorts: [StreamItem]) -> [StreamItem] {
+        let unique = unique(newShorts, excluding: loadedIDs)
+        shorts.append(contentsOf: unique)
+        return unique
+    }
+
+    private var loadedIDs: Set<String> {
+        Set((regularVideos + shorts).map(\.id))
+    }
+
+    private func unique(_ items: [StreamItem], excluding existingIDs: Set<String>) -> [StreamItem] {
+        var seen = existingIDs
+        return items.filter { item in
+            guard !seen.contains(item.id) else { return false }
+            seen.insert(item.id)
             return true
         }
-        videos.append(contentsOf: unique)
-        return unique
+    }
+
+    private func splitUploads(_ items: [StreamItem]) -> (regular: [StreamItem], shorts: [StreamItem]) {
+        let videos = items.filter(\.isVideo)
+        return (
+            videos.filter { $0.isShort != true },
+            videos.filter { $0.isShort == true }
+        )
     }
 
     /// Warm the first batch of thumbnails so they're decoded before scroll, the
@@ -251,5 +318,11 @@ struct ChannelDetailView: View {
     private func prefetchThumbnails(_ videos: [StreamItem]) async {
         await ThumbnailPrefetcher.shared.prefetch(
             videos.prefix(12).map { Thumbnail.upgraded($0.thumbnail) })
+    }
+}
+
+private extension Channel {
+    var shortsTabData: String? {
+        tabs?.first { ($0.name ?? "").caseInsensitiveCompare("shorts") == .orderedSame }?.data
     }
 }
