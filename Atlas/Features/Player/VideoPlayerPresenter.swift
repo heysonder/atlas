@@ -45,7 +45,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var itemDiagnosticObservers: [NSObjectProtocol] = []
         private var statusObservation: NSKeyValueObservation?
         private var compositionUpgradeTask: Task<Void, Never>?
+        private var fallbackCheckTask: Task<Void, Never>?
         private var activePlaybackSource = "unknown"
+        private var fallbackInProgress = false
         private var currentRequest: PlayRequest?
         private var currentDetail: VideoDetail?
         private var usedComposition = false
@@ -86,7 +88,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
             let player = AVPlayer()
             player.appliesMediaSelectionCriteriaAutomatically = false
-            // TEST: all buffering/stall behavior left at AVPlayer defaults
+            // Keep buffering/stall behavior at AVPlayer defaults
             // (automaticallyWaitsToMinimizeStalling defaults to true).
             let controller = AVPlayerViewController()
             controller.player = player
@@ -110,22 +112,27 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 return
             }
             do {
+                let client = try app.client
+                let av1HLSURL = client.av1HLSMasterURL(videoID: request.videoID)
                 let detail = try await app.resolveStream(request.videoID)
                 guard !Task.isCancelled else { return }
                 let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
                 guard let playback = await StreamPlaybackBuilder.makePlayerItem(
                     detail,
-                    allowAV1: Self.supportsAV1
+                    allowAV1: Self.supportsAV1,
+                    av1HLSURL: av1HLSURL
                 ) else {
                     showError(on: controller, PipedError.noPlayableStream.localizedDescription)
                     return
                 }
                 guard !Task.isCancelled else { return }
                 let initialItem = playback.item
-                await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
-                guard !Task.isCancelled else { return }
+                if playback.selectsPreferredAudio {
+                    await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
+                    guard !Task.isCancelled else { return }
+                }
                 usedComposition = playback.composed
-                // TEST: leave preferredForwardBufferDuration at its default (0 = system-managed).
+                // Keep the forward buffer window system-managed.
                 initialItem.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: initialItem)
                 PlayerCaptionSelection.keepOffByDefault(for: initialItem)
@@ -133,10 +140,16 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 installItemDiagnostics(
                     for: initialItem,
                     videoID: request.videoID,
-                    source: playback.composed ? "composed-initial" : "direct-initial")
+                    source: playback.sourceName)
                 debugModel.configure(detail: detail, composed: playback.composed, allowAV1: Self.supportsAV1)
-                NSLog("Atlas.player: start videoID=\(request.videoID) source=\(playback.composed ? "composed" : "direct")")
-                if playback.composed { observeForFailure(initialItem, detail: detail, player: player) }
+                NSLog("Atlas.player: start videoID=\(request.videoID) source=\(playback.sourceName)")
+                if playback.failureFallback != .none {
+                    observeForFailure(
+                        initialItem,
+                        detail: detail,
+                        player: player,
+                        fallback: playback.failureFallback)
+                }
                 PlayerNowPlayingMetadata.attachArtwork(
                     to: initialItem,
                     urlString: detail.thumbnailUrl ?? request.thumbnail,
@@ -150,10 +163,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                    resume >= PlaybackHistoryStore.minWatchSeconds {
                     await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
                 }
-                // TEST: default playback start (waits to minimize stalling) instead of playImmediately.
+                // Start normally so AVPlayer can wait to minimize stalls.
                 player.play()
                 installProgressTracking(on: player)
-                if !playback.composed {
+                if playback.allowsComposedUpgrade {
                     startComposedUpgradeIfAvailable(
                         detail: detail,
                         request: request,
@@ -396,7 +409,11 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 self.installEndObserver(for: composed)
                 self.installItemDiagnostics(for: composed, videoID: videoID, source: "composed-upgrade")
                 self.debugModel.configure(detail: detail, composed: true, allowAV1: Self.supportsAV1)
-                self.observeForFailure(composed, detail: detail, player: player)
+                self.observeForFailure(
+                    composed,
+                    detail: detail,
+                    player: player,
+                    fallback: .direct)
                 if resume.isValid && resume.seconds.isFinite {
                     await player.seek(
                         to: resume,
@@ -429,6 +446,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             loadTask = nil
             compositionUpgradeTask?.cancel()
             compositionUpgradeTask = nil
+            fallbackCheckTask?.cancel()
+            fallbackCheckTask = nil
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
             if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
@@ -446,6 +465,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             infoButtonModel.isPaused = false
             infoPlaybackTime.seconds = nil
             activePlaybackSource = "unknown"
+            fallbackInProgress = false
             debugModel.reset()
             usedComposition = false
             currentDetail = nil
@@ -609,6 +629,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             loadTask = nil
             compositionUpgradeTask?.cancel()
             compositionUpgradeTask = nil
+            fallbackCheckTask?.cancel()
+            fallbackCheckTask = nil
             if let player {
                 if let t = player.currentTime().seconds as Double?, t.isFinite { savePosition(t) }
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -629,6 +651,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             infoButtonModel.isPaused = false
             infoPlaybackTime.seconds = nil
             activePlaybackSource = "unknown"
+            fallbackInProgress = false
             debugModel.reset()
             usedComposition = false
             infoButtonHost?.willMove(toParent: nil)
@@ -883,40 +906,166 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
         private static let supportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 
-        /// If a composed item fails to actually play, swap to the simple HLS/progressive URL.
-        private func observeForFailure(_ item: AVPlayerItem, detail: VideoDetail, player: AVPlayer) {
+        /// If an upgraded source fails to actually play, swap to its configured fallback.
+        private func observeForFailure(
+            _ item: AVPlayerItem,
+            detail: VideoDetail,
+            player: AVPlayer,
+            fallback: StreamPlaybackBuilder.FailureFallback
+        ) {
+            fallbackInProgress = false
             statusObservation?.invalidate()
             statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
                 guard item.status == .failed else { return }
                 Task { @MainActor [weak self] in
-                    guard let self, self.usedComposition,
-                          let fallback = StreamPlaybackBuilder.fallbackPlayerItem(for: detail) else { return }
-                    self.usedComposition = false
-                    self.statusObservation?.invalidate()
-                    self.statusObservation = nil
-                    let resume = player.currentTime()
-                    NSLog("Atlas.player: composed status failed videoID=\(self.currentRequest?.videoID ?? "unknown") error=\(Self.itemErrorSummary(item))")
-                    let currentMetadata = player.currentItem?.externalMetadata ?? []
-                    fallback.externalMetadata = currentMetadata.isEmpty
-                        ? PlayerNowPlayingMetadata.streaming(
-                            detail,
-                            request: self.currentRequest ?? PlayRequest(
-                                videoID: detail.channelID ?? "",
-                                title: detail.title ?? ""))
-                        : currentMetadata
-                    await PlayerAudioSelection.selectPreferredAudio(for: fallback)
-                    player.replaceCurrentItem(with: fallback)
-                    PlayerCaptionSelection.keepOffByDefault(for: fallback)
-                    self.installEndObserver(for: fallback)
-                    self.installItemDiagnostics(
-                        for: fallback,
-                        videoID: self.currentRequest?.videoID ?? "unknown",
-                        source: "fallback-direct")
-                    self.debugModel.configure(detail: detail, composed: false, allowAV1: Self.supportsAV1)
-                    await player.seek(to: resume)
-                    player.playImmediately(atRate: 1.0)
+                    await self?.fallbackAfterFailure(
+                        reason: "status failed",
+                        failedItem: item,
+                        detail: detail,
+                        player: player,
+                        fallback: fallback)
                 }
             }
+            let center = NotificationCenter.default
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: item,
+                queue: .main
+            ) { [weak self, weak item, weak player] _ in
+                Task { @MainActor [weak self, weak item, weak player] in
+                    guard let item, let player, Self.shouldFallbackFromErrorLog(item) else { return }
+                    self?.scheduleFallbackIfStillStalled(
+                        item,
+                        detail: detail,
+                        player: player,
+                        fallback: fallback)
+                }
+            })
+            itemDiagnosticObservers.append(center.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self, weak item, weak player] _ in
+                Task { @MainActor [weak self, weak item, weak player] in
+                    guard let item, let player else { return }
+                    await self?.fallbackAfterFailure(
+                        reason: "failed to play to end",
+                        failedItem: item,
+                        detail: detail,
+                        player: player,
+                        fallback: fallback)
+                }
+            })
+        }
+
+        private func fallbackAfterFailure(
+            reason: String,
+            failedItem item: AVPlayerItem,
+            detail: VideoDetail,
+            player: AVPlayer,
+            fallback: StreamPlaybackBuilder.FailureFallback
+        ) async {
+            guard !fallbackInProgress else { return }
+            let fallbackPlayback: StreamPlaybackBuilder.PreparedPlayback?
+            switch fallback {
+            case .none:
+                return
+            case .direct:
+                fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail)
+            case .hlsOrComposed:
+                fallbackPlayback = await StreamPlaybackBuilder.makeHLSOrComposedFailureFallbackItem(
+                    detail,
+                    allowAV1: Self.supportsAV1)
+            }
+            guard let fallbackPlayback else { return }
+            fallbackInProgress = true
+            fallbackCheckTask?.cancel()
+            fallbackCheckTask = nil
+            usedComposition = fallbackPlayback.composed
+            statusObservation?.invalidate()
+            statusObservation = nil
+            let resume = player.currentTime()
+            let wasPlaying = player.timeControlStatus != .paused
+            NSLog("Atlas.player: runtime fallback videoID=\(currentRequest?.videoID ?? "unknown") source=\(activePlaybackSource) reason=\(reason) error=\(Self.itemErrorSummary(item))")
+            let fallbackItem = fallbackPlayback.item
+            let currentMetadata = player.currentItem?.externalMetadata ?? []
+            fallbackItem.externalMetadata = currentMetadata.isEmpty
+                ? PlayerNowPlayingMetadata.streaming(
+                    detail,
+                    request: currentRequest ?? PlayRequest(
+                        videoID: detail.channelID ?? "",
+                        title: detail.title ?? ""))
+                : currentMetadata
+            if fallbackPlayback.selectsPreferredAudio {
+                await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
+            }
+            player.replaceCurrentItem(with: fallbackItem)
+            PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)
+            installEndObserver(for: fallbackItem)
+            installItemDiagnostics(
+                for: fallbackItem,
+                videoID: currentRequest?.videoID ?? "unknown",
+                source: fallbackPlayback.sourceName)
+            debugModel.configure(detail: detail, composed: fallbackPlayback.composed, allowAV1: Self.supportsAV1)
+            await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
+            if wasPlaying { player.playImmediately(atRate: 1.0) }
+        }
+
+        private func scheduleFallbackIfStillStalled(
+            _ item: AVPlayerItem,
+            detail: VideoDetail,
+            player: AVPlayer,
+            fallback: StreamPlaybackBuilder.FailureFallback
+        ) {
+            fallbackCheckTask?.cancel()
+            let stalledAt = player.currentTime().seconds
+            fallbackCheckTask = Task { [weak self, weak item, weak player] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.fallbackIfStillStalled(
+                    stalledAt: stalledAt,
+                    failedItem: item,
+                    detail: detail,
+                    player: player,
+                    fallback: fallback)
+            }
+        }
+
+        private func fallbackIfStillStalled(
+            stalledAt: Double,
+            failedItem item: AVPlayerItem?,
+            detail: VideoDetail,
+            player: AVPlayer?,
+            fallback: StreamPlaybackBuilder.FailureFallback
+        ) async {
+            guard let item,
+                  let player,
+                  player.currentItem === item,
+                  Self.shouldFallbackFromErrorLog(item) else {
+                return
+            }
+            let currentSeconds = player.currentTime().seconds
+            let advanced = currentSeconds.isFinite
+                && stalledAt.isFinite
+                && currentSeconds > stalledAt + 0.75
+            guard !advanced else { return }
+            let stillBlocked = item.status == .failed
+                || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                || item.isPlaybackBufferEmpty
+                || !item.isPlaybackLikelyToKeepUp
+            guard stillBlocked else { return }
+            await fallbackAfterFailure(
+                reason: "unrecovered media stall",
+                failedItem: item,
+                detail: detail,
+                player: player,
+                fallback: fallback)
+        }
+
+        private static func shouldFallbackFromErrorLog(_ item: AVPlayerItem?) -> Bool {
+            guard let event = item?.errorLog()?.events.last else { return false }
+            return event.errorDomain == "CoreMediaErrorDomain"
+                && event.errorStatusCode == -12660
         }
 
     }
