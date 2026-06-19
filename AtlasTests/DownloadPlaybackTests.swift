@@ -23,7 +23,7 @@ import Testing
     #expect(request.thumbnail == download.thumbnailURL?.absoluteString)
 }
 
-@Test func streamPlaybackPrefersDirectSourceBeforeComposedUpgrade() throws {
+@Test func streamPlaybackPrefersHLSBeforeComposedSource() throws {
     let detail = streamPlaybackDetail()
 
     let source = try #require(StreamPlaybackBuilder.preferredSource(
@@ -75,19 +75,17 @@ import Testing
     #expect(composedSource == .composed(video: video, audio: audio))
 }
 
-@Test func av1HLSModePrefersHigherQualityComposedOverFallbackPlaylist() throws {
+@Test func av1HLSModePrefersFallbackPlaylistOverHigherQualityComposed() throws {
     let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
-    let video = URL(string: "https://example.com/1080.mp4")!
-    let audio = URL(string: "https://example.com/audio.m4a")!
+    let hls = URL(string: "https://example.com/master.m3u8")!
 
     let source = try #require(StreamPlaybackBuilder.preferredSource(
         detail,
         allowAV1: true,
         allowProgressiveFallback: false,
-        playlistMaxHeight: 720,
         preferredLanguages: ["en-US"]))
 
-    #expect(source == .composed(video: video, audio: audio))
+    #expect(source == .direct(hls))
 }
 
 @Test func detectsAV1HLSMasterManifest() {
@@ -101,17 +99,30 @@ import Testing
     #expect(!StreamPlaybackBuilder.manifestAdvertisesAV1Video("#EXTM3U\n#EXT-X-VERSION:7"))
 }
 
-@Test func readsMaximumHeightFromHLSMasterManifest() {
-    let manifest = """
-    #EXTM3U
-    #EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
-    /hls/video/720
-    #EXT-X-STREAM-INF:BANDWIDTH=5400000,RESOLUTION=1920x1080
-    /hls/video/1080
-    """
+@Test func directHLSPlaybackSelectsPreferredAudio() async throws {
+    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
 
-    #expect(StreamPlaybackBuilder.maximumAdvertisedHLSHeight(manifest) == 1080)
-    #expect(StreamPlaybackBuilder.maximumAdvertisedHLSHeight("#EXTM3U\n#EXT-X-VERSION:7") == nil)
+    let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
+        detail,
+        allowAV1: false,
+        preferredLanguages: ["en-US"]))
+
+    #expect(!playback.composed)
+    #expect(playback.sourceName == "direct-initial")
+    #expect(playback.selectsPreferredAudio)
+}
+
+@Test func av1FallbackHLSSelectsPreferredAudio() async throws {
+    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
+
+    let playback = try #require(await StreamPlaybackBuilder.makeHLSOrComposedFailureFallbackItem(
+        detail,
+        allowAV1: true,
+        preferredLanguages: ["en-US"]))
+
+    #expect(!playback.composed)
+    #expect(playback.sourceName == "fallback-hls")
+    #expect(playback.selectsPreferredAudio)
 }
 
 private func streamPlaybackDetail(hls: String? = "https://example.com/master.m3u8") -> VideoDetail {

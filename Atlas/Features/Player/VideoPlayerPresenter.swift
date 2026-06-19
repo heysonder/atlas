@@ -44,7 +44,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var endObserver: NSObjectProtocol?
         private var itemDiagnosticObservers: [NSObjectProtocol] = []
         private var statusObservation: NSKeyValueObservation?
-        private var compositionUpgradeTask: Task<Void, Never>?
         private var fallbackCheckTask: Task<Void, Never>?
         private var activePlaybackSource = "unknown"
         private var fallbackInProgress = false
@@ -166,13 +165,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 // Start normally so AVPlayer can wait to minimize stalls.
                 player.play()
                 installProgressTracking(on: player)
-                if playback.allowsComposedUpgrade {
-                    startComposedUpgradeIfAvailable(
-                        detail: detail,
-                        request: request,
-                        baseMetadata: baseMetadata,
-                        player: player)
-                }
                 loadSponsorSegments(for: request, player: player, controller: controller)
                 recordHistory(detail, request)
             } catch {
@@ -368,63 +360,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             NSLog("Atlas.player: timeControl videoID=\(videoID) source=\(activePlaybackSource) status=\(Self.timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate) seconds=\(secondsText) \(Self.itemStateSummary(player.currentItem))")
         }
 
-        private func startComposedUpgradeIfAvailable(
-            detail: VideoDetail,
-            request: PlayRequest,
-            baseMetadata: [AVMetadataItem],
-            player: AVPlayer
-        ) {
-            guard detail.bestComposedSource(allowAV1: Self.supportsAV1) != nil else { return }
-            NSLog("Atlas.player: composed upgrade scheduled videoID=\(request.videoID)")
-            compositionUpgradeTask?.cancel()
-            let videoID = request.videoID
-            compositionUpgradeTask = Task { [weak self, weak player] in
-                let startedAt = Date()
-                guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-                    detail,
-                    allowAV1: Self.supportsAV1,
-                    timeout: 20
-                ) else {
-                    NSLog("Atlas.player: composed upgrade unavailable videoID=\(videoID) elapsed=\(Date().timeIntervalSince(startedAt))")
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                await PlayerAudioSelection.selectPreferredAudio(for: composed)
-                guard !Task.isCancelled,
-                      let self,
-                      let player,
-                      self.presentedID == videoID,
-                      self.currentRequest?.videoID == videoID,
-                      !self.usedComposition else {
-                    return
-                }
-
-                let resume = player.currentTime()
-                let wasPlaying = player.timeControlStatus != .paused
-                let currentMetadata = player.currentItem?.externalMetadata ?? []
-                composed.externalMetadata = currentMetadata.isEmpty ? baseMetadata : currentMetadata
-                self.usedComposition = true
-                player.replaceCurrentItem(with: composed)
-                PlayerCaptionSelection.keepOffByDefault(for: composed)
-                self.installEndObserver(for: composed)
-                self.installItemDiagnostics(for: composed, videoID: videoID, source: "composed-upgrade")
-                self.debugModel.configure(detail: detail, composed: true, allowAV1: Self.supportsAV1)
-                self.observeForFailure(
-                    composed,
-                    detail: detail,
-                    player: player,
-                    fallback: .direct)
-                if resume.isValid && resume.seconds.isFinite {
-                    await player.seek(
-                        to: resume,
-                        toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
-                        toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
-                }
-                if wasPlaying { player.playImmediately(atRate: 1.0) }
-                NSLog("Atlas.player: composed upgrade swapped videoID=\(videoID) seconds=\(resume.seconds) elapsed=\(Date().timeIntervalSince(startedAt))")
-            }
-        }
-
         private func playbackEndedNaturally() {
             if let seconds = player?.currentTime().seconds, seconds.isFinite {
                 savePosition(seconds)
@@ -444,8 +379,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func resetForItemReplacement(on player: AVPlayer) {
             loadTask?.cancel()
             loadTask = nil
-            compositionUpgradeTask?.cancel()
-            compositionUpgradeTask = nil
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
             if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -627,8 +560,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private func hardStop() {
             loadTask?.cancel()
             loadTask = nil
-            compositionUpgradeTask?.cancel()
-            compositionUpgradeTask = nil
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
             if let player {
@@ -1020,7 +951,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             fallbackCheckTask?.cancel()
             let stalledAt = player.currentTime().seconds
             fallbackCheckTask = Task { [weak self, weak item, weak player] in
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled else { return }
                 await self?.fallbackIfStillStalled(
                     stalledAt: stalledAt,
