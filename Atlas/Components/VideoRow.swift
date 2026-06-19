@@ -21,6 +21,7 @@ struct VideoRow: View {
     var reservesTitleSpace: Bool = false
     var onPlay: () -> Void
     @State private var collaborators: [CreatorChannel] = []
+    @State private var resolvedIsLive: Bool?
 
     private var channelID: String? { item.uploaderChannelID ?? channelIDFallback }
     private var creator: CreatorSummary {
@@ -44,7 +45,7 @@ struct VideoRow: View {
                         .overlay(alignment: .topLeading) {
                             if watched { WatchedBadge().padding(8) }
                         }
-                    durationPill
+                    playbackStatePill
                 }
             }
             .buttonStyle(.plain)
@@ -65,7 +66,8 @@ struct VideoRow: View {
             }
         }
         .task(id: item.videoID) {
-            await loadCollaboratorsIfNeeded()
+            resolvedIsLive = nil
+            await loadResolvedMetadataIfNeeded()
         }
     }
 
@@ -80,9 +82,12 @@ struct VideoRow: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder private var durationPill: some View {
+    @ViewBuilder private var playbackStatePill: some View {
         let d = Format.duration(item.duration)
-        if !d.isEmpty {
+        if item.isLive || resolvedIsLive == true {
+            LiveBadge()
+                .padding(8)
+        } else if !d.isEmpty {
             ThumbnailChip {
                 Text(d)
             }
@@ -119,22 +124,28 @@ struct VideoRow: View {
         .lineLimit(1)
     }
 
-    private func loadCollaboratorsIfNeeded() async {
-        guard collaborators.isEmpty,
-              creator.hasMultipleCreators,
+    private func loadResolvedMetadataIfNeeded() async {
+        let shouldLoadCollaborators = collaborators.isEmpty && creator.hasMultipleCreators
+        let shouldResolveLiveStatus = item.needsLiveStatusResolution
+        guard shouldLoadCollaborators || shouldResolveLiveStatus,
               let videoID = item.videoID else { return }
-        var loaded: [CreatorChannel] = []
-        if let detail = try? await app.resolveStream(videoID) {
-            loaded = detail.creators?.creatorChannels(verifiedChannelID: detail.channelID,
-                                                      uploaderVerified: detail.uploaderVerified ?? false) ?? []
+        guard let detail = try? await app.resolveStream(videoID) else { return }
+
+        if shouldResolveLiveStatus {
+            resolvedIsLive = detail.livestream == true
         }
 
-        if loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
-            loaded = loaded.enriched(with: await YouTubeCollaborators.channels(for: videoID))
-        }
+        if shouldLoadCollaborators {
+            var loaded = detail.creators?.creatorChannels(verifiedChannelID: detail.channelID,
+                                                          uploaderVerified: detail.uploaderVerified ?? false) ?? []
 
-        if !loaded.isEmpty {
-            collaborators = loaded
+            if loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
+                loaded = loaded.enriched(with: await YouTubeCollaborators.channels(for: videoID))
+            }
+
+            if !loaded.isEmpty {
+                collaborators = loaded
+            }
         }
     }
 }
