@@ -45,6 +45,102 @@ import Foundation
     #expect(!absolute.contains("C++"))
 }
 
+@Test func buildsAV1HLSMasterURLFromInstanceBase() {
+    let client = PipedClient(baseURL: URL(string: "https://piped.example")!)
+
+    #expect(
+        client.av1HLSMasterURL(videoID: "WOzcFkld6_g").absoluteString
+            == "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")
+}
+
+@Test func decodesChannelTabs() throws {
+    let json = """
+    {
+      "id": "UCchannel",
+      "name": "Example",
+      "nextpage": "videos-token",
+      "tabs": [
+        {"name": "shorts", "data": "{\\"url\\":\\"https://www.youtube.com/UCchannel/shorts\\"}"},
+        {"name": "playlists", "data": "{\\"url\\":\\"https://www.youtube.com/UCchannel/playlists\\"}"}
+      ],
+      "relatedStreams": [
+        {"url": "/watch?v=long", "type": "stream", "title": "Long video", "isShort": false}
+      ]
+    }
+    """.data(using: .utf8)!
+
+    let channel = try JSONDecoder().decode(Channel.self, from: json)
+    let tabs = try #require(channel.tabs)
+    #expect(tabs.count == 2)
+    #expect(tabs[0].name == "shorts")
+    #expect(tabs[0].data?.contains("/shorts") == true)
+}
+
+@Test func decodesChannelTabContent() throws {
+    let json = """
+    {
+      "content": [
+        {"url": "/watch?v=short", "type": "stream", "title": "Short", "isShort": true}
+      ],
+      "nextpage": "shorts-token"
+    }
+    """.data(using: .utf8)!
+
+    let page = try JSONDecoder().decode(ChannelTabPage.self, from: json)
+    let content = try #require(page.content)
+    #expect(content.count == 1)
+    #expect(content[0].videoID == "short")
+    #expect(content[0].isShort == true)
+    #expect(page.nextpage == "shorts-token")
+}
+
+@Test func buildsChannelTabURLWithEncodedDataAndNextPage() throws {
+    let data = #"{"originalUrl":"https://www.youtube.com/UCchannel/shorts","contentFilters":["shorts"]}"#
+    let url = try PipedClient.url(
+        baseURL: URL(string: "https://piped.example")!,
+        path: "channels/tabs",
+        query: ["data": data, "nextpage": "token+with&syntax"])
+
+    let absolute = url.absoluteString
+    #expect(absolute.contains("channels/tabs?"))
+    #expect(absolute.contains("data=%7B%22originalUrl%22"))
+    #expect(absolute.contains("%5B%22shorts%22%5D"))
+    #expect(absolute.contains("nextpage=token%2Bwith%26syntax"))
+    #expect(!absolute.contains("token+with&syntax"))
+}
+
+@Test func decodesLiveStreamItemsFromListResponses() throws {
+    let json = """
+    {
+      "url": "/watch?v=FuuC4dpSQ1M",
+      "type": "stream",
+      "title": "Live High-Definition Views from the International Space Station",
+      "duration": -1,
+      "livestream": true
+    }
+    """.data(using: .utf8)!
+
+    let item = try JSONDecoder().decode(StreamItem.self, from: json)
+    #expect(item.livestream == true)
+    #expect(item.isLive)
+}
+
+@Test func treatsNegativeListDurationAsNeedingLiveStatusResolutionWhenFlagIsMissing() throws {
+    let json = """
+    {
+      "url": "/watch?v=FuuC4dpSQ1M",
+      "type": "stream",
+      "title": "Live High-Definition Views from the International Space Station",
+      "duration": -1
+    }
+    """.data(using: .utf8)!
+
+    let item = try JSONDecoder().decode(StreamItem.self, from: json)
+    #expect(item.livestream == nil)
+    #expect(!item.isLive)
+    #expect(item.needsLiveStatusResolution)
+}
+
 @Test func prefersHLSWhenPresent() {
     let detail = VideoDetail(
         title: "x", description: nil, uploader: nil, uploaderUrl: nil,

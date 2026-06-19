@@ -83,6 +83,7 @@ public struct StreamItem: Codable, Identifiable, Hashable, Sendable {
     public let verified: Bool?
     public let uploaderVerified: Bool?
     public let isShort: Bool?
+    public let livestream: Bool?
 
     /// Stable identity: the video id when present, else the raw url.
     public var id: String { videoID ?? url }
@@ -97,6 +98,8 @@ public struct StreamItem: Codable, Identifiable, Hashable, Sendable {
     public var isVideo: Bool { (type ?? "stream") == "stream" && videoID != nil }
     public var isChannel: Bool { type == "channel" || ownChannelID != nil }
     public var displayTitle: String { title ?? name ?? "Untitled" }
+    public var isLive: Bool { livestream == true }
+    public var needsLiveStatusResolution: Bool { livestream == nil && duration == -1 }
 }
 
 // MARK: - Video / audio stream
@@ -564,6 +567,17 @@ public struct Channel: Codable, Sendable {
     public let subscriberCount: Int?
     public let verified: Bool?
     public let relatedStreams: [StreamItem]?
+    public let tabs: [ChannelTab]?
+}
+
+public struct ChannelTab: Codable, Hashable, Sendable {
+    public let name: String?
+    public let data: String?
+}
+
+public struct ChannelTabPage: Codable, Sendable {
+    public let content: [StreamItem]?
+    public let nextpage: String?
 }
 
 // MARK: - Comments (/comments/{id} and /nextpage/comments/{id})

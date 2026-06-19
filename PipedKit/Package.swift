@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PipedKit",
-    platforms: [.iOS(.v26)],
+    platforms: [.iOS(.v26), .macOS(.v12)],
     products: [
         .library(name: "PipedKit", targets: ["PipedKit"])
     ],
