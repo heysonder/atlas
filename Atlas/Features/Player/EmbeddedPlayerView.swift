@@ -301,7 +301,6 @@ final class EmbeddedPlayerModel {
     private var itemDiagnosticObservers: [NSObjectProtocol] = []
     private var statusObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
-    private var compositionUpgradeTask: Task<Void, Never>?
     private var fallbackCheckTask: Task<Void, Never>?
     private var activePlaybackSource = "unknown"
     private var fallbackInProgress = false
@@ -382,9 +381,6 @@ final class EmbeddedPlayerModel {
             }
             player.play()
             installProgressTracking()
-            if playback.allowsComposedUpgrade {
-                startComposedUpgradeIfAvailable(detail)
-            }
             recordHistory(detail)
         } catch {
             guard !Task.isCancelled else { return }
@@ -419,8 +415,6 @@ final class EmbeddedPlayerModel {
     func teardown() {
         loadTask?.cancel()
         loadTask = nil
-        compositionUpgradeTask?.cancel()
-        compositionUpgradeTask = nil
         fallbackCheckTask?.cancel()
         fallbackCheckTask = nil
         let t = player.currentTime().seconds
@@ -577,57 +571,6 @@ final class EmbeddedPlayerModel {
         NSLog("Atlas.player: embedded timeControl videoID=\(request.videoID) source=\(activePlaybackSource) status=\(Self.timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate) seconds=\(secondsText) \(Self.itemStateSummary(player.currentItem))")
     }
 
-    private func startComposedUpgradeIfAvailable(_ detail: VideoDetail) {
-        guard detail.bestComposedSource(allowAV1: Self.supportsAV1) != nil else { return }
-        NSLog("Atlas.player: embedded composed upgrade scheduled videoID=\(request.videoID)")
-        compositionUpgradeTask?.cancel()
-        let videoID = request.videoID
-        compositionUpgradeTask = Task { [weak self] in
-            let startedAt = Date()
-            guard let composed = await StreamPlaybackBuilder.makeComposedPlayerItem(
-                detail,
-                allowAV1: Self.supportsAV1,
-                timeout: 20
-            ) else {
-                NSLog("Atlas.player: embedded composed upgrade unavailable videoID=\(videoID) elapsed=\(Date().timeIntervalSince(startedAt))")
-                return
-            }
-            guard !Task.isCancelled else { return }
-            await PlayerAudioSelection.selectPreferredAudio(for: composed)
-            guard !Task.isCancelled,
-                  let self,
-                  self.request.videoID == videoID,
-                  !self.usedComposition else {
-                return
-            }
-
-            let resume = self.player.currentTime()
-            let wasPlaying = self.player.timeControlStatus != .paused
-            let currentMetadata = self.player.currentItem?.externalMetadata ?? []
-            composed.externalMetadata = currentMetadata.isEmpty
-                ? PlayerNowPlayingMetadata.streaming(detail, request: self.request)
-                : currentMetadata
-            self.usedComposition = true
-            self.player.replaceCurrentItem(with: composed)
-            PlayerCaptionSelection.keepOffByDefault(for: composed)
-            self.installEndObserver(for: composed)
-            self.installItemDiagnostics(for: composed, videoID: videoID, source: "composed-upgrade")
-            self.debugModel.configure(detail: detail, composed: true, allowAV1: Self.supportsAV1)
-            self.observeForFailure(
-                composed,
-                detail: detail,
-                fallback: .direct)
-            if resume.isValid && resume.seconds.isFinite {
-                await self.player.seek(
-                    to: resume,
-                    toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
-                    toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
-            }
-            if wasPlaying { self.player.playImmediately(atRate: 1.0) }
-            NSLog("Atlas.player: embedded composed upgrade swapped videoID=\(videoID) seconds=\(resume.seconds) elapsed=\(Date().timeIntervalSince(startedAt))")
-        }
-    }
-
     private func playbackEndedNaturally() {
         let seconds = player.currentTime().seconds
         if seconds.isFinite { savePosition(seconds) }
@@ -656,8 +599,6 @@ final class EmbeddedPlayerModel {
     private func resetForItemReplacement() {
         loadTask?.cancel()
         loadTask = nil
-        compositionUpgradeTask?.cancel()
-        compositionUpgradeTask = nil
         fallbackCheckTask?.cancel()
         fallbackCheckTask = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -871,7 +812,7 @@ final class EmbeddedPlayerModel {
         fallbackCheckTask?.cancel()
         let stalledAt = player.currentTime().seconds
         fallbackCheckTask = Task { [weak self, weak item] in
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard !Task.isCancelled else { return }
             await self?.fallbackIfStillStalled(
                 stalledAt: stalledAt,
