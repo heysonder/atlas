@@ -903,8 +903,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 return
             case .direct:
                 fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail)
-            case .composedOrHLS:
-                fallbackPlayback = await StreamPlaybackBuilder.makeComposedOrHLSFailureFallbackItem(
+            case .composedOrDirect:
+                fallbackPlayback = await StreamPlaybackBuilder.makeComposedOrDirectFailureFallbackItem(
                     detail,
                     allowAV1: Self.supportsAV1)
             }
