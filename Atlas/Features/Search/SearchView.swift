@@ -7,6 +7,7 @@ struct SearchView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var hSize
+    @Query(sort: \SearchEntry.lastSearchedAt, order: .reverse) private var searchHistory: [SearchEntry]
 
     struct Results { var channels: [StreamItem]; var videos: [StreamItem] }
 
@@ -33,7 +34,13 @@ struct SearchView: View {
         .searchable(text: $query, placement: .automatic, prompt: "Search YouTube")
         .searchFocused($searchFocused)
         .searchSuggestions {
-            ForEach(suggestions, id: \.self) { suggestion in
+            ForEach(historySuggestions) { entry in
+                Button { selectSearchHistory(entry) } label: {
+                    Label(entry.displayTitle, systemImage: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(remoteSuggestions, id: \.self) { suggestion in
                 Button { selectSuggestion(suggestion) } label: {
                     Label(suggestion, systemImage: "magnifyingglass")
                 }
@@ -71,14 +78,73 @@ struct SearchView: View {
     @ViewBuilder private var content: some View {
         switch phase {
         case .idle:
-            ContentUnavailableView("Search", systemImage: "magnifyingglass",
-                description: Text("Find videos and channels."))
+            idleContent
         case .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             ErrorState(message: message) { await runSearch() }
         case .loaded(let results):
             resultsList(results)
+        }
+    }
+
+    @ViewBuilder private var idleContent: some View {
+        if searchHistory.isEmpty {
+            ContentUnavailableView("Search", systemImage: "magnifyingglass",
+                description: Text("Find videos and channels."))
+        } else {
+            searchHistoryList
+        }
+    }
+
+    @ViewBuilder private var searchHistoryList: some View {
+        if hSize == .regular {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    searchHistoryHeader
+                    LazyVGrid(columns: LibraryGrid.columns(minCardWidth: 280),
+                              spacing: LibraryGrid.spacing) {
+                        ForEach(searchHistory) { entry in
+                            Button { selectSearchHistory(entry) } label: {
+                                SearchHistoryRow(entry: entry).libraryCard()
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { deleteSearchHistory(entry) } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+        } else {
+            List {
+                Section {
+                    ForEach(searchHistory) { entry in
+                        Button { selectSearchHistory(entry) } label: {
+                            SearchHistoryRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .onDelete(perform: deleteSearchHistory)
+                } header: {
+                    searchHistoryHeader
+                        .textCase(nil)
+                }
+            }
+            .listStyle(.insetGrouped)
+        }
+    }
+
+    private var searchHistoryHeader: some View {
+        HStack {
+            Text("Recent Searches")
+                .font(.headline)
+            Spacer()
+            Button("Clear", role: .destructive) { clearSearchHistory() }
+                .font(.subheadline.weight(.semibold))
         }
     }
 
@@ -157,7 +223,15 @@ struct SearchView: View {
     /// Tapping a suggestion fills the field *and* runs the search (and dismisses
     /// the keyboard) — it shouldn't just populate the text box.
     private func selectSuggestion(_ suggestion: String) {
-        query = suggestion
+        runSelectedSearch(suggestion)
+    }
+
+    private func selectSearchHistory(_ entry: SearchEntry) {
+        runSelectedSearch(entry.displayTitle)
+    }
+
+    private func runSelectedSearch(_ text: String) {
+        query = text
         suggestTask?.cancel()
         suggestions = []
         hideKeyboard()
@@ -174,7 +248,7 @@ struct SearchView: View {
         suggestions = []
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { phase = .idle; return }
-        recordSearch(q)
+        SearchHistoryStore.record(q, in: modelContext)
         phase = .loading
         nextpage = nil
         do {
@@ -216,21 +290,6 @@ struct SearchView: View {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
-    /// Persist the query as a personalization signal: upsert so repeats bump a
-    /// counter + the timestamp rather than duplicating. Mirrors how the player
-    /// records watch history.
-    private func recordSearch(_ raw: String) {
-        let key = SearchEntry.normalize(raw)
-        guard !key.isEmpty else { return }
-        let descriptor = FetchDescriptor<SearchEntry>(predicate: #Predicate { $0.query == key })
-        if let existing = try? modelContext.fetch(descriptor).first {
-            existing.count += 1
-            existing.lastSearchedAt = .now
-        } else {
-            modelContext.insert(SearchEntry(query: key))
-        }
-    }
-
     private func scheduleSuggestions(_ value: String) {
         suggestTask?.cancel()
         let q = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -242,6 +301,70 @@ struct SearchView: View {
             guard !Task.isCancelled else { return }
             suggestions = result
         }
+    }
+
+    private var historySuggestions: [SearchEntry] {
+        let key = SearchEntry.normalize(query)
+        let matches = key.isEmpty
+            ? searchHistory
+            : searchHistory.filter {
+                $0.query.contains(key) || $0.displayTitle.localizedCaseInsensitiveContains(query)
+            }
+        return Array(matches.prefix(5))
+    }
+
+    private var remoteSuggestions: [String] {
+        let historyKeys = Set(historySuggestions.map(\.query))
+        return Array(suggestions
+            .filter { !historyKeys.contains(SearchEntry.normalize($0)) }
+            .prefix(5))
+    }
+
+    private func deleteSearchHistory(_ offsets: IndexSet) {
+        for index in offsets {
+            SearchHistoryStore.delete(searchHistory[index], in: modelContext)
+        }
+    }
+
+    private func deleteSearchHistory(_ entry: SearchEntry) {
+        SearchHistoryStore.delete(entry, in: modelContext)
+    }
+
+    private func clearSearchHistory() {
+        SearchHistoryStore.clear(searchHistory, in: modelContext)
+    }
+}
+
+private struct SearchHistoryRow: View {
+    let entry: SearchEntry
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.displayTitle)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.left")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Search \(entry.displayTitle)")
+    }
+
+    private var subtitle: String {
+        entry.count == 1 ? "Searched once" : "\(entry.count) searches"
     }
 }
 
