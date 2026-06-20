@@ -2,14 +2,15 @@ import Foundation
 import SwiftData
 
 /// A portable JSON snapshot of everything SwiftData holds that can't be re-fetched
-/// from Piped: watch history, subscriptions, playlists, and taste feedback. Used to
-/// carry data across a bundle-identifier change (which gives the app a fresh, empty
-/// store). Downloads are intentionally excluded — those are on-disk files, and the
-/// videos are re-downloadable.
+/// from Piped: watch history, search history, subscriptions, playlists, and taste
+/// feedback. Used to carry data across a bundle-identifier change (which gives the
+/// app a fresh, empty store). Downloads are intentionally excluded — those are
+/// on-disk files, and the videos are re-downloadable.
 struct AtlasBackup: Codable {
-    var version = 1
+    var version = 2
     var exportedAt: Date
     var history: [HistoryDTO]
+    var searches: [SearchDTO]
     var channels: [ChannelDTO]
     var playlists: [PlaylistDTO]
     var feedback: [FeedbackDTO]
@@ -18,6 +19,12 @@ struct AtlasBackup: Codable {
         var videoID: String, title: String
         var uploader: String?, thumbnailURL: String?
         var watchedAt: Date, positionSeconds: Double, durationSeconds: Double
+    }
+    struct SearchDTO: Codable {
+        var query: String
+        var displayQuery: String?
+        var lastSearchedAt: Date
+        var count: Int
     }
     struct ChannelDTO: Codable {
         var channelID: String, name: String
@@ -34,15 +41,41 @@ struct AtlasBackup: Codable {
         var videoID: String, signal: Int, title: String
         var uploader: String?, category: String?, tags: [String]?, createdAt: Date
     }
+
+    init(exportedAt: Date, history: [HistoryDTO], searches: [SearchDTO],
+         channels: [ChannelDTO], playlists: [PlaylistDTO], feedback: [FeedbackDTO]) {
+        self.exportedAt = exportedAt
+        self.history = history
+        self.searches = searches
+        self.channels = channels
+        self.playlists = playlists
+        self.feedback = feedback
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version, exportedAt, history, searches, channels, playlists, feedback
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        exportedAt = try container.decode(Date.self, forKey: .exportedAt)
+        history = try container.decode([HistoryDTO].self, forKey: .history)
+        searches = try container.decodeIfPresent([SearchDTO].self, forKey: .searches) ?? []
+        channels = try container.decode([ChannelDTO].self, forKey: .channels)
+        playlists = try container.decode([PlaylistDTO].self, forKey: .playlists)
+        feedback = try container.decode([FeedbackDTO].self, forKey: .feedback)
+    }
 }
 
 enum BackupStore {
     /// Write a JSON backup to a temp file and return its URL (for the share sheet).
     static func export(from context: ModelContext) throws -> URL {
-        let history = (try? context.fetch(FetchDescriptor<HistoryEntry>())) ?? []
-        let channels = (try? context.fetch(FetchDescriptor<SubscribedChannel>())) ?? []
-        let playlists = (try? context.fetch(FetchDescriptor<Playlist>())) ?? []
-        let feedback = (try? context.fetch(FetchDescriptor<Feedback>())) ?? []
+        let history = try context.fetch(FetchDescriptor<HistoryEntry>())
+        let searches = try context.fetch(FetchDescriptor<SearchEntry>())
+        let channels = try context.fetch(FetchDescriptor<SubscribedChannel>())
+        let playlists = try context.fetch(FetchDescriptor<Playlist>())
+        let feedback = try context.fetch(FetchDescriptor<Feedback>())
 
         let backup = AtlasBackup(
             exportedAt: .now,
@@ -50,6 +83,10 @@ enum BackupStore {
                 .init(videoID: $0.videoID, title: $0.title, uploader: $0.uploader,
                       thumbnailURL: $0.thumbnailURL, watchedAt: $0.watchedAt,
                       positionSeconds: $0.positionSeconds, durationSeconds: $0.durationSeconds)
+            },
+            searches: searches.map {
+                .init(query: $0.query, displayQuery: $0.displayQuery,
+                      lastSearchedAt: $0.lastSearchedAt, count: $0.count)
             },
             channels: channels.map {
                 .init(channelID: $0.channelID, name: $0.name,
@@ -76,9 +113,10 @@ enum BackupStore {
     }
 
     struct Summary {
-        var history = 0, channels = 0, playlists = 0, feedback = 0
+        var history = 0, searches = 0, channels = 0, playlists = 0, feedback = 0
         var text: String {
-            "Imported \(history) history, \(channels) channels, \(playlists) playlists, \(feedback) ratings."
+            "Imported \(history) history, \(searches) searches, \(channels) channels, "
+                + "\(playlists) playlists, \(feedback) ratings."
         }
     }
 
@@ -100,6 +138,17 @@ enum BackupStore {
                                         thumbnailURL: h.thumbnailURL, watchedAt: h.watchedAt,
                                         positionSeconds: h.positionSeconds, durationSeconds: h.durationSeconds))
             summary.history += 1
+        }
+
+        var haveSearches = Set((try? context.fetch(FetchDescriptor<SearchEntry>()))?.map(\.query) ?? [])
+        for s in backup.searches {
+            let key = SearchEntry.normalize(s.query)
+            guard !key.isEmpty, !haveSearches.contains(key) else { continue }
+            let safeCount = SearchEntry.sanitizedCount(s.count)
+            context.insert(SearchEntry(query: key, displayQuery: s.displayQuery ?? s.query,
+                                       lastSearchedAt: s.lastSearchedAt, count: safeCount))
+            haveSearches.insert(key)
+            summary.searches += 1
         }
 
         let haveChannels = Set((try? context.fetch(FetchDescriptor<SubscribedChannel>()))?.map(\.channelID) ?? [])

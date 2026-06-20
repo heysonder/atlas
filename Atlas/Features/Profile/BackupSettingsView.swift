@@ -3,8 +3,8 @@ import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
-/// Export / import of the user's data (history, subscriptions, playlists,
-/// ratings) to and from a JSON file.
+/// Export / import of the user's data (history, searches, subscriptions,
+/// playlists, ratings) to and from a JSON file.
 struct BackupSettingsView: View {
     @Environment(\.modelContext) private var context
     @State private var exportFile: ExportFile?
@@ -17,9 +17,9 @@ struct BackupSettingsView: View {
                 Button("Export Data…", systemImage: "square.and.arrow.up") { exportData() }
                 Button("Import Data…", systemImage: "square.and.arrow.down") { importing = true }
             } footer: {
-                Text("Saves your history, subscriptions, playlists, and Suggest more / less "
-                     + "ratings to a JSON file. Export before changing the app's bundle "
-                     + "identifier, then import into the new install.")
+                Text("Saves your history, searches, subscriptions, playlists, and Suggest "
+                     + "more / less ratings to a JSON file. Export before changing the "
+                     + "app's bundle identifier, then import into the new install.")
             }
         }
         .navigationTitle("Backup & Data")
