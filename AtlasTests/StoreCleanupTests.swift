@@ -22,6 +22,65 @@ import PipedKit
 }
 
 @MainActor
+@Test func searchHistoryStoreUpsertsNormalizedQueries() throws {
+    let container = try makeTestContainer()
+    let context = container.mainContext
+    let first = Date(timeIntervalSince1970: 100)
+    let second = Date(timeIntervalSince1970: 200)
+
+    SearchHistoryStore.record(" SwiftUI ", in: context, now: first)
+    SearchHistoryStore.record("SWIFTUI", in: context, now: second)
+
+    let entries = try context.fetch(FetchDescriptor<SearchEntry>())
+    #expect(entries.count == 1)
+    #expect(entries.first?.query == "swiftui")
+    #expect(entries.first?.displayTitle == "SWIFTUI")
+    #expect(entries.first?.count == 2)
+    #expect(entries.first?.lastSearchedAt == second)
+}
+
+@MainActor
+@Test func backupStoreRoundTripsSearchHistory() throws {
+    let sourceContainer = try makeTestContainer()
+    let source = sourceContainer.mainContext
+    SearchHistoryStore.record("SwiftUI", in: source, now: Date(timeIntervalSince1970: 100))
+
+    let backupURL = try BackupStore.export(from: source)
+    let targetContainer = try makeTestContainer()
+    let target = targetContainer.mainContext
+    let summary = try BackupStore.restore(from: backupURL, into: target)
+    let restored = try target.fetch(FetchDescriptor<SearchEntry>())
+
+    #expect(summary.searches == 1)
+    #expect(restored.count == 1)
+    #expect(restored.first?.query == "swiftui")
+    #expect(restored.first?.displayTitle == "SwiftUI")
+}
+
+@MainActor
+@Test func backupStoreRestoresOlderBackupsWithoutSearchHistory() throws {
+    let json = """
+    {
+      "version": 1,
+      "exportedAt": "2026-06-01T00:00:00Z",
+      "history": [],
+      "channels": [],
+      "playlists": [],
+      "feedback": []
+    }
+    """.data(using: .utf8)!
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("atlas-backup-\(UUID().uuidString).json")
+    try json.write(to: url)
+
+    let targetContainer = try makeTestContainer()
+    let target = targetContainer.mainContext
+    let summary = try BackupStore.restore(from: url, into: target)
+
+    #expect(summary.searches == 0)
+}
+
+@MainActor
 @Test func playlistStoreDedupesVideosByID() throws {
     let container = try makeTestContainer()
     let context = container.mainContext
