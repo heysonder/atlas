@@ -22,6 +22,17 @@ import PipedKit
 }
 
 @MainActor
+@Test func searchEntryClampsCounts() {
+    let empty = SearchEntry(query: "swiftui", count: 0)
+    let excessive = SearchEntry(query: "swiftui", count: SearchEntry.maximumCount + 1)
+
+    #expect(empty.count == 1)
+    #expect(excessive.count == SearchEntry.maximumCount)
+    excessive.incrementCount()
+    #expect(excessive.count == SearchEntry.maximumCount)
+}
+
+@MainActor
 @Test func searchHistoryStoreUpsertsNormalizedQueries() throws {
     let container = try makeTestContainer()
     let context = container.mainContext
@@ -55,6 +66,39 @@ import PipedKit
     #expect(restored.count == 1)
     #expect(restored.first?.query == "swiftui")
     #expect(restored.first?.displayTitle == "SwiftUI")
+}
+
+@MainActor
+@Test func backupStoreClampsRestoredSearchCounts() throws {
+    let json = """
+    {
+      "version": 2,
+      "exportedAt": "2026-06-01T00:00:00Z",
+      "history": [],
+      "searches": [
+        {
+          "query": "swiftui",
+          "displayQuery": "SwiftUI",
+          "lastSearchedAt": "2026-06-01T00:00:00Z",
+          "count": 0
+        }
+      ],
+      "channels": [],
+      "playlists": [],
+      "feedback": []
+    }
+    """.data(using: .utf8)!
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("atlas-backup-\(UUID().uuidString).json")
+    try json.write(to: url)
+
+    let targetContainer = try makeTestContainer()
+    let target = targetContainer.mainContext
+    let summary = try BackupStore.restore(from: url, into: target)
+    let restored = try target.fetch(FetchDescriptor<SearchEntry>())
+
+    #expect(summary.searches == 1)
+    #expect(restored.first?.count == 1)
 }
 
 @MainActor

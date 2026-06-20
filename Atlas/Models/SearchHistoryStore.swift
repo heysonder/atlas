@@ -13,11 +13,15 @@ enum SearchHistoryStore {
             predicate: #Predicate { $0.query == key })
         descriptor.fetchLimit = 1
 
-        if let existing = try? context.fetch(descriptor).first {
-            existing.count += 1
-            existing.lastSearchedAt = now
-            existing.displayQuery = display
-            return existing
+        do {
+            if let existing = try context.fetch(descriptor).first {
+                existing.incrementCount()
+                existing.lastSearchedAt = now
+                existing.displayQuery = display
+                return existing
+            }
+        } catch {
+            return nil
         }
 
         let entry = SearchEntry(query: key, displayQuery: display, lastSearchedAt: now)
