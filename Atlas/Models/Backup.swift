@@ -71,11 +71,11 @@ struct AtlasBackup: Codable {
 enum BackupStore {
     /// Write a JSON backup to a temp file and return its URL (for the share sheet).
     static func export(from context: ModelContext) throws -> URL {
-        let history = (try? context.fetch(FetchDescriptor<HistoryEntry>())) ?? []
-        let searches = (try? context.fetch(FetchDescriptor<SearchEntry>())) ?? []
-        let channels = (try? context.fetch(FetchDescriptor<SubscribedChannel>())) ?? []
-        let playlists = (try? context.fetch(FetchDescriptor<Playlist>())) ?? []
-        let feedback = (try? context.fetch(FetchDescriptor<Feedback>())) ?? []
+        let history = try context.fetch(FetchDescriptor<HistoryEntry>())
+        let searches = try context.fetch(FetchDescriptor<SearchEntry>())
+        let channels = try context.fetch(FetchDescriptor<SubscribedChannel>())
+        let playlists = try context.fetch(FetchDescriptor<Playlist>())
+        let feedback = try context.fetch(FetchDescriptor<Feedback>())
 
         let backup = AtlasBackup(
             exportedAt: .now,
@@ -144,8 +144,9 @@ enum BackupStore {
         for s in backup.searches {
             let key = SearchEntry.normalize(s.query)
             guard !key.isEmpty, !haveSearches.contains(key) else { continue }
+            let safeCount = SearchEntry.sanitizedCount(s.count)
             context.insert(SearchEntry(query: key, displayQuery: s.displayQuery ?? s.query,
-                                       lastSearchedAt: s.lastSearchedAt, count: s.count))
+                                       lastSearchedAt: s.lastSearchedAt, count: safeCount))
             haveSearches.insert(key)
             summary.searches += 1
         }
