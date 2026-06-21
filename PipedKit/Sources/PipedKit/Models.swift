@@ -359,6 +359,15 @@ public struct VideoDetail: Codable, Sendable {
         return (u, s.height ?? 0)
     }
 
+    /// Whether the instance extracted at least one AV1 video stream. This is the
+    /// signal that its `/hls/av1/{id}/master.m3u8` endpoint can actually build a
+    /// master playlist: most videos extract HLS-only (empty `videoStreams`), and
+    /// for those the AV1 HLS endpoint returns 404. Gating the optimistic AV1 HLS
+    /// attempt on this avoids a guaranteed failed playback cycle per video.
+    public var hasAV1VideoStream: Bool {
+        (videoStreams ?? []).contains { $0.isAV1 }
+    }
+
     /// The highest-resolution video-only stream AVPlayer can decode, paired with
     /// the best audio stream, for an `AVMutableComposition`. `allowAV1` should
     /// reflect device hardware support. Returns nil if no compose-able pair exists.
