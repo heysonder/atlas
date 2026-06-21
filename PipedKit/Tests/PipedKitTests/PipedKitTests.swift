@@ -53,6 +53,31 @@ import Foundation
             == "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")
 }
 
+@Test func detectsAV1VideoStreamAvailability() {
+    func detail(_ streams: [PipedKit.Stream]?) -> VideoDetail {
+        VideoDetail(
+            title: "x", description: nil, uploader: nil, uploaderUrl: nil,
+            uploaderAvatar: nil, thumbnailUrl: nil, hls: "https://example.com/hls.m3u8",
+            duration: 1, views: nil, likes: nil, uploaded: nil,
+            uploaderVerified: nil, uploaderSubscriberCount: nil, creators: nil, livestream: nil,
+            chapters: nil, videoStreams: streams,
+            audioStreams: nil, subtitles: nil, relatedStreams: nil, category: nil, tags: nil)
+    }
+    func stream(_ codec: String) -> PipedKit.Stream {
+        PipedKit.Stream(url: "https://example.com/v.mp4", format: "MP4", quality: "1080p",
+               mimeType: "video/mp4", codec: codec, videoOnly: true, bitrate: nil,
+               width: 1920, height: 1080, fps: 30)
+    }
+
+    // HLS-only extraction (the common case): no AV1 HLS attempt should be made.
+    #expect(detail([]).hasAV1VideoStream == false)
+    #expect(detail(nil).hasAV1VideoStream == false)
+    // Only H.264 adaptive streams — still no AV1 master to build.
+    #expect(detail([stream("avc1.640028")]).hasAV1VideoStream == false)
+    // At least one AV1 stream — the AV1 HLS endpoint can serve a master.
+    #expect(detail([stream("avc1.640028"), stream("av01.0.12M.08")]).hasAV1VideoStream)
+}
+
 @Test func decodesChannelTabs() throws {
     let json = """
     {

@@ -332,9 +332,14 @@ final class EmbeddedPlayerModel {
     private func load() async {
         do {
             let client = try app.client
-            let av1HLSURL = client.av1HLSMasterURL(videoID: request.videoID)
             let detail = try await app.resolveStream(request.videoID)
             guard !Task.isCancelled else { return }
+            // Only try AV1 HLS when it can actually work: the device decodes AV1
+            // and the instance extracted AV1 streams (otherwise the /hls/av1
+            // endpoint 404s and AVPlayer fails before falling back).
+            let av1HLSURL = (Self.supportsAV1 && detail.hasAV1VideoStream)
+                ? client.av1HLSMasterURL(videoID: request.videoID)
+                : nil
             guard let playback = await StreamPlaybackBuilder.makePlayerItem(
                 detail,
                 allowAV1: Self.supportsAV1,
