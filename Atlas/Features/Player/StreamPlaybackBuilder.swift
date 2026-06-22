@@ -20,7 +20,13 @@ enum StreamPlaybackBuilder {
         let sourceName: String
         let failureFallback: FailureFallback
         let selectsPreferredAudio: Bool
+        let stallFallbackDelay: TimeInterval
     }
+
+    static let defaultStallFallbackDelay: TimeInterval = 15
+    static let av1HLSStallFallbackDelay: TimeInterval = 45
+    private static let av1HLSStartupPeakBitRate: Double = 9_000_000
+    private static let av1HLSStartupMaximumResolution = CGSize(width: 2_560, height: 1_440)
 
     /// Builds the cleanest playable item first. AV1 HLS is tried optimistically
     /// from the selected instance URL; runtime fallback handles instances that
@@ -50,7 +56,8 @@ enum StreamPlaybackBuilder {
                 composed: false,
                 sourceName: usesAV1HLS ? "direct-av1-hls" : "direct-initial",
                 failureFallback: usesAV1HLS ? .composedOrDirect : .none,
-                selectsPreferredAudio: true)
+                selectsPreferredAudio: !usesAV1HLS,
+                stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay)
         case .composed(let video, let audio):
             guard let composed = await composedItem(video: video, audio: audio) else {
                 NSLog("Atlas.player: composed startup assembly failed; falling back to direct")
@@ -61,7 +68,8 @@ enum StreamPlaybackBuilder {
                 composed: true,
                 sourceName: "composed-initial",
                 failureFallback: .direct,
-                selectsPreferredAudio: true)
+                selectsPreferredAudio: true,
+                stallFallbackDelay: defaultStallFallbackDelay)
         case nil:
             return nil
         }
@@ -96,7 +104,8 @@ enum StreamPlaybackBuilder {
             composed: false,
             sourceName: usesHLS ? "fallback-hls" : "fallback-direct",
             failureFallback: .none,
-            selectsPreferredAudio: true)
+            selectsPreferredAudio: true,
+            stallFallbackDelay: defaultStallFallbackDelay)
     }
 
     static func makeComposedOrDirectFailureFallbackItem(
@@ -114,7 +123,8 @@ enum StreamPlaybackBuilder {
                     composed: true,
                     sourceName: "fallback-composed",
                     failureFallback: .none,
-                    selectsPreferredAudio: true)
+                    selectsPreferredAudio: true,
+                    stallFallbackDelay: defaultStallFallbackDelay)
             }
             NSLog("Atlas.player: fallback composed assembly failed; falling back to direct")
         }
@@ -130,8 +140,9 @@ enum StreamPlaybackBuilder {
     private static func playerItem(forDirectURL url: URL, usesAV1HLS: Bool) -> AVPlayerItem {
         let item = usesAV1HLS ? AVPlayerItem(asset: av1HLSAsset(url: url)) : AVPlayerItem(url: url)
         if usesAV1HLS {
-            item.preferredPeakBitRate = 0
-            item.preferredForwardBufferDuration = 0
+            item.preferredPeakBitRate = av1HLSStartupPeakBitRate
+            item.preferredMaximumResolution = av1HLSStartupMaximumResolution
+            item.preferredForwardBufferDuration = 8
         }
         return item
     }

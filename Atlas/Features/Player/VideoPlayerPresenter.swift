@@ -152,7 +152,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                         initialItem,
                         detail: detail,
                         player: player,
-                        fallback: playback.failureFallback)
+                        fallback: playback.failureFallback,
+                        stallFallbackDelay: playback.stallFallbackDelay)
                 }
                 PlayerNowPlayingMetadata.attachArtwork(
                     to: initialItem,
@@ -847,7 +848,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             _ item: AVPlayerItem,
             detail: VideoDetail,
             player: AVPlayer,
-            fallback: StreamPlaybackBuilder.FailureFallback
+            fallback: StreamPlaybackBuilder.FailureFallback,
+            stallFallbackDelay: TimeInterval
         ) {
             fallbackInProgress = false
             statusObservation?.invalidate()
@@ -874,7 +876,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                         item,
                         detail: detail,
                         player: player,
-                        fallback: fallback)
+                        fallback: fallback,
+                        delay: stallFallbackDelay)
                 }
             })
             itemDiagnosticObservers.append(center.addObserver(
@@ -951,12 +954,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             _ item: AVPlayerItem,
             detail: VideoDetail,
             player: AVPlayer,
-            fallback: StreamPlaybackBuilder.FailureFallback
+            fallback: StreamPlaybackBuilder.FailureFallback,
+            delay: TimeInterval
         ) {
             fallbackCheckTask?.cancel()
             let stalledAt = player.currentTime().seconds
             fallbackCheckTask = Task { [weak self, weak item, weak player] in
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard !Task.isCancelled else { return }
                 await self?.fallbackIfStillStalled(
                     stalledAt: stalledAt,
