@@ -367,7 +367,8 @@ final class EmbeddedPlayerModel {
                 observeForFailure(
                     initialItem,
                     detail: detail,
-                    fallback: playback.failureFallback)
+                    fallback: playback.failureFallback,
+                    stallFallbackDelay: playback.stallFallbackDelay)
             }
             PlayerNowPlayingMetadata.attachArtwork(
                 to: initialItem,
@@ -712,7 +713,8 @@ final class EmbeddedPlayerModel {
     private func observeForFailure(
         _ item: AVPlayerItem,
         detail: VideoDetail,
-        fallback: StreamPlaybackBuilder.FailureFallback
+        fallback: StreamPlaybackBuilder.FailureFallback,
+        stallFallbackDelay: TimeInterval
     ) {
         fallbackInProgress = false
         statusObservation?.invalidate()
@@ -737,7 +739,8 @@ final class EmbeddedPlayerModel {
                 self?.scheduleFallbackIfStillStalled(
                     item,
                     detail: detail,
-                    fallback: fallback)
+                    fallback: fallback,
+                    delay: stallFallbackDelay)
             }
         })
         itemDiagnosticObservers.append(center.addObserver(
@@ -807,12 +810,13 @@ final class EmbeddedPlayerModel {
     private func scheduleFallbackIfStillStalled(
         _ item: AVPlayerItem,
         detail: VideoDetail,
-        fallback: StreamPlaybackBuilder.FailureFallback
+        fallback: StreamPlaybackBuilder.FailureFallback,
+        delay: TimeInterval
     ) {
         fallbackCheckTask?.cancel()
         let stalledAt = player.currentTime().seconds
         fallbackCheckTask = Task { [weak self, weak item] in
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await self?.fallbackIfStillStalled(
                 stalledAt: stalledAt,
