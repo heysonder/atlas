@@ -25,11 +25,20 @@ enum StreamPlaybackBuilder {
 
     static let defaultStallFallbackDelay: TimeInterval = 15
     static let av1HLSStallFallbackDelay: TimeInterval = 45
+    /// Remote composition assembly (track + duration loads through the proxy)
+    /// is cancelled after this long, so a hung proxy degrades to the direct
+    /// fallback instead of a spinner that never resolves.
+    static let composedAssemblyTimeout: TimeInterval = 12
+    /// Runtime fallbacks re-resolve stream URLs when the current details are
+    /// older than this — a video's signed URLs all expire together, so
+    /// rebuilding from stale details swaps one dead URL for another.
+    static let staleDetailFallbackAge: TimeInterval = 30 * 60
 
-    /// Builds the cleanest playable item first. AV1 HLS is tried optimistically
-    /// from the selected instance URL; runtime fallback handles instances that
-    /// do not actually serve it. Without AV1, composed video/audio wins over
-    /// regular direct URLs because Piped's direct stream is often lower quality.
+    /// Builds the cleanest playable item first: an ABR manifest (AV1 HLS when
+    /// the device and video support it, otherwise YouTube's own HLS master) so
+    /// AVPlayer owns quality selection. The fixed-bitrate composed pair only
+    /// takes over when it is strictly sharper than the best rung the manifest
+    /// can offer; runtime fallback handles manifests that fail to play.
     static func makePlayerItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
@@ -49,15 +58,17 @@ enum StreamPlaybackBuilder {
         ) {
         case .direct(let url):
             let usesAV1HLS = url == av1HLSURL
+            let usesHLS = usesAV1HLS || isHLSPlaylist(url)
             return PreparedPlayback(
                 item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
                 composed: false,
-                sourceName: usesAV1HLS ? "direct-av1-hls" : "direct-initial",
-                failureFallback: usesAV1HLS ? .composedOrDirect : .none,
+                sourceName: usesAV1HLS ? "direct-av1-hls" : (usesHLS ? "direct-hls" : "direct-initial"),
+                failureFallback: usesHLS ? .composedOrDirect : .none,
                 selectsPreferredAudio: !usesAV1HLS,
                 stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay)
         case .composed(let video, let audio):
-            guard let composed = await composedItem(video: video, audio: audio) else {
+            guard let composed = await composedItem(
+                video: video, audio: audio, timeout: composedAssemblyTimeout) else {
                 NSLog("Atlas.player: composed startup assembly failed; falling back to direct")
                 return makeDirectFailureFallbackItem(for: detail)
             }
@@ -80,15 +91,34 @@ enum StreamPlaybackBuilder {
         allowProgressiveFallback: Bool = true,
         preferredLanguages: [String] = Locale.preferredLanguages
     ) -> PlaybackSource? {
-        if let av1HLSURL { return .direct(av1HLSURL) }
         let composedSource = detail.bestComposedSource(
             allowAV1: allowAV1,
             preferredLanguages: preferredLanguages)
-        if let source = composedSource {
-            return .composed(video: source.video, audio: source.audio)
+        // ABR manifests win by default; the fixed-bitrate composition can't
+        // adapt to bandwidth at all, so it only takes over when it is strictly
+        // sharper than the tallest rung the manifest is built from. When the
+        // ceiling is unknown (no stream reports a height), trust the manifest.
+        if let av1HLSURL {
+            if let source = composedSource,
+               let ceiling = detail.maxAV1VideoStreamHeight,
+               source.height > ceiling {
+                return .composed(video: source.video, audio: source.audio)
+            }
+            return .direct(av1HLSURL)
         }
         if let url = playlistURL(from: detail) {
+            // YouTube's HLS master is built from the AVC/VP9 ladder, so an AV1
+            // composition taller than that ladder beats it (e.g. an AV1 device
+            // playing a video whose non-AV1 streams top out lower).
+            if let source = composedSource,
+               let ceiling = detail.maxNonAV1VideoStreamHeight,
+               source.height > ceiling {
+                return .composed(video: source.video, audio: source.audio)
+            }
             return .direct(url)
+        }
+        if let source = composedSource {
+            return .composed(video: source.video, audio: source.audio)
         }
         if allowProgressiveFallback, let url = detail.playableURL { return .direct(url) }
         return nil
@@ -115,7 +145,8 @@ enum StreamPlaybackBuilder {
             allowAV1: allowAV1,
             preferredLanguages: preferredLanguages)
         if let source = composedSource {
-            if let composed = await composedItem(video: source.video, audio: source.audio) {
+            if let composed = await composedItem(
+                video: source.video, audio: source.audio, timeout: composedAssemblyTimeout) {
                 return PreparedPlayback(
                     item: composed,
                     composed: true,

@@ -49,6 +49,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var fallbackInProgress = false
         private var currentRequest: PlayRequest?
         private var currentDetail: VideoDetail?
+        /// When `currentDetail`'s URLs were resolved — runtime fallback uses
+        /// this to decide whether they may have expired.
+        private var currentDetailLoadedAt: Date?
         private var usedComposition = false
         private var infoButtonHost: UIHostingController<InfoOverlayButton>?
         private var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
@@ -161,6 +164,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     base: baseMetadata)
 
                 currentDetail = detail
+                currentDetailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
                 installDebugOverlay(on: controller)
                 installInfoButton(on: controller)
                 // Resume from a saved position (ignore if we're at/near the end).
@@ -170,6 +174,17 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 }
                 // Start normally so AVPlayer can wait to minimize stalls.
                 player.play()
+                // A start that never becomes playback (buffering that never
+                // completes) fires no stall notification and no failure, so
+                // watch for it explicitly.
+                if playback.failureFallback != .none {
+                    scheduleFallbackIfStillStalled(
+                        initialItem,
+                        detail: detail,
+                        player: player,
+                        fallback: playback.failureFallback,
+                        delay: playback.stallFallbackDelay)
+                }
                 installProgressTracking(on: player)
                 loadSponsorSegments(for: request, player: player, controller: controller)
                 recordHistory(detail, request)
@@ -408,6 +423,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             debugModel.reset()
             usedComposition = false
             currentDetail = nil
+            currentDetailLoadedAt = nil
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
             infoButtonHost?.removeFromParent()
@@ -609,6 +625,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             presentedID = nil
             currentRequest = nil
             currentDetail = nil
+            currentDetailLoadedAt = nil
             pipActive = false
         }
 
@@ -871,7 +888,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 queue: .main
             ) { [weak self, weak item, weak player] _ in
                 Task { @MainActor [weak self, weak item, weak player] in
-                    guard let item, let player, Self.shouldFallbackFromErrorLog(item) else { return }
+                    guard let item, let player else { return }
                     self?.scheduleFallbackIfStillStalled(
                         item,
                         detail: detail,
@@ -904,11 +921,16 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             player: AVPlayer,
             fallback: StreamPlaybackBuilder.FailureFallback
         ) async {
-            guard !fallbackInProgress else { return }
+            guard !fallbackInProgress, fallback != .none else { return }
+            // Claim the fallback before the awaits below so a second failure
+            // signal (status + failed-to-play often arrive together) can't
+            // start a competing swap.
+            fallbackInProgress = true
+            let detail = await refreshedDetailForFallback(detail, failedItem: item)
             let fallbackPlayback: StreamPlaybackBuilder.PreparedPlayback?
             switch fallback {
             case .none:
-                return
+                fallbackPlayback = nil
             case .direct:
                 fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail)
             case .composedOrDirect:
@@ -916,8 +938,14 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     detail,
                     allowAV1: Self.supportsAV1)
             }
-            guard let fallbackPlayback else { return }
-            fallbackInProgress = true
+            guard let fallbackPlayback else {
+                fallbackInProgress = false
+                return
+            }
+            // The awaits above can outlive this playback: bail if the
+            // coordinator moved to another player/item meanwhile (whoever
+            // replaced it also reset the fallback state — leave it alone).
+            guard self.player === player, player.currentItem === item else { return }
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
             usedComposition = fallbackPlayback.composed
@@ -937,6 +965,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 : currentMetadata
             if fallbackPlayback.selectsPreferredAudio {
                 await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
+                guard self.player === player, player.currentItem === item else { return }
             }
             player.replaceCurrentItem(with: fallbackItem)
             PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)
@@ -980,8 +1009,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         ) async {
             guard let item,
                   let player,
-                  player.currentItem === item,
-                  Self.shouldFallbackFromErrorLog(item) else {
+                  player.currentItem === item else {
                 return
             }
             let currentSeconds = player.currentTime().seconds
@@ -989,10 +1017,11 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 && stalledAt.isFinite
                 && currentSeconds > stalledAt + 0.75
             guard !advanced else { return }
+            // Only starvation while actively trying to play counts as blocked —
+            // a user-paused item with a thin buffer must not trigger a swap.
             let stillBlocked = item.status == .failed
-                || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                || item.isPlaybackBufferEmpty
-                || !item.isPlaybackLikelyToKeepUp
+                || (player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    && (item.isPlaybackBufferEmpty || !item.isPlaybackLikelyToKeepUp))
             guard stillBlocked else { return }
             await fallbackAfterFailure(
                 reason: "unrecovered media stall",
@@ -1002,7 +1031,28 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 fallback: fallback)
         }
 
-        private static func shouldFallbackFromErrorLog(_ item: AVPlayerItem?) -> Bool {
+        /// A video's signed URLs all expire together, so when the failure looks
+        /// like expiry — an HTTP 403 in the error log or details past the
+        /// freshness window — rebuild from freshly resolved URLs instead of
+        /// equally stale ones.
+        private func refreshedDetailForFallback(
+            _ detail: VideoDetail,
+            failedItem item: AVPlayerItem
+        ) async -> VideoDetail {
+            guard let videoID = currentRequest?.videoID else { return detail }
+            let age = currentDetailLoadedAt.map { Date().timeIntervalSince($0) } ?? .infinity
+            guard Self.hasExpiredURLError(item)
+                    || age > StreamPlaybackBuilder.staleDetailFallbackAge else { return detail }
+            guard let fresh = try? await app.refreshStream(videoID) else { return detail }
+            NSLog("Atlas.player: refreshed stream URLs for fallback videoID=\(videoID)")
+            currentDetail = fresh
+            currentDetailLoadedAt = Date()
+            return fresh
+        }
+
+        /// -12660 is CoreMedia's status for an HTTP 403 on a media request —
+        /// the signature of an expired signed URL.
+        private static func hasExpiredURLError(_ item: AVPlayerItem?) -> Bool {
             guard let event = item?.errorLog()?.events.last else { return false }
             return event.errorDomain == "CoreMediaErrorDomain"
                 && event.errorStatusCode == -12660
