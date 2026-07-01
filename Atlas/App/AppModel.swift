@@ -230,7 +230,10 @@ final class AppModel {
 
     @ObservationIgnored private var streamCache: [String: (detail: VideoDetail, at: Date)] = [:]
     @ObservationIgnored private var inflight: [String: Task<VideoDetail, Error>] = [:]
-    private static let streamTTL: TimeInterval = 300
+    /// Signed stream URLs stay valid for ~6 hours, so cached details can be
+    /// reused generously; playback failure recovery uses `refreshStream` when
+    /// it suspects expiry.
+    private static let streamTTL: TimeInterval = 3600
 
     /// Returns the stream details, using a cached/in-flight result when available
     /// so a tap doesn't re-pay the full extraction latency.
@@ -251,6 +254,21 @@ final class AppModel {
             inflight[videoID] = nil
             throw error
         }
+    }
+
+    /// Force-fetches fresh stream details, bypassing the cache. Playback
+    /// failure recovery uses this when the signed URLs in the current details
+    /// may have expired.
+    func refreshStream(_ videoID: String) async throws -> VideoDetail {
+        streamCache[videoID] = nil
+        return try await resolveStream(videoID)
+    }
+
+    /// When the cached details for a video were actually fetched. A cache hit
+    /// can be up to `streamTTL` old, so players must not date their copy from
+    /// the moment `resolveStream` returned.
+    func streamResolvedAt(_ videoID: String) -> Date? {
+        streamCache[videoID]?.at
     }
 
     /// Warm the cache for a video that's likely to be tapped. Capped so we never

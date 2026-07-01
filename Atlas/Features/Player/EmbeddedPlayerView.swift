@@ -286,6 +286,9 @@ final class EmbeddedPlayerModel {
     let player = AVPlayer()
     private(set) var request: PlayRequest
     private(set) var detail: VideoDetail?
+    /// When `detail`'s URLs were resolved — runtime fallback uses this to
+    /// decide whether they may have expired.
+    private var detailLoadedAt: Date?
     private(set) var errorMessage: String?
     private(set) var currentPlaybackSeconds: Double?
     private(set) var client: PipedClient?
@@ -381,11 +384,22 @@ final class EmbeddedPlayerModel {
                 base: baseMetadata)
             self.client = client
             self.detail = detail
+            detailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
             if let resume = savedPosition(for: request.videoID),
                resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
             player.play()
+            // A start that never becomes playback (buffering that never
+            // completes) fires no stall notification and no failure, so
+            // watch for it explicitly.
+            if playback.failureFallback != .none {
+                scheduleFallbackIfStillStalled(
+                    initialItem,
+                    detail: detail,
+                    fallback: playback.failureFallback,
+                    delay: playback.stallFallbackDelay)
+            }
             installProgressTracking()
             recordHistory(detail)
         } catch {
@@ -620,6 +634,7 @@ final class EmbeddedPlayerModel {
         debugModel.reset()
         usedComposition = false
         detail = nil
+        detailLoadedAt = nil
         errorMessage = nil
         currentPlaybackSeconds = nil
         client = nil
@@ -740,7 +755,7 @@ final class EmbeddedPlayerModel {
             queue: .main
         ) { [weak self, weak item] _ in
             Task { @MainActor [weak self, weak item] in
-                guard let item, Self.shouldFallbackFromErrorLog(item) else { return }
+                guard let item else { return }
                 self?.scheduleFallbackIfStillStalled(
                     item,
                     detail: detail,
@@ -770,11 +785,16 @@ final class EmbeddedPlayerModel {
         detail: VideoDetail,
         fallback: StreamPlaybackBuilder.FailureFallback
     ) async {
-        guard !fallbackInProgress else { return }
+        guard !fallbackInProgress, fallback != .none else { return }
+        // Claim the fallback before the awaits below so a second failure
+        // signal (status + failed-to-play often arrive together) can't
+        // start a competing swap.
+        fallbackInProgress = true
+        let detail = await refreshedDetailForFallback(detail, failedItem: item)
         let fallbackPlayback: StreamPlaybackBuilder.PreparedPlayback?
         switch fallback {
         case .none:
-            return
+            fallbackPlayback = nil
         case .direct:
             fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail)
         case .composedOrDirect:
@@ -782,8 +802,14 @@ final class EmbeddedPlayerModel {
                 detail,
                 allowAV1: Self.supportsAV1)
         }
-        guard let fallbackPlayback else { return }
-        fallbackInProgress = true
+        guard let fallbackPlayback else {
+            fallbackInProgress = false
+            return
+        }
+        // The awaits above can outlive this playback: bail if another video
+        // (or teardown) replaced the item meanwhile (whoever replaced it also
+        // reset the fallback state — leave it alone).
+        guard player.currentItem === item else { return }
         fallbackCheckTask?.cancel()
         fallbackCheckTask = nil
         usedComposition = fallbackPlayback.composed
@@ -799,6 +825,7 @@ final class EmbeddedPlayerModel {
             : currentMetadata
         if fallbackPlayback.selectsPreferredAudio {
             await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
+            guard player.currentItem === item else { return }
         }
         player.replaceCurrentItem(with: fallbackItem)
         PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)
@@ -838,8 +865,7 @@ final class EmbeddedPlayerModel {
         fallback: StreamPlaybackBuilder.FailureFallback
     ) async {
         guard let item,
-              player.currentItem === item,
-              Self.shouldFallbackFromErrorLog(item) else {
+              player.currentItem === item else {
             return
         }
         let currentSeconds = player.currentTime().seconds
@@ -847,10 +873,11 @@ final class EmbeddedPlayerModel {
             && stalledAt.isFinite
             && currentSeconds > stalledAt + 0.75
         guard !advanced else { return }
+        // Only starvation while actively trying to play counts as blocked —
+        // a user-paused item with a thin buffer must not trigger a swap.
         let stillBlocked = item.status == .failed
-            || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            || item.isPlaybackBufferEmpty
-            || !item.isPlaybackLikelyToKeepUp
+            || (player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                && (item.isPlaybackBufferEmpty || !item.isPlaybackLikelyToKeepUp))
         guard stillBlocked else { return }
         await fallbackAfterFailure(
             reason: "unrecovered media stall",
@@ -859,7 +886,27 @@ final class EmbeddedPlayerModel {
             fallback: fallback)
     }
 
-    private static func shouldFallbackFromErrorLog(_ item: AVPlayerItem?) -> Bool {
+    /// A video's signed URLs all expire together, so when the failure looks
+    /// like expiry — an HTTP 403 in the error log or details past the
+    /// freshness window — rebuild from freshly resolved URLs instead of
+    /// equally stale ones.
+    private func refreshedDetailForFallback(
+        _ detail: VideoDetail,
+        failedItem item: AVPlayerItem
+    ) async -> VideoDetail {
+        let age = detailLoadedAt.map { Date().timeIntervalSince($0) } ?? .infinity
+        guard Self.hasExpiredURLError(item)
+                || age > StreamPlaybackBuilder.staleDetailFallbackAge else { return detail }
+        guard let fresh = try? await app.refreshStream(request.videoID) else { return detail }
+        NSLog("Atlas.player: embedded refreshed stream URLs for fallback videoID=\(request.videoID)")
+        self.detail = fresh
+        detailLoadedAt = Date()
+        return fresh
+    }
+
+    /// -12660 is CoreMedia's status for an HTTP 403 on a media request —
+    /// the signature of an expired signed URL.
+    private static func hasExpiredURLError(_ item: AVPlayerItem?) -> Bool {
         guard let event = item?.errorLog()?.events.last else { return false }
         return event.errorDomain == "CoreMediaErrorDomain"
             && event.errorStatusCode == -12660
