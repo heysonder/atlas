@@ -384,7 +384,7 @@ final class EmbeddedPlayerModel {
                 base: baseMetadata)
             self.client = client
             self.detail = detail
-            detailLoadedAt = Date()
+            detailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
             if let resume = savedPosition(for: request.videoID),
                resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
@@ -806,6 +806,10 @@ final class EmbeddedPlayerModel {
             fallbackInProgress = false
             return
         }
+        // The awaits above can outlive this playback: bail if another video
+        // (or teardown) replaced the item meanwhile (whoever replaced it also
+        // reset the fallback state — leave it alone).
+        guard player.currentItem === item else { return }
         fallbackCheckTask?.cancel()
         fallbackCheckTask = nil
         usedComposition = fallbackPlayback.composed
@@ -821,6 +825,7 @@ final class EmbeddedPlayerModel {
             : currentMetadata
         if fallbackPlayback.selectsPreferredAudio {
             await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
+            guard player.currentItem === item else { return }
         }
         player.replaceCurrentItem(with: fallbackItem)
         PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)

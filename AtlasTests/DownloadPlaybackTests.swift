@@ -113,6 +113,34 @@ import Testing
     #expect(matchedComposed == .direct(av1HLS))
 }
 
+@Test func composedAV1OvertakesRegularHLSWhenLadderTopsLower() throws {
+    let av1Video = URL(string: "https://example.com/2160-av1.mp4")!
+    let audio = URL(string: "https://example.com/audio.m4a")!
+
+    // No AV1 HLS endpoint in play; YouTube's ladder (non-AV1) tops at 1080p,
+    // so the 2160p AV1 composition is strictly sharper than the HLS master.
+    let source = try #require(StreamPlaybackBuilder.preferredSource(
+        streamPlaybackDetail(av1StreamURL: av1Video.absoluteString),
+        allowAV1: true,
+        preferredLanguages: ["en-US"]))
+
+    #expect(source == .composed(video: av1Video, audio: audio))
+}
+
+@Test func unknownManifestHeightsTrustABR() throws {
+    let av1HLS = URL(string: "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")!
+
+    // The AV1 stream reports no height, so no ceiling can be established and
+    // the composed override must not fire.
+    let source = try #require(StreamPlaybackBuilder.preferredSource(
+        streamPlaybackDetail(av1StreamURL: "https://example.com/unknown-av1.mp4", av1StreamHeight: nil),
+        allowAV1: false,
+        av1HLSURL: av1HLS,
+        preferredLanguages: ["en-US"]))
+
+    #expect(source == .direct(av1HLS))
+}
+
 @Test func regularHLSWinsWhetherOrNotComposedExists() throws {
     let hls = URL(string: "https://example.com/master.m3u8")!
 
@@ -206,7 +234,7 @@ private func streamPlaybackDetail(
     videoURL: String = "https://example.com/1080.mp4",
     audioURL: String = "https://example.com/audio.m4a",
     av1StreamURL: String? = nil,
-    av1StreamHeight: Int = 2160,
+    av1StreamHeight: Int? = 2160,
     progressiveURL: String? = nil
 ) -> VideoDetail {
     var videoStreams: [PipedKit.Stream] = []
@@ -227,12 +255,12 @@ private func streamPlaybackDetail(
         videoStreams.append(Stream(
             url: av1StreamURL,
             format: "MP4",
-            quality: "\(av1StreamHeight)p",
+            quality: av1StreamHeight.map { "\($0)p" },
             mimeType: "video/mp4",
             codec: "av01.0.12M.08",
             videoOnly: true,
             bitrate: nil,
-            width: av1StreamHeight * 16 / 9,
+            width: av1StreamHeight.map { $0 * 16 / 9 },
             height: av1StreamHeight,
             fps: 30))
     }

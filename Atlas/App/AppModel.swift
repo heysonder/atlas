@@ -264,6 +264,13 @@ final class AppModel {
         return try await resolveStream(videoID)
     }
 
+    /// When the cached details for a video were actually fetched. A cache hit
+    /// can be up to `streamTTL` old, so players must not date their copy from
+    /// the moment `resolveStream` returned.
+    func streamResolvedAt(_ videoID: String) -> Date? {
+        streamCache[videoID]?.at
+    }
+
     /// Warm the cache for a video that's likely to be tapped. Capped so we never
     /// fire more than a couple of extractions at the instance at once.
     func prefetchStream(_ videoID: String?) {

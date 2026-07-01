@@ -164,7 +164,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     base: baseMetadata)
 
                 currentDetail = detail
-                currentDetailLoadedAt = Date()
+                currentDetailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
                 installDebugOverlay(on: controller)
                 installInfoButton(on: controller)
                 // Resume from a saved position (ignore if we're at/near the end).
@@ -942,6 +942,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 fallbackInProgress = false
                 return
             }
+            // The awaits above can outlive this playback: bail if the
+            // coordinator moved to another player/item meanwhile (whoever
+            // replaced it also reset the fallback state — leave it alone).
+            guard self.player === player, player.currentItem === item else { return }
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
             usedComposition = fallbackPlayback.composed
@@ -961,6 +965,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 : currentMetadata
             if fallbackPlayback.selectsPreferredAudio {
                 await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
+                guard self.player === player, player.currentItem === item else { return }
             }
             player.replaceCurrentItem(with: fallbackItem)
             PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)

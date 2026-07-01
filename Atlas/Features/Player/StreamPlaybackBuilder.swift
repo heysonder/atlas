@@ -96,15 +96,23 @@ enum StreamPlaybackBuilder {
             preferredLanguages: preferredLanguages)
         // ABR manifests win by default; the fixed-bitrate composition can't
         // adapt to bandwidth at all, so it only takes over when it is strictly
-        // sharper than the tallest rung the manifest is built from.
+        // sharper than the tallest rung the manifest is built from. When the
+        // ceiling is unknown (no stream reports a height), trust the manifest.
         if let av1HLSURL {
-            if let source = composedSource, source.height > detail.maxAV1VideoStreamHeight {
+            if let source = composedSource,
+               let ceiling = detail.maxAV1VideoStreamHeight,
+               source.height > ceiling {
                 return .composed(video: source.video, audio: source.audio)
             }
             return .direct(av1HLSURL)
         }
         if let url = playlistURL(from: detail) {
-            if let source = composedSource, source.height > detail.maxVideoStreamHeight {
+            // YouTube's HLS master is built from the AVC/VP9 ladder, so an AV1
+            // composition taller than that ladder beats it (e.g. an AV1 device
+            // playing a video whose non-AV1 streams top out lower).
+            if let source = composedSource,
+               let ceiling = detail.maxNonAV1VideoStreamHeight,
+               source.height > ceiling {
                 return .composed(video: source.video, audio: source.audio)
             }
             return .direct(url)
