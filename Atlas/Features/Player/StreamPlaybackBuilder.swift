@@ -25,8 +25,6 @@ enum StreamPlaybackBuilder {
 
     static let defaultStallFallbackDelay: TimeInterval = 15
     static let av1HLSStallFallbackDelay: TimeInterval = 45
-    private static let av1HLSStartupPeakBitRate: Double = 9_000_000
-    private static let av1HLSStartupMaximumResolution = CGSize(width: 2_560, height: 1_440)
 
     /// Builds the cleanest playable item first. AV1 HLS is tried optimistically
     /// from the selected instance URL; runtime fallback handles instances that
@@ -138,13 +136,10 @@ enum StreamPlaybackBuilder {
     }
 
     private static func playerItem(forDirectURL url: URL, usesAV1HLS: Bool) -> AVPlayerItem {
-        let item = usesAV1HLS ? AVPlayerItem(asset: av1HLSAsset(url: url)) : AVPlayerItem(url: url)
-        if usesAV1HLS {
-            item.preferredPeakBitRate = av1HLSStartupPeakBitRate
-            item.preferredMaximumResolution = av1HLSStartupMaximumResolution
-            item.preferredForwardBufferDuration = 8
-        }
-        return item
+        // No bitrate/resolution/buffer caps: hand quality selection entirely to
+        // AVPlayer's adaptive logic so it starts low and ramps up on its own.
+        // AV1 HLS still uses a no-cache asset to avoid chasing stale signed URLs.
+        usesAV1HLS ? AVPlayerItem(asset: av1HLSAsset(url: url)) : AVPlayerItem(url: url)
     }
 
     private static func av1HLSAsset(url: URL) -> AVURLAsset {

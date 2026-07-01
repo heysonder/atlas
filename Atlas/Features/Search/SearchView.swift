@@ -132,6 +132,7 @@ struct SearchView: View {
                 } header: {
                     searchHistoryHeader
                         .textCase(nil)
+                        .padding(.horizontal, -14)
                 }
             }
             .listStyle(.insetGrouped)
@@ -143,9 +144,15 @@ struct SearchView: View {
             Text("Recent Searches")
                 .font(.headline)
             Spacer()
-            Button("Clear", role: .destructive) { clearSearchHistory() }
-                .font(.subheadline.weight(.semibold))
+            Button {
+                clearSearchHistory()
+            } label: {
+                Text("Clear")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.plain)
         }
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder private func resultsList(_ results: Results) -> some View {
