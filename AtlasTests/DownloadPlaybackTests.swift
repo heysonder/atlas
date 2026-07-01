@@ -23,8 +23,20 @@ import Testing
     #expect(request.thumbnail == download.thumbnailURL?.absoluteString)
 }
 
-@Test func streamPlaybackPrefersComposedBeforeRegularHLS() throws {
-    let detail = streamPlaybackDetail()
+@Test func streamPlaybackPrefersRegularHLSOverComposed() throws {
+    let hls = URL(string: "https://example.com/master.m3u8")!
+    let detail = streamPlaybackDetail(hls: hls.absoluteString)
+
+    let source = try #require(StreamPlaybackBuilder.preferredSource(
+        detail,
+        allowAV1: false,
+        preferredLanguages: ["en-US"]))
+
+    #expect(source == .direct(hls))
+}
+
+@Test func streamPlaybackUsesComposedWhenHLSIsMissing() throws {
+    let detail = streamPlaybackDetail(hls: nil)
     let video = URL(string: "https://example.com/1080.mp4")!
     let audio = URL(string: "https://example.com/audio.m4a")!
 
@@ -37,7 +49,9 @@ import Testing
 }
 
 @Test func streamPlaybackPrefersPlayableAV1HLSEvenWhenHardwareProbeIsConservative() throws {
-    let detail = streamPlaybackDetail(hls: "https://example.com/legacy.m3u8")
+    let detail = streamPlaybackDetail(
+        hls: "https://example.com/legacy.m3u8",
+        av1StreamURL: "https://example.com/2160-av1.mp4")
     let av1HLS = URL(string: "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")!
 
     let av1Source = try #require(StreamPlaybackBuilder.preferredSource(
@@ -56,7 +70,9 @@ import Testing
 }
 
 @Test func streamPlaybackBuildsAV1HLSWithoutManifestPreflight() async throws {
-    let detail = streamPlaybackDetail(hls: "https://example.com/legacy.m3u8")
+    let detail = streamPlaybackDetail(
+        hls: "https://example.com/legacy.m3u8",
+        av1StreamURL: "https://example.com/2160-av1.mp4")
     let av1HLS = URL(string: "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")!
 
     let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
@@ -75,39 +91,59 @@ import Testing
     #expect(playback.item.preferredForwardBufferDuration == 0)
 }
 
-@Test func av1HLSModePrefersComposedButKeepsHLSFallback() throws {
-    let hls = URL(string: "https://example.com/master.m3u8")!
-    let playlistDetail = streamPlaybackDetail(hls: hls.absoluteString)
+@Test func composedOvertakesAV1HLSOnlyWhenStrictlySharper() throws {
+    let av1HLS = URL(string: "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")!
     let video = URL(string: "https://example.com/1080.mp4")!
     let audio = URL(string: "https://example.com/audio.m4a")!
 
-    let composedSource = try #require(StreamPlaybackBuilder.preferredSource(
-        playlistDetail,
+    // The AV1 master tops out at 720p, so the 1080p composed pair is sharper.
+    let sharperComposed = try #require(StreamPlaybackBuilder.preferredSource(
+        streamPlaybackDetail(av1StreamURL: "https://example.com/720-av1.mp4", av1StreamHeight: 720),
+        allowAV1: false,
+        av1HLSURL: av1HLS,
+        preferredLanguages: ["en-US"]))
+    // The AV1 master matches the composed pair's ceiling, so ABR wins the tie.
+    let matchedComposed = try #require(StreamPlaybackBuilder.preferredSource(
+        streamPlaybackDetail(av1StreamURL: "https://example.com/2160-av1.mp4"),
+        allowAV1: true,
+        av1HLSURL: av1HLS,
+        preferredLanguages: ["en-US"]))
+
+    #expect(sharperComposed == .composed(video: video, audio: audio))
+    #expect(matchedComposed == .direct(av1HLS))
+}
+
+@Test func regularHLSWinsWhetherOrNotComposedExists() throws {
+    let hls = URL(string: "https://example.com/master.m3u8")!
+
+    let withComposed = try #require(StreamPlaybackBuilder.preferredSource(
+        streamPlaybackDetail(hls: hls.absoluteString),
         allowAV1: true,
         allowProgressiveFallback: false,
         preferredLanguages: ["en-US"]))
-    let hlsOnlySource = try #require(StreamPlaybackBuilder.preferredSource(
+    let withoutComposed = try #require(StreamPlaybackBuilder.preferredSource(
         streamPlaybackDetail(hls: hls.absoluteString, includeComposedStreams: false),
         allowAV1: true,
         allowProgressiveFallback: false,
         preferredLanguages: ["en-US"]))
 
-    #expect(composedSource == .composed(video: video, audio: audio))
-    #expect(hlsOnlySource == .direct(hls))
+    #expect(withComposed == .direct(hls))
+    #expect(withoutComposed == .direct(hls))
 }
 
-@Test func av1HLSModePrefersComposedOverFallbackPlaylist() throws {
-    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
-    let video = URL(string: "https://example.com/1080.mp4")!
-    let audio = URL(string: "https://example.com/audio.m4a")!
+@Test func regularHLSPlaybackKeepsComposedFailureFallback() async throws {
+    let detail = streamPlaybackDetail()
 
-    let source = try #require(StreamPlaybackBuilder.preferredSource(
+    let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
         detail,
-        allowAV1: true,
-        allowProgressiveFallback: false,
+        allowAV1: false,
         preferredLanguages: ["en-US"]))
 
-    #expect(source == .composed(video: video, audio: audio))
+    #expect(!playback.composed)
+    #expect(playback.sourceName == "direct-hls")
+    #expect(playback.failureFallback == .composedOrDirect)
+    #expect(playback.selectsPreferredAudio)
+    #expect(playback.stallFallbackDelay == StreamPlaybackBuilder.defaultStallFallbackDelay)
 }
 
 @Test func detectsAV1HLSMasterManifest() {
@@ -132,20 +168,6 @@ import Testing
     #expect(playback.stallFallbackDelay == StreamPlaybackBuilder.defaultStallFallbackDelay)
 }
 
-@Test func av1FallbackPrefersComposedSource() throws {
-    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
-    let video = URL(string: "https://example.com/1080.mp4")!
-    let audio = URL(string: "https://example.com/audio.m4a")!
-
-    let source = try #require(StreamPlaybackBuilder.preferredSource(
-        detail,
-        allowAV1: true,
-        allowProgressiveFallback: false,
-        preferredLanguages: ["en-US"]))
-
-    #expect(source == .composed(video: video, audio: audio))
-}
-
 @Test func av1FallbackUsesDirectWhenComposedIsUnavailable() async throws {
     let detail = streamPlaybackDetail(
         hls: "https://example.com/master.m3u8",
@@ -163,9 +185,10 @@ import Testing
 
 @Test func composedStartupFallsBackToDirectWhenAssemblyFails() async throws {
     let detail = streamPlaybackDetail(
-        hls: "https://example.com/master.m3u8",
+        hls: nil,
         videoURL: "file:///atlas/missing-video.mp4",
-        audioURL: "file:///atlas/missing-audio.m4a")
+        audioURL: "file:///atlas/missing-audio.m4a",
+        progressiveURL: "https://example.com/720-progressive.mp4")
 
     let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
         detail,
@@ -173,7 +196,7 @@ import Testing
         preferredLanguages: ["en-US"]))
 
     #expect(!playback.composed)
-    #expect(playback.sourceName == "fallback-hls")
+    #expect(playback.sourceName == "fallback-direct")
     #expect(playback.selectsPreferredAudio)
 }
 
@@ -181,9 +204,52 @@ private func streamPlaybackDetail(
     hls: String? = "https://example.com/master.m3u8",
     includeComposedStreams: Bool = true,
     videoURL: String = "https://example.com/1080.mp4",
-    audioURL: String = "https://example.com/audio.m4a"
+    audioURL: String = "https://example.com/audio.m4a",
+    av1StreamURL: String? = nil,
+    av1StreamHeight: Int = 2160,
+    progressiveURL: String? = nil
 ) -> VideoDetail {
-    VideoDetail(
+    var videoStreams: [PipedKit.Stream] = []
+    if includeComposedStreams {
+        videoStreams.append(Stream(
+            url: videoURL,
+            format: "MP4",
+            quality: "1080p",
+            mimeType: "video/mp4",
+            codec: "avc1.640028",
+            videoOnly: true,
+            bitrate: nil,
+            width: 1920,
+            height: 1080,
+            fps: 30))
+    }
+    if let av1StreamURL {
+        videoStreams.append(Stream(
+            url: av1StreamURL,
+            format: "MP4",
+            quality: "\(av1StreamHeight)p",
+            mimeType: "video/mp4",
+            codec: "av01.0.12M.08",
+            videoOnly: true,
+            bitrate: nil,
+            width: av1StreamHeight * 16 / 9,
+            height: av1StreamHeight,
+            fps: 30))
+    }
+    if let progressiveURL {
+        videoStreams.append(Stream(
+            url: progressiveURL,
+            format: "MP4",
+            quality: "720p",
+            mimeType: "video/mp4",
+            codec: "avc1.4d401f",
+            videoOnly: false,
+            bitrate: nil,
+            width: 1280,
+            height: 720,
+            fps: 30))
+    }
+    return VideoDetail(
         title: "Fast Start",
         description: nil,
         uploader: nil,
@@ -200,19 +266,7 @@ private func streamPlaybackDetail(
         creators: nil,
         livestream: nil,
         chapters: nil,
-        videoStreams: includeComposedStreams ? [
-            Stream(
-                url: videoURL,
-                format: "MP4",
-                quality: "1080p",
-                mimeType: "video/mp4",
-                codec: "avc1.640028",
-                videoOnly: true,
-                bitrate: nil,
-                width: 1920,
-                height: 1080,
-                fps: 30)
-        ] : [],
+        videoStreams: videoStreams,
         audioStreams: includeComposedStreams ? [
             Stream(
                 url: audioURL,

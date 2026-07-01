@@ -368,6 +368,19 @@ public struct VideoDetail: Codable, Sendable {
         (videoStreams ?? []).contains { $0.isAV1 }
     }
 
+    /// Tallest AV1 video stream the instance extracted. The custom
+    /// `/hls/av1/{id}/master.m3u8` endpoint builds its master from these same
+    /// streams, so this is the ceiling of what that manifest can offer.
+    public var maxAV1VideoStreamHeight: Int {
+        (videoStreams ?? []).filter(\.isAV1).compactMap(\.height).max() ?? 0
+    }
+
+    /// Tallest extracted video stream of any codec — the ceiling of what
+    /// YouTube's own HLS master (the `hls` field) can offer.
+    public var maxVideoStreamHeight: Int {
+        (videoStreams ?? []).compactMap(\.height).max() ?? 0
+    }
+
     /// The highest-resolution video-only stream AVPlayer can decode, paired with
     /// the best audio stream, for an `AVMutableComposition`. `allowAV1` should
     /// reflect device hardware support. Returns nil if no compose-able pair exists.
