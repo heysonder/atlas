@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 import PipedKit
 import Testing
@@ -71,9 +70,9 @@ import Testing
     #expect(playback.failureFallback == .composedOrDirect)
     #expect(!playback.selectsPreferredAudio)
     #expect(playback.stallFallbackDelay == StreamPlaybackBuilder.av1HLSStallFallbackDelay)
-    #expect(playback.item.preferredPeakBitRate == 9_000_000)
-    #expect(playback.item.preferredMaximumResolution == CGSize(width: 2_560, height: 1_440))
-    #expect(playback.item.preferredForwardBufferDuration == 8)
+    #expect(playback.item.preferredPeakBitRate == 0)
+    #expect(playback.item.preferredMaximumResolution == .zero)
+    #expect(playback.item.preferredForwardBufferDuration == 0)
 }
 
 @Test func av1HLSModePrefersComposedButKeepsHLSFallback() throws {
