@@ -46,7 +46,7 @@ enum StreamPlaybackBuilder {
         preferredLanguages: [String] = Locale.preferredLanguages
     ) async -> PreparedPlayback? {
         if let av1HLSURL {
-            clearCachedAV1HLSResponses()
+            clearCachedAV1HLSResponses(for: av1HLSURL)
             NSLog("Atlas.player: av1 hls candidate url=\(av1HLSURL.absoluteString)")
         }
         switch preferredSource(
@@ -184,10 +184,13 @@ enum StreamPlaybackBuilder {
             ])
     }
 
-    private static func clearCachedAV1HLSResponses() {
+    private static func clearCachedAV1HLSResponses(for url: URL) {
         // AV1 HLS manifests lead to signed media URLs; stale cached playlist
         // responses can make AVPlayer chase expired ranges after server fixes.
-        URLCache.shared.removeAllCachedResponses()
+        // Evict just this manifest's cached response instead of wiping the
+        // shared cache (thumbnails, API responses); the asset's own requests
+        // additionally send no-cache headers (see `av1HLSAsset`).
+        URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
     }
 
     private static func playlistURL(from detail: VideoDetail) -> URL? {

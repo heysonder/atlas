@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UIKit
 import PipedKit
 
 struct SearchView: View {
@@ -20,6 +19,12 @@ struct SearchView: View {
     @State private var activeQuery = ""
     @State private var nextpage: String?
     @State private var isLoadingMore = false
+    /// Bumped when a new search starts; stale responses check it and drop out,
+    /// so overlapping searches can't race on `phase`/`activeQuery`/pagination.
+    @State private var searchGeneration = 0
+    /// Set when `query` is changed programmatically (suggestion tap, Siri), so
+    /// `.onChange(of: query)` doesn't re-schedule a suggestions fetch for it.
+    @State private var suppressSuggestionsOnce = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -47,7 +52,13 @@ struct SearchView: View {
                 .buttonStyle(.plain)
             }
         }
-        .onChange(of: query) { _, newValue in scheduleSuggestions(newValue) }
+        .onChange(of: query) { _, newValue in
+            if suppressSuggestionsOnce {
+                suppressSuggestionsOnce = false
+                return
+            }
+            scheduleSuggestions(newValue)
+        }
         .onSubmit(of: .search) { submit() }
         .onChange(of: app.searchRetapToken) { _, _ in focusForFreshSearch() }
         .onAppear { applyPendingSearch() }
@@ -60,6 +71,7 @@ struct SearchView: View {
         guard let pending = app.pendingSearchQuery,
               !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         app.pendingSearchQuery = nil
+        suppressSuggestionsOnce = query != pending
         query = pending
         Task { await runSearch() }
     }
@@ -169,6 +181,7 @@ struct SearchView: View {
                     // Then videos.
                     GroupedVideoList(items: videos,
                                      onAppearItem: { app.prefetchStream($0.videoID) }) { app.play($0) }
+                        .onScreenVideos(videos)
                     paginationFooter
                 }
                 .padding(.horizontal)
@@ -238,6 +251,7 @@ struct SearchView: View {
     }
 
     private func runSelectedSearch(_ text: String) {
+        suppressSuggestionsOnce = query != text
         query = text
         suggestTask?.cancel()
         suggestions = []
@@ -246,20 +260,24 @@ struct SearchView: View {
     }
 
     private func hideKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        searchFocused = false
     }
 
     private func runSearch() async {
         suggestTask?.cancel()
         suggestions = []
+        searchGeneration += 1
+        let generation = searchGeneration
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { phase = .idle; return }
-        SearchHistoryStore.record(q, in: modelContext)
         phase = .loading
         nextpage = nil
         do {
             let res = try await app.client.searchPage(q, filter: "all")
+            guard generation == searchGeneration else { return }
+            // Record only successful searches, so failures don't pollute the
+            // history list or the For You signal.
+            SearchHistoryStore.record(q, in: modelContext)
             let all = res.items ?? []
             activeQuery = q
             nextpage = normalizedNextpage(res.nextpage)
@@ -268,26 +286,37 @@ struct SearchView: View {
             phase = .loaded(Results(channels: channels, videos: videos))
             await ThumbnailPrefetcher.shared.prefetch(videos.prefix(12).map { Thumbnail.upgraded($0.thumbnail) })
         } catch {
+            guard generation == searchGeneration else { return }
             phase = .failed(error.localizedDescription)
         }
     }
 
     /// Appends the next page of results, de-duped against what's already shown.
-    /// On failure it stops paginating rather than dropping the current results.
+    /// On failure it stops paginating rather than dropping the current results —
+    /// except cancellation, which keeps the token so scrolling can retry.
     private func loadMore() async {
         guard let token = nextpage, !isLoadingMore,
               case .loaded(var results) = phase else { return }
+        let generation = searchGeneration
         isLoadingMore = true
         defer { isLoadingMore = false }
         do {
             let res = try await app.client.searchNextPage(activeQuery, filter: "all", nextpage: token)
+            guard generation == searchGeneration else { return }
             let seen = Set((results.channels + results.videos).map(\.id))
             let fresh = (res.items ?? []).filter { !seen.contains($0.id) }
             results.channels.append(contentsOf: fresh.filter { $0.isChannel })
             results.videos.append(contentsOf: fresh.filter { $0.isVideo })
-            nextpage = normalizedNextpage(res.nextpage)
+            let newToken = normalizedNextpage(res.nextpage)
+            // No-progress guard: a repeated token with no new items would loop.
+            nextpage = fresh.isEmpty && newToken == token ? nil : newToken
             phase = .loaded(results)
+        } catch is CancellationError {
+            // Keep the token so a later scroll can retry.
+        } catch let error as URLError where error.code == .cancelled {
+            // Keep the token so a later scroll can retry.
         } catch {
+            guard generation == searchGeneration else { return }
             nextpage = nil
         }
     }
@@ -395,7 +424,7 @@ private struct ChannelResultRow: View {
 
     /// Subscriber count, plus a video count only when the API actually reports one.
     private var metaLine: String? {
-        let subs = Format.views(item.subscribers)?.replacingOccurrences(of: "views", with: "subscribers")
+        let subs = Format.subscribers(item.subscribers)
         let videos = (item.videos ?? -1) > 0 ? "\(item.videos!) videos" : nil
         let line = Format.metaLine(subs, videos)
         return line.isEmpty ? nil : line

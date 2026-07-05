@@ -4,9 +4,7 @@ import UIKit
 
 enum PlayerNowPlayingMetadata {
     static func streaming(_ detail: VideoDetail, request: PlayRequest) -> [AVMetadataItem] {
-        let descLen = HTMLText.plain(detail.description ?? "").count
-        NSLog("Atlas.player: description length from instance = \(descLen) chars")
-        return [
+        [
             item(.commonIdentifierTitle, detail.title ?? request.title),
             item(.iTunesMetadataTrackSubTitle, detail.uploader ?? request.uploader),
             item(.commonIdentifierDescription, HTMLText.plain(detail.description ?? ""))
@@ -23,22 +21,23 @@ enum PlayerNowPlayingMetadata {
     static func attachArtwork(to item: AVPlayerItem, urlString: String?, base: [AVMetadataItem]) {
         guard let urlString, let url = URL(string: urlString) else { return }
         Task { [weak item] in
-            let data: Data? = url.isFileURL
-                ? try? Data(contentsOf: url)
-                : (try? await URLSession.shared.data(from: url))?.0
-            guard let data, let image = UIImage(data: data),
-                  let jpeg = image.jpegData(compressionQuality: 0.9) else { return }
+            // Fetch, decode, and re-encode off the main actor — artwork can
+            // be hundreds of KB and this runs at every playback start.
+            let jpeg = await Task.detached { () async -> Data? in
+                let data: Data? = url.isFileURL
+                    ? try? Data(contentsOf: url)
+                    : (try? await URLSession.shared.data(from: url))?.0
+                guard let data, let image = UIImage(data: data) else { return nil }
+                return image.jpegData(compressionQuality: 0.9)
+            }.value
+            guard let jpeg, let item else { return }
 
             let art = AVMutableMetadataItem()
             art.identifier = .commonIdentifierArtwork
             art.value = jpeg as NSData
             art.dataType = kCMMetadataBaseDataType_JPEG as String
             art.extendedLanguageTag = "und"
-
-            await MainActor.run {
-                guard let item else { return }
-                item.externalMetadata = base + [art]
-            }
+            item.externalMetadata = base + [art]
         }
     }
 

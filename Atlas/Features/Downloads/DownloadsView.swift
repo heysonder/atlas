@@ -34,17 +34,12 @@ struct DownloadsView: View {
                         }
                     }
                     if !saved.isEmpty {
-                        Section(inFlight.isEmpty ? "" : "Saved") {
-                            ForEach(saved) { video in
-                                Button { app.playDownloaded(video) } label: {
-                                    SavedRow(video: video)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    QueueMenuItems(request: playRequest(for: video))
-                                }
-                            }
-                            .onDelete(perform: deleteSaved)
+                        // The "Saved" header only earns its place when there's a
+                        // "Downloading" section above to distinguish it from.
+                        if inFlight.isEmpty {
+                            Section { savedRows }
+                        } else {
+                            Section("Saved") { savedRows }
                         }
                     }
                 }
@@ -88,6 +83,19 @@ struct DownloadsView: View {
             }
             .padding()
         }
+    }
+
+    @ViewBuilder private var savedRows: some View {
+        ForEach(saved) { video in
+            Button { app.playDownloaded(video) } label: {
+                SavedRow(video: video)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                QueueMenuItems(request: playRequest(for: video))
+            }
+        }
+        .onDelete(perform: deleteSaved)
     }
 
     private func sectionHeader(_ title: String) -> some View {

@@ -80,7 +80,6 @@ struct ProfileView: View {
                 case .instances: InstancesSettingsView()
                 case .sponsorBlock: SponsorBlockSettingsView()
                 case .backup: BackupSettingsView()
-                case .topicCloud: TopicCloudView()
                 }
             }
             .navigationDestination(for: String.self) { id in

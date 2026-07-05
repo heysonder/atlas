@@ -230,29 +230,87 @@ final class AppModel {
 
     @ObservationIgnored private var streamCache: [String: (detail: VideoDetail, at: Date)] = [:]
     @ObservationIgnored private var inflight: [String: Task<VideoDetail, Error>] = [:]
-    /// Signed stream URLs stay valid for ~6 hours, so cached details can be
-    /// reused generously; playback failure recovery uses `refreshStream` when
-    /// it suspects expiry.
+    /// How long cached details are reused before re-fetching (one hour). Signed
+    /// stream URLs stay valid for longer, so this is comfortably safe; playback
+    /// failure recovery uses `refreshStream` when it suspects expiry.
     private static let streamTTL: TimeInterval = 3600
+    /// Ceiling on cached details; the oldest entries are pruned past this.
+    private static let streamCacheLimit = 48
+
+    /// The cached detail for a video, when present and still within the TTL.
+    private func cachedDetail(_ videoID: String) -> VideoDetail? {
+        guard let cached = streamCache[videoID],
+              Date().timeIntervalSince(cached.at) < Self.streamTTL else { return nil }
+        return cached.detail
+    }
 
     /// Returns the stream details, using a cached/in-flight result when available
     /// so a tap doesn't re-pay the full extraction latency.
     func resolveStream(_ videoID: String) async throws -> VideoDetail {
-        if let cached = streamCache[videoID], Date().timeIntervalSince(cached.at) < Self.streamTTL {
-            return cached.detail
-        }
+        if let cached = cachedDetail(videoID) { return cached }
         if let task = inflight[videoID] { return try await task.value }
+        return try await startResolution(videoID).value
+    }
+
+    /// Starts a fetch and registers it in `inflight` *synchronously*, so a
+    /// same-turn burst of callers (and the prefetch cap) sees it immediately.
+    private func startResolution(_ videoID: String) throws -> Task<VideoDetail, Error> {
         let client = try self.client
         let task = Task<VideoDetail, Error> { try await client.streams(videoID: videoID) }
         inflight[videoID] = task
-        do {
-            let detail = try await task.value
+        Task {
+            if let detail = try? await task.value {
+                cacheDetail(detail, for: videoID)
+            }
             inflight[videoID] = nil
-            streamCache[videoID] = (detail, Date())
-            return detail
-        } catch {
-            inflight[videoID] = nil
-            throw error
+        }
+        return task
+    }
+
+    /// Inserts into the cache, pruning expired entries and trimming to the cap
+    /// (oldest first) so the cache can't grow without bound over a long session.
+    private func cacheDetail(_ detail: VideoDetail, for videoID: String) {
+        let now = Date()
+        streamCache = streamCache.filter { now.timeIntervalSince($0.value.at) < Self.streamTTL }
+        while streamCache.count >= Self.streamCacheLimit,
+              let oldest = streamCache.min(by: { $0.value.at < $1.value.at }) {
+            streamCache.removeValue(forKey: oldest.key)
+        }
+        streamCache[videoID] = (detail, now)
+    }
+
+    // MARK: Row-driven resolution throttle
+
+    @ObservationIgnored private var throttledResolutions = 0
+    @ObservationIgnored private var throttleWaiters: [CheckedContinuation<Void, Never>] = []
+    private static let throttledResolutionLimit = 2
+
+    /// Like `resolveStream`, but bounded: at most a couple of row-driven
+    /// resolutions run at once, so a scroll burst can't fan out an unbounded
+    /// number of slow /streams extractions. Cache and in-flight hits return
+    /// immediately without taking a slot; everything else queues FIFO.
+    func resolveStreamThrottled(_ videoID: String) async throws -> VideoDetail {
+        if let cached = cachedDetail(videoID) { return cached }
+        if let task = inflight[videoID] { return try await task.value }
+        await acquireThrottleSlot()
+        defer { releaseThrottleSlot() }
+        return try await resolveStream(videoID)
+    }
+
+    private func acquireThrottleSlot() async {
+        if throttledResolutions < Self.throttledResolutionLimit {
+            throttledResolutions += 1
+            return
+        }
+        await withCheckedContinuation { throttleWaiters.append($0) }
+    }
+
+    private func releaseThrottleSlot() {
+        if throttleWaiters.isEmpty {
+            throttledResolutions -= 1
+        } else {
+            // Hand the slot straight to the next waiter.
+            throttleWaiters.removeFirst().resume()
         }
     }
 
@@ -272,13 +330,15 @@ final class AppModel {
     }
 
     /// Warm the cache for a video that's likely to be tapped. Capped so we never
-    /// fire more than a couple of extractions at the instance at once.
+    /// fire more than a couple of extractions at the instance at once — the task
+    /// registers in `inflight` synchronously, so a same-turn burst of calls
+    /// can't slip past the cap.
     func prefetchStream(_ videoID: String?) {
         guard let videoID,
-              streamCache[videoID] == nil,
+              cachedDetail(videoID) == nil,
               inflight[videoID] == nil,
               inflight.count < 2 else { return }
-        Task { _ = try? await resolveStream(videoID) }
+        _ = try? startResolution(videoID)
     }
 
     static func normalize(_ raw: String) -> String {

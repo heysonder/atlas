@@ -102,6 +102,68 @@ import PipedKit
 }
 
 @MainActor
+@Test func backupStoreRestoresV1HistoryMissingResumeFields() throws {
+    // v1 backups predate positionSeconds/durationSeconds on history rows; they
+    // must decode with defaults instead of failing the whole import.
+    let json = """
+    {
+      "version": 1,
+      "exportedAt": "2026-06-01T00:00:00Z",
+      "history": [
+        {
+          "videoID": "v1",
+          "title": "Old Video",
+          "uploader": "Creator",
+          "watchedAt": "2026-05-01T00:00:00Z"
+        }
+      ],
+      "channels": [],
+      "playlists": [],
+      "feedback": []
+    }
+    """.data(using: .utf8)!
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("atlas-backup-\(UUID().uuidString).json")
+    try json.write(to: url)
+
+    let targetContainer = try makeTestContainer()
+    let target = targetContainer.mainContext
+    let summary = try BackupStore.restore(from: url, into: target)
+    let restored = try target.fetch(FetchDescriptor<HistoryEntry>())
+
+    #expect(summary.history == 1)
+    #expect(restored.first?.videoID == "v1")
+    #expect(restored.first?.positionSeconds == 0)
+    #expect(restored.first?.durationSeconds == 0)
+}
+
+@Test func downloadStoreFlagsTempAndRowlessFinalFilesAsOrphans() {
+    let files = [
+        "aaaaaaaaaaa.mp4",            // completed — has a row
+        "bbbbbbbbbbb.mp4",            // crashed mid-download — no row
+        "ccccccccccc.video.mp4",      // leftover merge temp
+        "ccccccccccc.audio.m4a",      // leftover merge temp
+        "aaaaaaaaaaa.thumb",          // sidecar — never touched
+        "aaaaaaaaaaa.captions.vtt"    // sidecar — never touched
+    ]
+
+    let orphans = DownloadStore.orphanedFileNames(
+        in: files, completedFileNames: ["aaaaaaaaaaa.mp4"])
+
+    #expect(Set(orphans) == ["bbbbbbbbbbb.mp4", "ccccccccccc.video.mp4", "ccccccccccc.audio.m4a"])
+}
+
+@Test func downloadStoreNeverFlagsCompletedFileNames() {
+    let completed: Set<String> = ["aaaaaaaaaaa.mp4", "bbbbbbbbbbb.mp4"]
+
+    let orphans = DownloadStore.orphanedFileNames(
+        in: ["aaaaaaaaaaa.mp4", "bbbbbbbbbbb.mp4", "aaaaaaaaaaa.thumb", "notes.txt"],
+        completedFileNames: completed)
+
+    #expect(orphans.isEmpty)
+}
+
+@MainActor
 @Test func backupStoreRestoresOlderBackupsWithoutSearchHistory() throws {
     let json = """
     {

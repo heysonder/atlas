@@ -1,7 +1,7 @@
 import SwiftUI
 import PipedKit
 
-struct CreatorChannel: Identifiable, Hashable, Sendable {
+nonisolated struct CreatorChannel: Identifiable, Hashable, Sendable {
     var name: String
     var channelID: String?
     var avatarURL: String?

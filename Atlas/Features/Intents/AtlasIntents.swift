@@ -107,10 +107,15 @@ struct PlayVideoIntent: AppIntent {
     @Dependency var app: AppModel
 
     func perform() async throws -> some IntentResult {
+        // Prefer the offline file, but only when it actually exists — a stale
+        // entity reference must fall back to network stream resolution.
+        let localURL = target.localFileName
+            .map(DownloadStore.fileURL)
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         let request = PlayRequest(
             videoID: target.id, title: target.title, uploader: target.uploader,
             thumbnail: target.thumbnail,
-            localURL: target.localFileName.map(DownloadStore.fileURL))
+            localURL: localURL)
         await MainActor.run { app.nowPlaying = request }
         return .result()
     }

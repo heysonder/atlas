@@ -206,9 +206,8 @@ struct RecommendationEngine {
         var frequency: [String: Int] = [:]
         var byID: [String: StreamItem] = [:]
         var ordered: [StreamItem] = []
-        for entry in recent {
-            let related = (try? await app.resolveStream(entry.videoID))?.relatedStreams ?? []
-            for item in related where item.isVideo {
+        for related in await relatedStreams(forVideoIDs: recent.map(\.videoID)) {
+            for item in related {
                 guard let id = item.videoID, !watched.contains(id) else { continue }
                 frequency[id, default: 0] += 1
                 if byID[id] == nil {
@@ -226,46 +225,108 @@ struct RecommendationEngine {
         return (ranked, frequency)
     }
 
+    /// Resolve `/streams` for several seed videos with bounded concurrency
+    /// (mirrors `subscriptionCandidates`), returning each seed's related videos
+    /// in seed order so the downstream merges stay deterministic.
+    private func relatedStreams(forVideoIDs videoIDs: [String]) async -> [[StreamItem]] {
+        guard !videoIDs.isEmpty else { return [] }
+        let app = self.app
+        var lists = Array(repeating: [StreamItem](), count: videoIDs.count)
+        let cap = 6   // concurrent extractions — tunable knob
+        for start in stride(from: 0, to: videoIDs.count, by: cap) {
+            let end = min(start + cap, videoIDs.count)
+            let fetched = await withTaskGroup(of: (Int, [StreamItem]).self) { group in
+                for index in start..<end {
+                    let id = videoIDs[index]
+                    group.addTask {
+                        let related = (try? await app.resolveStream(id))?.relatedStreams ?? []
+                        return (index, related.filter(\.isVideo))
+                    }
+                }
+                var out: [(Int, [StreamItem])] = []
+                for await result in group { out.append(result) }
+                return out
+            }
+            for (index, related) in fetched { lists[index] = related }
+        }
+        return lists
+    }
+
     /// Fresh candidates from the user's recent searches: run each query and take
     /// its top video results. Unlike related-streams (bounded by what you've
     /// already watched), this injects genuinely new content matching explicit
     /// intent — "I searched X, now my feed has more X."
     func searchCandidates(_ queries: [String], excluding watched: Set<String>,
                           perQuery: Int = 12, maxPages: Int = 2) async -> [StreamItem] {
-        guard let client = try? app.client else { return [] }
+        guard let client = try? app.client, !queries.isEmpty else { return [] }
+        // Queries run concurrently (each still pages sequentially — page 2 needs
+        // page 1's token); results merge back in query order so the candidate
+        // pool stays deterministic.
+        var lists = Array(repeating: [StreamItem](), count: queries.count)
+        let cap = 4   // concurrent queries — tunable knob
+        for start in stride(from: 0, to: queries.count, by: cap) {
+            let end = min(start + cap, queries.count)
+            let fetched = await withTaskGroup(of: (Int, [StreamItem]).self) { group in
+                for index in start..<end {
+                    let query = queries[index]
+                    group.addTask {
+                        (index, await Self.searchResults(for: query, client: client,
+                                                         excluding: watched,
+                                                         perQuery: perQuery,
+                                                         maxPages: maxPages))
+                    }
+                }
+                var out: [(Int, [StreamItem])] = []
+                for await result in group { out.append(result) }
+                return out
+            }
+            for (index, items) in fetched { lists[index] = items }
+        }
         var byID: [String: StreamItem] = [:]
         var ordered: [StreamItem] = []
-        for query in queries {
-            var token: String?
-            var taken = 0
-            for page in 0..<maxPages {
-                let response: SearchResponse?
-                if page == 0 {
-                    response = try? await client.searchPage(query, filter: "videos")
-                } else if let token {
-                    response = try? await client.searchNextPage(
-                        query, filter: "videos", nextpage: token)
-                } else {
-                    break
-                }
-                guard let response else { break }
-                for item in (response.items ?? []) where item.isVideo {
-                    guard let id = item.videoID, !watched.contains(id) else { continue }
-                    if byID[id] == nil {
-                        byID[id] = item
-                        ordered.append(item)
-                        taken += 1
-                    }
-                    if taken >= perQuery { break }
-                }
-                token = normalizedToken(response.nextpage)
-                if taken >= perQuery || token == nil { break }
+        for list in lists {
+            for item in list {
+                guard let id = item.videoID, byID[id] == nil else { continue }
+                byID[id] = item
+                ordered.append(item)
             }
         }
         return ordered
     }
 
-    private func normalizedToken(_ token: String?) -> String? {
+    /// One query's paged video results, deduped within the query and capped at
+    /// `perQuery`. Cross-query dedupe happens in `searchCandidates`.
+    nonisolated private static func searchResults(for query: String, client: PipedClient,
+                                                  excluding watched: Set<String>,
+                                                  perQuery: Int, maxPages: Int) async -> [StreamItem] {
+        var seen = Set<String>()
+        var taken: [StreamItem] = []
+        var token: String?
+        for page in 0..<maxPages {
+            let response: SearchResponse?
+            if page == 0 {
+                response = try? await client.searchPage(query, filter: "videos")
+            } else if let token {
+                response = try? await client.searchNextPage(
+                    query, filter: "videos", nextpage: token)
+            } else {
+                break
+            }
+            guard let response else { break }
+            for item in (response.items ?? []) where item.isVideo {
+                guard let id = item.videoID, !watched.contains(id) else { continue }
+                if seen.insert(id).inserted {
+                    taken.append(item)
+                }
+                if taken.count >= perQuery { break }
+            }
+            token = normalizedToken(response.nextpage)
+            if taken.count >= perQuery || token == nil { break }
+        }
+        return taken
+    }
+
+    nonisolated private static func normalizedToken(_ token: String?) -> String? {
         let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
@@ -277,9 +338,8 @@ struct RecommendationEngine {
     async -> [StreamItem] {
         var byID: [String: StreamItem] = [:]
         var ordered: [StreamItem] = []
-        for videoID in videoIDs {
-            let related = (try? await app.resolveStream(videoID))?.relatedStreams ?? []
-            for item in related where item.isVideo {
+        for related in await relatedStreams(forVideoIDs: videoIDs) {
+            for item in related {
                 guard let id = item.videoID, !watched.contains(id) else { continue }
                 if byID[id] == nil {
                     byID[id] = item
@@ -291,10 +351,10 @@ struct RecommendationEngine {
     }
 
     /// Recent uploads from the channels the user subscribes to — the most explicit
-    /// "I like this channel" signal there is. One `/feed` request for all of them;
-    /// capped so a prolific sub can't swamp the pool (ranking still orders them by
-    /// taste). These let For You surface your channels' new videos, not just
-    /// whatever related-streams happen to bubble up.
+    /// "I like this channel" signal there is. One `/channel` request per sub (see
+    /// below); capped so a prolific sub can't swamp the pool (ranking still orders
+    /// them by taste). These let For You surface your channels' new videos, not
+    /// just whatever related-streams happen to bubble up.
     func subscriptionCandidates(_ channelIDs: [String], excluding watched: Set<String>,
                                 limit: Int = 40) async -> [StreamItem] {
         guard !channelIDs.isEmpty, let client = try? app.client else { return [] }
@@ -375,10 +435,13 @@ struct RecommendationEngine {
                 savedSeedIDsOverride: snapshot.savedSeedIDs)
         }
 
-        let relatedSeeds = selectHistorySeeds(history, limit: 8, channelCap: 2)
+        // One timestamp for the whole ranking pass, so both seed selections score
+        // recency against the same "now".
+        let now = Date()
+        let relatedSeeds = selectHistorySeeds(history, limit: 8, channelCap: 2, now: now)
         let relatedIDs = Set(relatedSeeds.map(\.videoID))
         let explorationSeeds = selectHistorySeeds(
-            history, limit: 3, excludedIDs: relatedIDs, channelCap: 1)
+            history, limit: 3, excludedIDs: relatedIDs, channelCap: 1, now: now)
 
         return InterestProfile(history: history, feedback: feedback, saved: saved,
                                searches: searches, subscribedIDs: subscribedIDs,
@@ -438,10 +501,10 @@ struct RecommendationEngine {
     /// with, keep some recency, and avoid letting one channel own all seed slots.
     nonisolated private static func selectHistorySeeds(_ history: [HistorySignal], limit: Int,
                                                        excludedIDs: Set<String> = [],
-                                                       channelCap: Int) -> [HistorySignal] {
+                                                       channelCap: Int, now: Date) -> [HistorySignal] {
         let ranked = history
             .filter { !excludedIDs.contains($0.videoID) }
-            .map { ($0, historySeedScore($0)) }
+            .map { ($0, historySeedScore($0, now: now)) }
             .sorted {
                 if $0.1 == $1.1 { return $0.0.watchedAt > $1.0.watchedAt }
                 return $0.1 > $1.1
@@ -464,8 +527,8 @@ struct RecommendationEngine {
         return chosen
     }
 
-    nonisolated private static func historySeedScore(_ entry: HistorySignal) -> Double {
-        let ageDays = max(0, Date().timeIntervalSince(entry.watchedAt) / 86_400)
+    nonisolated private static func historySeedScore(_ entry: HistorySignal, now: Date) -> Double {
+        let ageDays = max(0, now.timeIntervalSince(entry.watchedAt) / 86_400)
         let recency = max(0.2, 1 - ageDays / 45)
         return watchWeight(position: entry.positionSeconds, duration: entry.durationSeconds) * recency
     }
@@ -495,27 +558,30 @@ struct RecommendationEngine {
 
         for bucket in buckets {
             var addedForBucket = 0
-            for item in bucket.items {
-                guard addedForBucket < bucket.limit else { continue }
-                guard let id = item.videoID else { continue }
-                if included.contains(id) {
-                    noteSelected(item, bucket: bucket)
-                } else if append(item) {
-                    noteSelected(item, bucket: bucket)
-                    addedForBucket += 1
-                }
+            for item in bucket.items where addedForBucket < bucket.limit {
+                if append(item) { addedForBucket += 1 }
             }
         }
 
         if items.count < target {
             for bucket in buckets {
                 for item in bucket.items {
-                    if append(item) {
-                        noteSelected(item, bucket: bucket)
-                    }
+                    append(item)
                     if items.count >= target { break }
                 }
                 if items.count >= target { break }
+            }
+        }
+
+        // Attribution runs over the final pool, decoupled from the quota gating
+        // above: an item that made the pool credits every source that listed it
+        // (and keeps that source's frequency), even where a bucket's quota or the
+        // pool target cut the selection passes short. Multi-source items are
+        // exactly the ones ranking should boost hardest.
+        for bucket in buckets {
+            for item in bucket.items {
+                guard let id = item.videoID, included.contains(id) else { continue }
+                noteSelected(item, bucket: bucket)
             }
         }
 
@@ -531,6 +597,9 @@ struct RecommendationEngine {
     func refineWithSignals(_ shortlist: [StreamItem], profile: InterestProfile,
                            sourcesByID: [String: Set<CandidateSource>] = [:]) async -> [StreamItem] {
         let signals = await fetchSignals(shortlist)
+        // A mode switch / new load cancels the surrounding task — skip the
+        // (pointless) re-rank; the caller discards stale results anyway.
+        guard !Task.isCancelled else { return shortlist }
         let ranked = await Self.rankByTopicInBackground(
             shortlist, profile: profile, sourcesByID: sourcesByID, enrichment: signals)
         return Self.diversify(ranked, enrichment: signals)
@@ -550,27 +619,40 @@ struct RecommendationEngine {
         var out = cachedSignals(for: ids)
         let missing = ids.filter { out[$0] == nil }
         guard !missing.isEmpty else { return out }
+        pruneExpiredSignalCache()
 
+        let app = self.app
         let cap = 8   // concurrent extractions per batch — tunable knob
         for start in stride(from: 0, to: missing.count, by: cap) {
-            // Kick off the batch together; since resolveStream awaits the network,
-            // these main-actor tasks overlap their I/O waits, then we collect them.
-            let tasks = missing[start..<min(start + cap, missing.count)].map { id in
-                Task { @MainActor () -> (String, VideoSignals, VideoDetail)? in
-                    guard let d = try? await app.resolveStream(id) else { return nil }
-                    let topic = Self.topicKey(category: d.category,
-                                              text: "\(d.title ?? itemByID[id]?.displayTitle ?? "") \(d.uploader ?? itemByID[id]?.uploaderName ?? "")")
-                    return (id, VideoSignals(category: d.category, tags: d.tags ?? [],
-                                             topicKey: topic), d)
+            // A mode switch / new load cancels the surrounding task; stop fanning
+            // out fresh extractions the moment that happens.
+            if Task.isCancelled { break }
+            // Kick off the batch together so the resolveStream network waits
+            // overlap. Structured, so cancelling the load also cancels the
+            // in-flight extractions.
+            let batch = Array(missing[start..<min(start + cap, missing.count)])
+            let resolved = await withTaskGroup(
+                of: (String, VideoSignals, VideoDetail)?.self
+            ) { group in
+                for id in batch {
+                    let fallback = itemByID[id]
+                    group.addTask {
+                        guard !Task.isCancelled,
+                              let d = try? await app.resolveStream(id) else { return nil }
+                        let topic = Self.topicKey(category: d.category,
+                                                  text: "\(d.title ?? fallback?.displayTitle ?? "") \(d.uploader ?? fallback?.uploaderName ?? "")")
+                        return (id, VideoSignals(category: d.category, tags: d.tags ?? [],
+                                                 topicKey: topic), d)
+                    }
                 }
-            }
-            for task in tasks {
-                if let (id, sig, detail) = await task.value {
-                    out[id] = sig
-                    cacheSignals(videoID: id, detail: detail,
-                                 fallback: itemByID[id], topicKey: sig.topicKey)
+                var collected: [(String, VideoSignals, VideoDetail)] = []
+                for await result in group {
+                    if let result { collected.append(result) }
                 }
+                return collected
             }
+            for (id, sig, _) in resolved { out[id] = sig }
+            cacheSignals(resolved, itemsByID: itemByID)
         }
         return out
     }
@@ -603,18 +685,34 @@ struct RecommendationEngine {
         }
     }
 
-    private func cacheSignals(videoID: String, detail: VideoDetail,
-                              fallback item: StreamItem?, topicKey: String?) {
-        guard let modelContext else { return }
+    /// Upsert a resolved batch with a single fetch for the existing rows, instead
+    /// of one descriptor per video.
+    private func cacheSignals(_ resolved: [(String, VideoSignals, VideoDetail)],
+                              itemsByID: [String: StreamItem]) {
+        guard let modelContext, !resolved.isEmpty else { return }
+        let ids = resolved.map { $0.0 }
         let descriptor = FetchDescriptor<VideoSignalCacheEntry>(
-            predicate: #Predicate { $0.videoID == videoID })
-        if let existing = try? modelContext.fetch(descriptor).first {
-            existing.update(from: detail, fallback: item, topicKey: topicKey)
-        } else {
-            let entry = VideoSignalCacheEntry(videoID: videoID)
-            entry.update(from: detail, fallback: item, topicKey: topicKey)
-            modelContext.insert(entry)
+            predicate: #Predicate { ids.contains($0.videoID) })
+        let fetched = (try? modelContext.fetch(descriptor)) ?? []
+        let existing = Dictionary(fetched.map { ($0.videoID, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        for (id, signals, detail) in resolved {
+            let entry = existing[id] ?? {
+                let entry = VideoSignalCacheEntry(videoID: id)
+                modelContext.insert(entry)
+                return entry
+            }()
+            entry.update(from: detail, fallback: itemsByID[id], topicKey: signals.topicKey)
         }
+    }
+
+    /// Rows past the read-side TTL are never served again — drop them so the
+    /// cache table doesn't grow forever. One cheap batch delete per refine pass.
+    private func pruneExpiredSignalCache(now: Date = .now) {
+        guard let modelContext else { return }
+        let cutoff = now.addingTimeInterval(-Self.signalCacheTTL)
+        try? modelContext.delete(model: VideoSignalCacheEntry.self,
+                                 where: #Predicate { $0.updatedAt < cutoff })
     }
 
     // MARK: Watch weighting
@@ -659,7 +757,11 @@ struct RecommendationEngine {
                 (sources.contains(.exploration) ? 0.25 : 0)
             return freq * 2.0 + aff * 1.5 + sub + sourceBoost + freshness(item.uploaded) * 0.5
         }
-        return diversify(pool.items.sorted { score($0) > score($1) })
+        // Score once per item, then sort — not once per comparison.
+        return diversify(pool.items
+            .map { ($0, score($0)) }
+            .sorted { $0.1 > $1.1 }
+            .map { $0.0 })
     }
 
     // MARK: Strategy B — on-device semantic
@@ -830,7 +932,12 @@ struct RecommendationEngine {
         // Likes, playlist saves, and recent searches are all interest signals — they
         // join your taste so similar videos rank up. A dislike forms a separate
         // "anti-taste" used to push down lookalikes.
-        let tasteVectors = (tasteDocs + likedDocs + savedDocs + searchDocs).compactMap(vector)
+        // Replicated copies (watch-weight, repeated searches) weight the category
+        // distribution above, but the top-3-nearest similarity below must not see
+        // them: one finished watch's copies would fill all three nearest slots —
+        // exactly what the top-3 mean exists to prevent. Dedupe before vectorizing.
+        let tasteVectors = deduplicatedDocs(tasteDocs + likedDocs + savedDocs + searchDocs)
+            .compactMap(vector)
         let dislikedVectors = dislikedDocs.compactMap(vector)
         guard !tasteVectors.isEmpty else { return items }
 
@@ -912,6 +1019,14 @@ struct RecommendationEngine {
             }
             .sorted { $0.1 > $1.1 }
             .map { $0.0 }
+    }
+
+    /// Collapse exact-duplicate docs (watch-weight replication, repeated
+    /// searches, a video both watched and saved) so nearest-neighbour scoring
+    /// sees each distinct interest once. Order-preserving.
+    nonisolated static func deduplicatedDocs(_ docs: [[String]]) -> [[String]] {
+        var seen = Set<[String]>()
+        return docs.filter { seen.insert($0).inserted }
     }
 
     nonisolated static func rankByTopicInBackground(

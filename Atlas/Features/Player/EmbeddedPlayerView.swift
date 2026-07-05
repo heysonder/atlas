@@ -42,7 +42,10 @@ struct EmbeddedPlayerView: View {
         }
         .task { model.start() }
         .onDisappear {
-            model.teardown()
+            // Keeps the player alive while PiP is running (mirrors the
+            // fullscreen presenter's `pipActive` guard); teardown happens
+            // when PiP ends instead.
+            model.viewDisappeared()
         }
     }
 
@@ -52,7 +55,10 @@ struct EmbeddedPlayerView: View {
     /// top. The native controls include an "expand" button for true full screen
     /// (landscape) and PiP — so nothing is lost versus the full-screen player.
     private var videoArea: some View {
-        InlineVideoPlayer(player: model.player, isReady: model.isReady, onClose: { dismiss() })
+        InlineVideoPlayer(player: model.player,
+                          isReady: model.isReady,
+                          onClose: { dismiss() },
+                          onPiPActiveChanged: { [model] in model.setPiPActive($0) })
             .aspectRatio(model.detail?.aspectRatio ?? 16.0 / 9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .background(Color.black)
@@ -87,7 +93,7 @@ struct EmbeddedPlayerView: View {
                         uploaderVerified: detail.uploaderVerified ?? false,
                         thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
                         duration: detail.duration,
-                        description: HTMLText.plain(detail.description ?? ""),
+                        description: model.plainDescription,
                         chapters: detail.chapters ?? [],
                         canSubscribe: detail.channelID != nil,
                         isSubscribed: model.isSubscribed(detail.channelID),
@@ -158,6 +164,7 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     let isReady: Bool
     let onClose: () -> Void
+    let onPiPActiveChanged: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> InlinePlayerController {
         let controller = InlinePlayerController()
@@ -166,12 +173,14 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
         controller.updatesNowPlayingInfoCenter = true
         controller.videoGravity = .resizeAspect
         controller.onClose = onClose
+        controller.onPiPActiveChanged = onPiPActiveChanged
         if isReady { controller.player = player }
         return controller
     }
 
     func updateUIViewController(_ controller: InlinePlayerController, context: Context) {
         controller.onClose = onClose
+        controller.onPiPActiveChanged = onPiPActiveChanged
         if isReady, controller.player !== player {
             controller.player = player
         }
@@ -190,9 +199,27 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
 /// reorganises the hierarchy and the row can't be found, we simply add nothing
 /// (no crash; the player just lacks the extra button). Scoped to the embedded
 /// player only; the full-screen `VideoPlayerPresenter` is deliberately untouched.
-final class InlinePlayerController: AVPlayerViewController {
+final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControllerDelegate {
     var onClose: (() -> Void)?
+    /// Reports PiP start/stop so the embedded model can defer teardown while
+    /// PiP is active. AVKit keeps this controller alive for the duration of
+    /// PiP, so the callback (and the model it captures) survives the SwiftUI
+    /// cover being dismissed.
+    var onPiPActiveChanged: ((Bool) -> Void)?
     private weak var closeButton: UIButton?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        delegate = self
+    }
+
+    func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
+        onPiPActiveChanged?(true)
+    }
+
+    func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
+        onPiPActiveChanged?(false)
+    }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -283,9 +310,21 @@ final class InlinePlayerController: AVPlayerViewController {
 @MainActor
 @Observable
 final class EmbeddedPlayerModel {
-    let player = AVPlayer()
+    /// Lazy so the models SwiftUI constructs and immediately discards while
+    /// re-evaluating the cover content (only the first `@State` value is
+    /// kept) never pay for a live `AVPlayer`. Body only touches `player` on
+    /// the installed model.
+    @ObservationIgnored private(set) lazy var player: AVPlayer = {
+        let player = AVPlayer()
+        player.allowsExternalPlayback = true
+        player.appliesMediaSelectionCriteriaAutomatically = false
+        return player
+    }()
     private(set) var request: PlayRequest
     private(set) var detail: VideoDetail?
+    /// `detail.description` stripped of HTML once when the detail arrives —
+    /// body re-evaluates every playback tick, so it must not re-parse there.
+    private(set) var plainDescription = ""
     /// When `detail`'s URLs were resolved — runtime fallback uses this to
     /// decide whether they may have expired.
     private var detailLoadedAt: Date?
@@ -307,8 +346,11 @@ final class EmbeddedPlayerModel {
     private var fallbackCheckTask: Task<Void, Never>?
     private var activePlaybackSource = "unknown"
     private var fallbackInProgress = false
-    private var usedComposition = false
     private var started = false
+    /// PiP keeps playing after the cover is dismissed; while it's active,
+    /// `viewDisappeared()` defers teardown until PiP ends.
+    private var pipActive = false
+    private var teardownDeferredForPiP = false
     private var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
 
@@ -318,8 +360,6 @@ final class EmbeddedPlayerModel {
         self.request = request
         self.app = app
         self.modelContext = modelContext
-        player.allowsExternalPlayback = true
-        player.appliesMediaSelectionCriteriaAutomatically = false
     }
 
     func start() {
@@ -357,7 +397,6 @@ final class EmbeddedPlayerModel {
                 await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
                 guard !Task.isCancelled else { return }
             }
-            usedComposition = playback.composed
             let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
             initialItem.externalMetadata = baseMetadata
             player.replaceCurrentItem(with: initialItem)
@@ -384,11 +423,15 @@ final class EmbeddedPlayerModel {
                 base: baseMetadata)
             self.client = client
             self.detail = detail
+            plainDescription = HTMLText.plain(detail.description ?? "")
             detailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
             if let resume = savedPosition(for: request.videoID),
                resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
+            // The seek can outlive this playback (teardown cancels the load):
+            // don't resume audio or install observers afterwards.
+            guard !Task.isCancelled else { return }
             player.play()
             // A start that never becomes playback (buffering that never
             // completes) fires no stall notification and no failure, so
@@ -422,13 +465,36 @@ final class EmbeddedPlayerModel {
         isReady = true
         PlayerNowPlayingMetadata.attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
         recordHistoryLocal()
-        Task {
+        // Tied to `loadTask` so teardown cancels it; otherwise the seek could
+        // resume an orphaned player and install a time observer that is never
+        // removed.
+        loadTask = Task {
             if let resume = savedPosition(for: request.videoID),
                resume >= PlaybackHistoryStore.minWatchSeconds {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
+            guard !Task.isCancelled else { return }
             player.play()
             installProgressTracking()
+        }
+    }
+
+    /// Called when the cover disappears. Tears down immediately unless PiP is
+    /// running (mirrors the fullscreen presenter's `pipActive` guard) — then
+    /// teardown waits for PiP to end so the picture doesn't go black.
+    func viewDisappeared() {
+        if pipActive {
+            teardownDeferredForPiP = true
+        } else {
+            teardown()
+        }
+    }
+
+    func setPiPActive(_ active: Bool) {
+        pipActive = active
+        if !active, teardownDeferredForPiP {
+            teardownDeferredForPiP = false
+            teardown()
         }
     }
 
@@ -449,7 +515,6 @@ final class EmbeddedPlayerModel {
         activePlaybackSource = "unknown"
         fallbackInProgress = false
         debugModel.reset()
-        usedComposition = false
         currentPlaybackSeconds = nil
         client = nil
         lastProgressSaveSeconds = nil
@@ -595,25 +660,36 @@ final class EmbeddedPlayerModel {
         let seconds = player.currentTime().seconds
         if seconds.isFinite { savePosition(seconds) }
         guard let next = app.dequeueNext() else { return }
-        playQueued(next)
-    }
-
-    private func playQueued(_ next: PlayRequest) {
-        let seconds = player.currentTime().seconds
-        if seconds.isFinite { savePosition(seconds) }
-        resetForItemReplacement()
-        request = next
-        app.nowPlaying = next
-        if let local = next.localURL {
-            loadLocal(local)
-        } else {
-            loadTask = Task { await load() }
-        }
+        advance(to: next)
     }
 
     func playQueued(_ queued: QueuedVideo) {
-        guard let request = app.removeFromQueue(queued) else { return }
-        playQueued(request)
+        guard let next = app.removeFromQueue(queued) else { return }
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite { savePosition(seconds) }
+        advance(to: next)
+    }
+
+    /// Hands playback to `next` by updating `app.nowPlaying` only: the cover
+    /// is keyed on the request's identity (videoID), so the change re-presents
+    /// it with a fresh model that performs the single stream load. Reloading
+    /// in place here as well would resolve the stream twice — once on this
+    /// model and once on the re-presented one.
+    private func advance(to next: PlayRequest) {
+        guard next.videoID != request.videoID else {
+            // Same video again: the cover identity won't change, so an
+            // in-place reload is the only way to restart it.
+            resetForItemReplacement()
+            request = next
+            app.nowPlaying = next
+            if let local = next.localURL {
+                loadLocal(local)
+            } else {
+                loadTask = Task { await load() }
+            }
+            return
+        }
+        app.nowPlaying = next
     }
 
     private func resetForItemReplacement() {
@@ -632,8 +708,8 @@ final class EmbeddedPlayerModel {
         activePlaybackSource = "unknown"
         fallbackInProgress = false
         debugModel.reset()
-        usedComposition = false
         detail = nil
+        plainDescription = ""
         detailLoadedAt = nil
         errorMessage = nil
         currentPlaybackSeconds = nil
@@ -812,7 +888,6 @@ final class EmbeddedPlayerModel {
         guard player.currentItem === item else { return }
         fallbackCheckTask?.cancel()
         fallbackCheckTask = nil
-        usedComposition = fallbackPlayback.composed
         statusObservation?.invalidate()
         statusObservation = nil
         let resume = player.currentTime()
@@ -836,7 +911,8 @@ final class EmbeddedPlayerModel {
             source: fallbackPlayback.sourceName)
         debugModel.configure(detail: detail, composed: fallbackPlayback.composed, allowAV1: Self.supportsAV1)
         await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
-        if wasPlaying { player.playImmediately(atRate: 1.0) }
+        // `defaultRate` carries the user's selected playback speed.
+        if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
     }
 
     private func scheduleFallbackIfStillStalled(
@@ -900,6 +976,7 @@ final class EmbeddedPlayerModel {
         guard let fresh = try? await app.refreshStream(request.videoID) else { return detail }
         NSLog("Atlas.player: embedded refreshed stream URLs for fallback videoID=\(request.videoID)")
         self.detail = fresh
+        plainDescription = HTMLText.plain(fresh.description ?? "")
         detailLoadedAt = Date()
         return fresh
     }

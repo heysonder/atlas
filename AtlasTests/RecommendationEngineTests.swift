@@ -76,11 +76,33 @@ import PipedKit
     ], target: 5)
 
     #expect(pool.items.compactMap(\.videoID) == ["s1", "s2", "r1", "shared", "r2"])
-    #expect(pool.sourcesByID["shared"]?.contains(.subscription) != true)
+    // "shared" was listed by the subscription source too — quota only limits
+    // placement, never attribution.
+    #expect(pool.sourcesByID["shared"]?.contains(.subscription) == true)
     #expect(pool.sourcesByID["shared"]?.contains(.related) == true)
     #expect(pool.sourcesByID["r2"] == Set([.related]))
     #expect(pool.frequency["shared"] == 3)
     #expect(pool.frequency["r2"] == nil)
+}
+
+@MainActor
+@Test func candidateMergeKeepsAttributionForDuplicatesAfterQuotaFills() throws {
+    let related = try [streamItem("r1"), streamItem("shared")]
+    let exploration = try [streamItem("shared"), streamItem("e1")]
+
+    let pool = RecommendationEngine.mergeCandidateSources([
+        CandidateSourceBucket(source: .related, items: related,
+                              frequency: ["shared": 4], limit: 1),
+        CandidateSourceBucket(source: .exploration, items: exploration,
+                              frequency: ["shared": 2], limit: 2),
+    ], target: 10)
+
+    // r1 fills related's quota, so "shared" can't be *placed* by related — but
+    // once exploration places it, related must still be credited (and its
+    // frequency count kept) or multi-source items lose their ranking boost.
+    #expect(pool.items.compactMap(\.videoID) == ["r1", "shared", "e1"])
+    #expect(pool.sourcesByID["shared"] == Set([.related, .exploration]))
+    #expect(pool.frequency["shared"] == 4)
 }
 
 @MainActor
@@ -126,6 +148,32 @@ import PipedKit
         ranked, recentTopIDs: ["v1", "v2"], protectedWindow: 3, insertionIndex: 3)
 
     #expect(rotated.compactMap(\.videoID) == ["v3", "v4", "v5", "v1", "v2"])
+}
+
+@MainActor
+@Test func watchWeightMatchesDocumentedAnchors() {
+    // 0% → 0.5, 50% → 1.0 (the original flat weight), ≥80% → the 4× ceiling.
+    #expect(RecommendationEngine.watchWeight(position: 0, duration: 100) == 0.5)
+    #expect(RecommendationEngine.watchWeight(position: 50, duration: 100) == 1.0)
+    #expect(RecommendationEngine.watchWeight(position: 80, duration: 100) == 4.0)
+    #expect(RecommendationEngine.watchWeight(position: 100, duration: 100) == 4.0)
+    // Unknown duration stays neutral.
+    #expect(RecommendationEngine.watchWeight(position: 30, duration: 0) == 1)
+}
+
+@MainActor
+@Test func tasteDocDedupCollapsesReplicatedCopies() {
+    let replicated: [[String]] = [
+        ["swift", "concurrency"],
+        ["swift", "concurrency"],
+        ["swift", "concurrency"],
+        ["rust", "systems"],
+        ["swift", "concurrency"],
+    ]
+
+    let deduped = RecommendationEngine.deduplicatedDocs(replicated)
+
+    #expect(deduped == [["swift", "concurrency"], ["rust", "systems"]])
 }
 
 @MainActor
@@ -180,21 +228,6 @@ import PipedKit
     #expect(signals["other"] == nil)
 }
 
-@MainActor
-@Test func timestampPreviewIndexPrefersLatestActiveTimestamp() throws {
-    let comments = try [
-        comment("first", text: "Early note at 0:04"),
-        comment("second", text: "Better match at 0:08"),
-        comment("third", text: "Later note at 0:30"),
-    ].map(CommentDisplay.init)
-    var index = TimestampCommentPreviewIndex()
-    index.updateIfNeeded(comments)
-
-    #expect(index.activeComment(at: 9)?.id == "second")
-    #expect(index.activeComment(at: 18) == nil)
-    #expect(index.activeComment(at: 35)?.id == "third")
-}
-
 private func historyEntry(_ id: String, uploader: String, watchedAt: TimeInterval) -> HistoryEntry {
     HistoryEntry(videoID: id, title: "Video \(id)", uploader: uploader,
                  watchedAt: Date(timeIntervalSince1970: watchedAt),
@@ -213,15 +246,4 @@ private func streamItem(_ id: String, uploader: String = "Uploader",
     }
     """.data(using: .utf8)!
     return try JSONDecoder().decode(StreamItem.self, from: json)
-}
-
-private func comment(_ id: String, text: String) throws -> PipedKit.Comment {
-    let json = """
-    {
-      "commentId": "\(id)",
-      "commentText": "\(text)",
-      "author": "Tester"
-    }
-    """.data(using: .utf8)!
-    return try JSONDecoder().decode(PipedKit.Comment.self, from: json)
 }

@@ -5,7 +5,7 @@ import PipedKit
 struct FeedView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
-    @AppStorage("feedMode") private var feedMode: FeedMode = .subscriptions
+    @AppStorage(FeedMode.storageKey) private var feedMode: FeedMode = .subscriptions
     @Query(sort: \SubscribedChannel.subscribedAt, order: .reverse)
     private var subscriptions: [SubscribedChannel]
     @Query(sort: \HistoryEntry.watchedAt, order: .reverse) private var history: [HistoryEntry]
@@ -30,6 +30,16 @@ struct FeedView: View {
     @State private var loadGeneration = 0
     @State private var forYouSourceTasks: [Task<Void, Never>] = []
     @State private var isLoadingMore = false
+    /// Pull-to-refresh support: For You spawns its source tasks and returns, so
+    /// `.refreshable` parks here until the refresh's results actually land.
+    /// Resumed exactly once (resume-and-nil): at the first apply/fail for its
+    /// generation, or immediately when a newer load supersedes it — a stale
+    /// continuation is never left hanging.
+    @State private var refreshContinuation: CheckedContinuation<Void, Never>?
+    /// The `loadGeneration` the pending refresh continuation is waiting on.
+    @State private var refreshWaitGeneration: Int?
+    /// Highest generation whose load has settled (applied results or failed).
+    @State private var settledGeneration = 0
 
     private static let forYouInitialWindow = 40
     private static let pageWindow = 20
@@ -37,8 +47,11 @@ struct FeedView: View {
 
     /// Videos that count as watched (≥80% seen) — hidden from the feed. Opening
     /// one and bailing early doesn't count, so it stays/reappears until you
-    /// actually get through it.
-    private var watchedIDs: Set<String> { Set(history.filter(\.isWatched).map(\.videoID)) }
+    /// actually get through it. Memoized: the history query invalidates every
+    /// second during playback, so the set is only rebuilt when the table
+    /// meaningfully changes rather than on every body evaluation.
+    @State private var watchedMemo = WatchedIDsMemo()
+    private var watchedIDs: Set<String> { watchedMemo.ids(for: history) }
     private func unwatched(_ videos: [StreamItem], watchedIDs: Set<String>) -> [StreamItem] {
         videos.filter { item in
             guard let id = item.videoID else { return true }
@@ -188,6 +201,10 @@ struct FeedView: View {
 
     private func load(refreshing: Bool = false) async {
         cancelForYouSourceTasks()
+        // A new load supersedes whatever a previous refresh was waiting on —
+        // resolve that gesture now instead of leaving it hung on results that
+        // will never apply.
+        resumeRefreshContinuation()
         let requestKey = loadKey
         loadGeneration += 1
         let generation = loadGeneration
@@ -202,6 +219,10 @@ struct FeedView: View {
             await loadForYou(recentTopIDs: recentTopIDs,
                              requestKey: requestKey,
                              generation: generation)
+            // `loadForYou` returns once its source tasks are spawned. Keep the
+            // pull-to-refresh spinner up until this generation's results apply
+            // (or the load fails); Subscriptions below already awaits inline.
+            if refreshing { await waitUntilSettled(generation) }
         } else {
             await loadSubscriptions(requestKey: requestKey, generation: generation)
         }
@@ -236,16 +257,25 @@ struct FeedView: View {
         }
     }
 
-    private func loadDiscovery(requestKey: String? = nil, generation: Int? = nil) async {
+    private func loadDiscovery(requestKey: String? = nil, generation: Int? = nil,
+                               collector: ForYouCandidateCollector? = nil) async {
         do {
             let videos = try await app.client.trending(region: discoveryRegion)
-            guard canApplyLoad(requestKey: requestKey, generation: generation) else { return }
+            // Re-check after the await: a slow personalized source may have
+            // rendered while trending was in flight — never clobber it with
+            // generic content. (The reverse order stays allowed: personalized
+            // results landing after trending still upgrade via `applyForYou`.)
+            guard canApplyLoad(requestKey: requestKey, generation: generation),
+                  collector?.didPresentPersonalized != true else { return }
             phase = .loaded(videos)
             if let requestKey { loadedKey = requestKey }
+            if let generation { settleLoad(generation: generation) }
             await prefetch(visible(videos))
         } catch {
-            guard canApplyLoad(requestKey: requestKey, generation: generation) else { return }
+            guard canApplyLoad(requestKey: requestKey, generation: generation),
+                  collector?.didPresentPersonalized != true else { return }
             phase = .failed(error.localizedDescription)
+            if let generation { settleLoad(generation: generation) }
         }
     }
 
@@ -265,7 +295,9 @@ struct FeedView: View {
         }
         // Personalization signals beyond watch history. Pull the Sendable bits the
         // concurrent seeds need (plain strings) out here, so the child tasks below
-        // never capture the non-Sendable @Model arrays themselves.
+        // never capture the non-Sendable @Model arrays themselves. `saved` is
+        // still [PlaylistVideo]: it is consumed synchronously by the profile
+        // build below and never crosses into a child task.
         let saved = Array(savedVideos.prefix(40))
         let searches = recentSearches
         // Channels you follow — the most explicit interest signal. Both a candidate
@@ -368,7 +400,8 @@ struct FeedView: View {
                   !collector.didPresentPersonalized,
                   !collector.didStartDiscovery else { return }
             collector.didStartDiscovery = true
-            await loadDiscovery(requestKey: requestKey, generation: generation)
+            await loadDiscovery(requestKey: requestKey, generation: generation,
+                                collector: collector)
         })
         forYouSourceTasks = tasks
     }
@@ -402,7 +435,8 @@ struct FeedView: View {
         guard !pool.items.isEmpty else {
             if collector.isComplete, !collector.didStartDiscovery {
                 collector.didStartDiscovery = true
-                await loadDiscovery(requestKey: requestKey, generation: generation)
+                await loadDiscovery(requestKey: requestKey, generation: generation,
+                                    collector: collector)
             }
             return
         }
@@ -458,10 +492,17 @@ struct FeedView: View {
                               generation: generation)
             guard refine,
                   isCurrentLoad(requestKey: requestKey, generation: generation) else { return }
+            let refineHead = Array(coarse.prefix(50))   // per-video /streams budget — tunable knob
             let refined = await engine.refineWithSignals(
-                Array(coarse.prefix(50)), profile: profile, sourcesByID: pool.sourcesByID)
+                refineHead, profile: profile, sourcesByID: pool.sourcesByID)
+            // Refinement only re-ranks the head; keep the un-refined coarse tail
+            // (deduped) so the ranked list never shrinks under a scrolled user.
+            let refinedIDs = Set(refined.map { $0.videoID ?? $0.id })
+            let upgraded = refined + coarse.dropFirst(refineHead.count).filter {
+                !refinedIDs.contains($0.videoID ?? $0.id)
+            }
             let rotatedRefined = RecommendationEngine.rotateRecentlyShown(
-                refined, recentTopIDs: recentTopIDs)
+                upgraded, recentTopIDs: recentTopIDs)
             await applyForYou(rotatedRefined,
                               collector: collector,
                               renderRevision: renderRevision,
@@ -482,12 +523,44 @@ struct FeedView: View {
         presentForYou(ranked)
         rememberForYouTop(ranked)
         loadedKey = requestKey
+        settleLoad(generation: generation)
         await prefetch(visible(ranked))
     }
 
     private func cancelForYouSourceTasks() {
         forYouSourceTasks.forEach { $0.cancel() }
         forYouSourceTasks = []
+    }
+
+    // MARK: Refresh settling
+
+    /// Parks a pull-to-refresh until `settleLoad` fires for `generation` (or a
+    /// newer one). No-op when the load was already superseded, or when it
+    /// settled synchronously before we got here (e.g. the no-seeds path applies
+    /// discovery inside `loadForYou`).
+    private func waitUntilSettled(_ generation: Int) async {
+        guard loadGeneration == generation, settledGeneration < generation else { return }
+        await withCheckedContinuation { continuation in
+            refreshContinuation = continuation
+            refreshWaitGeneration = generation
+        }
+    }
+
+    /// Marks `generation`'s load as landed — first successful apply or terminal
+    /// failure — and releases a refresh waiting on it. Later apply passes for
+    /// the same generation (e.g. the refine re-rank) are harmless no-ops.
+    private func settleLoad(generation: Int) {
+        settledGeneration = max(settledGeneration, generation)
+        if let waiting = refreshWaitGeneration, waiting <= generation {
+            resumeRefreshContinuation()
+        }
+    }
+
+    /// Resume-and-nil so the continuation can only ever fire once.
+    private func resumeRefreshContinuation() {
+        refreshWaitGeneration = nil
+        refreshContinuation?.resume()
+        refreshContinuation = nil
     }
 
     private func isCurrentLoad(requestKey: String, generation: Int) -> Bool {
@@ -549,6 +622,9 @@ private final class ForYouCandidateCollector {
     }
 
     var pool: CandidatePool {
+        // Per-source quotas (18/24/12/12/6) and the engine's default 80-item
+        // merge target are tunable knobs: how much of the pool each signal may
+        // claim before the ranking pass reorders everything.
         RecommendationEngine.mergeCandidateSources([
             CandidateSourceBucket(source: .subscription, items: subscriptionCandidates, limit: 18),
             CandidateSourceBucket(source: .related, items: relatedCandidates,

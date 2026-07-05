@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 protocol InstanceSecureStoring {
     func loadInstanceURL() -> String?
@@ -33,7 +34,13 @@ struct KeychainInstanceStore: InstanceSecureStoring {
         let status = SecItemAdd(attributes as CFDictionary, nil)
         if status == errSecDuplicateItem {
             let updates: [String: Any] = [kSecValueData as String: data]
-            SecItemUpdate(baseQuery as CFDictionary, updates as CFDictionary)
+            let updateStatus = SecItemUpdate(baseQuery as CFDictionary, updates as CFDictionary)
+            if updateStatus != errSecSuccess {
+                // Non-fatal: defaults still holds the value and load() re-mirrors
+                // it to the keychain on a later launch.
+                Logger(subsystem: "sh.cmf.atlas", category: "instance")
+                    .error("keychain update failed (\(updateStatus))")
+            }
         }
     }
 
@@ -67,16 +74,22 @@ struct InstanceStore {
         let candidates = [
             defaults.string(forKey: Self.defaultsKey),
             secureStore.loadInstanceURL()
-        ]
+        ].compactMap { $0 }
 
-        if let resolved = candidates.compactMap({ $0 })
+        if let resolved = candidates
             .map(Self.normalize)
             .first(where: Self.isValidInstanceURL) {
             save(resolved)
             return resolved
         }
 
-        clear()
+        // Only wipe storage when a stored value was actually read and found
+        // invalid. When nothing could be read at all (e.g. the keychain is
+        // unavailable before first unlock), leave both copies untouched so the
+        // saved instance survives to the next load.
+        if !candidates.isEmpty {
+            clear()
+        }
         return ""
     }
 
