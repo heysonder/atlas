@@ -66,3 +66,12 @@ Atlas does not ship with a default Piped instance. Set one at runtime in
 - Piped account sync
 - Playlist sync/import improvements
 - Push notifications for new uploads
+
+## Screenshots
+
+<p>
+  <img src="Docs/Screenshots/for-you-feed.jpg" width="220" alt="Atlas For You feed">
+  <img src="Docs/Screenshots/nasa-channel.jpg" width="220" alt="Atlas NASA channel">
+  <img src="Docs/Screenshots/video-info-sheet.jpg" width="220" alt="Atlas video info sheet">
+  <img src="Docs/Screenshots/channels-list.jpg" width="220" alt="Atlas channels list">
+</p>
