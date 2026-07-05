@@ -40,6 +40,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var playerVC: AVPlayerViewController?
         private var loadTask: Task<Void, Never>?
         private var pipActive = false
+        /// True while the old player is being dismissed so a new video can be
+        /// presented from the dismissal's completion; blocks re-entrant `sync`.
+        private var pendingReplacement = false
         private var timeObserver: Any?
         private var endObserver: NSObjectProtocol?
         private var itemDiagnosticObservers: [NSObjectProtocol] = []
@@ -52,7 +55,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// When `currentDetail`'s URLs were resolved — runtime fallback uses
         /// this to decide whether they may have expired.
         private var currentDetailLoadedAt: Date?
-        private var usedComposition = false
         private var infoButtonHost: UIHostingController<InfoOverlayButton>?
         private var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
         private let infoButtonModel = InfoButtonModel()
@@ -74,6 +76,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         func sync(request: PlayRequest?) {
+            // A replacement dismissal is in flight; its completion presents
+            // the new video.
+            guard !pendingReplacement else { return }
             if let request {
                 guard presentedID != request.videoID else { return }
                 present(request)
@@ -84,6 +89,22 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
         private func present(_ request: PlayRequest) {
             guard let presenter, presenter.view.window != nil else { return }
+            // Replacing while the old player is still on screen (PiP excluded —
+            // its fullscreen UI is already dismissed): UIKit ignores `present`
+            // while another controller is presented, so tear down and dismiss
+            // the old one first, then present the new video from the
+            // dismissal's completion. `hardStop()` clears `presentedID`, so
+            // the `playerWasDismissed` fired by this dismissal is a no-op.
+            if playerVC != nil, !pipActive, presenter.presentedViewController != nil {
+                hardStop()
+                pendingReplacement = true
+                presenter.dismiss(animated: true) { [weak self] in
+                    guard let self else { return }
+                    self.pendingReplacement = false
+                    self.present(request)
+                }
+                return
+            }
             if playerVC != nil { hardStop() }   // replace any existing (incl. PiP) player
             presentedID = request.videoID
             currentRequest = request
@@ -138,7 +159,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     await PlayerAudioSelection.selectPreferredAudio(for: initialItem)
                     guard !Task.isCancelled else { return }
                 }
-                usedComposition = playback.composed
                 // Keep the forward buffer window system-managed.
                 initialItem.externalMetadata = baseMetadata
                 player.replaceCurrentItem(with: initialItem)
@@ -172,6 +192,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                    resume >= PlaybackHistoryStore.minWatchSeconds {
                     await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
                 }
+                // The seek can outlive this playback (dismissal cancels the
+                // load): don't resume audio or install observers on an
+                // orphaned player.
+                guard !Task.isCancelled, self.player === player else { return }
                 // Start normally so AVPlayer can wait to minimize stalls.
                 player.play()
                 // A start that never becomes playback (buffering that never
@@ -215,11 +239,15 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             installDebugOverlay(on: controller)
             PlayerNowPlayingMetadata.attachArtwork(to: item, urlString: request.thumbnail, base: metadata)
             recordHistory(request)
-            Task {
+            // Tied to `loadTask` so teardown cancels it; otherwise the seek
+            // could resume an orphaned player and install a time observer that
+            // is never removed.
+            loadTask = Task {
                 if let resume = savedPosition(for: request.videoID),
                    resume >= PlaybackHistoryStore.minWatchSeconds {
                     await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
                 }
+                guard !Task.isCancelled, self.player === player else { return }
                 player.play()
                 installProgressTracking(on: player)
             }
@@ -421,7 +449,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             activePlaybackSource = "unknown"
             fallbackInProgress = false
             debugModel.reset()
-            usedComposition = false
             currentDetail = nil
             currentDetailLoadedAt = nil
             infoButtonHost?.willMove(toParent: nil)
@@ -455,7 +482,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             Task { [weak self] in
                 let fetched = (try? await client.sponsorSegments(
                     videoID: videoID, categories: categories)) ?? []
-                guard let self, self.presentedID == videoID else { return }
+                // Same-video re-present within the fetch window swaps players;
+                // the identity check keeps observers off the old one.
+                guard let self, self.presentedID == videoID, self.player === player else { return }
                 let usable = Self.usableSegments(fetched)
                 guard !usable.isEmpty else { return }
                 self.sponsorSegments = usable
@@ -555,7 +584,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             pipActive = false
             // PiP closed without restoring the full-screen UI → tear down.
             if presenter?.presentedViewController == nil {
-                cleanup()
+                hardStop()
                 clearRequest()
             }
         }
@@ -566,16 +595,12 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// happens automatically when PiP takes over.
         func playerWasDismissed() {
             guard presentedID != nil, !pipActive else { return }
-            cleanup()
+            hardStop()
             clearRequest()
         }
 
         private func dismissPlayer() {
             presenter?.dismiss(animated: true)
-            cleanup()
-        }
-
-        private func cleanup() {
             hardStop()
         }
 
@@ -585,7 +610,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
             if let player {
-                if let t = player.currentTime().seconds as Double?, t.isFinite { savePosition(t) }
+                let t = player.currentTime().seconds
+                if t.isFinite { savePosition(t) }
                 if let timeObserver { player.removeTimeObserver(timeObserver) }
                 if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
                 if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
@@ -606,7 +632,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             activePlaybackSource = "unknown"
             fallbackInProgress = false
             debugModel.reset()
-            usedComposition = false
             infoButtonHost?.willMove(toParent: nil)
             infoButtonHost?.view.removeFromSuperview()
             infoButtonHost?.removeFromParent()
@@ -948,7 +973,6 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             guard self.player === player, player.currentItem === item else { return }
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
-            usedComposition = fallbackPlayback.composed
             statusObservation?.invalidate()
             statusObservation = nil
             let resume = player.currentTime()
@@ -960,7 +984,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 ? PlayerNowPlayingMetadata.streaming(
                     detail,
                     request: currentRequest ?? PlayRequest(
-                        videoID: detail.channelID ?? "",
+                        videoID: presentedID ?? "",
                         title: detail.title ?? ""))
                 : currentMetadata
             if fallbackPlayback.selectsPreferredAudio {
@@ -976,7 +1000,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 source: fallbackPlayback.sourceName)
             debugModel.configure(detail: detail, composed: fallbackPlayback.composed, allowAV1: Self.supportsAV1)
             await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
-            if wasPlaying { player.playImmediately(atRate: 1.0) }
+            // `defaultRate` carries the user's selected playback speed.
+            if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
         }
 
         private func scheduleFallbackIfStillStalled(

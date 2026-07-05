@@ -6,7 +6,7 @@ import PipedKit
 /// matching the rest of the stack — mixing in destination-based links would
 /// double-navigate (see the note in ProfileView).
 enum SettingsRoute: Hashable {
-    case instances, sponsorBlock, backup, topicCloud
+    case instances, sponsorBlock, backup
 }
 
 /// Root settings screen: the lightweight, frequently-touched controls stay
@@ -14,7 +14,8 @@ enum SettingsRoute: Hashable {
 /// pages with a summary value shown on the row.
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
-    @AppStorage("feedMode") private var feedMode: FeedMode = .subscriptions
+    @AppStorage(FeedMode.storageKey) private var feedMode: FeedMode = .subscriptions
+    @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
 
     var body: some View {
         @Bindable var app = app
@@ -45,11 +46,13 @@ struct SettingsView: View {
             }
 
             Section {
-                NavigationLink(value: SettingsRoute.topicCloud) {
-                    settingRow("Topic Cloud", systemImage: "textformat.size", detail: "Local")
-                }
+                Toggle("Resolve Collaborators via YouTube", isOn: $resolveCollaboratorsViaYouTube)
             } header: {
-                Text("Personalization")
+                Text("Privacy")
+            } footer: {
+                Text(resolveCollaboratorsViaYouTube
+                     ? "Fetches collaborator details for multi-creator videos directly from youtube.com."
+                     : "When off, all traffic stays on your Piped instance; multi-creator videos may show fewer collaborator details.")
             }
 
             Section {
@@ -79,8 +82,10 @@ struct SettingsView: View {
             }
 
             Section {
-                Link(destination: privacyPolicyURL) {
-                    Label("Privacy Policy", systemImage: "hand.raised")
+                if let privacyPolicyURL {
+                    Link(destination: privacyPolicyURL) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
                 }
                 LabeledContent("Version", value: appVersion)
             }
@@ -117,7 +122,9 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
 
-    private var privacyPolicyURL: URL {
-        URL(string: "https://atlas.cmf.sh/privacy")!
+    /// Static, known-valid URL; optional so no force unwrap is needed (the row
+    /// simply doesn't render in the impossible nil case).
+    private var privacyPolicyURL: URL? {
+        URL(string: "https://atlas.cmf.sh/privacy")
     }
 }

@@ -12,6 +12,9 @@ struct Thumbnail: View {
     let url: String?
     @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
+    /// The URL `image` was loaded for, so size-only reloads keep showing the
+    /// current image instead of flashing the gray placeholder.
+    @State private var imageURL: String?
 
     var body: some View {
         GeometryReader { proxy in
@@ -37,13 +40,18 @@ struct Thumbnail: View {
     }
 
     private func load(size: CGSize) async {
-        image = nil
+        // Only clear when the video identity changed; on a pure size change the
+        // old image stays up until the sharper replacement arrives.
+        if imageURL != url {
+            image = nil
+            imageURL = url
+        }
         let loaded = await ThumbnailImagePipeline.shared.image(
             original: url,
             upgraded: Self.upgraded(url),
             displaySize: size,
             scale: displayScale)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, let loaded else { return }
         image = loaded
     }
 
@@ -76,8 +84,11 @@ private actor ThumbnailImagePipeline {
 
     private var cache: [CacheKey: UIImage] = [:]
     private var order: [CacheKey] = []
+    private var totalCost = 0
     private let session: URLSession = .shared
-    private let cacheLimit = 180
+    /// Evict by decoded byte cost (width × height × 4), not entry count — a few
+    /// large decodes cost as much as dozens of list thumbnails.
+    private let costLimit = 64 * 1024 * 1024
 
     func image(original: String?, upgraded: String?, displaySize: CGSize, scale: CGFloat) async -> UIImage? {
         let maxPixelDimension = Self.maxPixelDimension(for: displaySize, scale: scale)
@@ -107,9 +118,20 @@ private actor ThumbnailImagePipeline {
         guard cache[key] == nil else { return }
         cache[key] = image
         order.append(key)
-        while order.count > cacheLimit {
-            cache.removeValue(forKey: order.removeFirst())
+        totalCost += Self.cost(of: image)
+        while totalCost > costLimit, !order.isEmpty {
+            if let evicted = cache.removeValue(forKey: order.removeFirst()) {
+                totalCost -= Self.cost(of: evicted)
+            }
         }
+    }
+
+    /// Estimated decoded footprint: 4 bytes per pixel.
+    private static func cost(of image: UIImage) -> Int {
+        guard let cgImage = image.cgImage else {
+            return Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        }
+        return cgImage.width * cgImage.height * 4
     }
 
     private static func maxPixelDimension(for displaySize: CGSize, scale: CGFloat) -> Int {

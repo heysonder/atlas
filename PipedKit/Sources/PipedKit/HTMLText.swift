@@ -15,12 +15,18 @@ public enum HTMLText {
         // Strip every remaining tag (the visible link text — usually the URL — is kept).
         s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
 
-        // Named entities
-        let named = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"",
-                     "&#39;": "'", "&#x27;": "'", "&apos;": "'", "&nbsp;": " "]
-        for (k, v) in named { s = s.replacingOccurrences(of: k, with: v) }
-
+        // Numeric entities first (covers &#39;, &#x27;, …), then named entities in a
+        // deterministic order with &amp; strictly last, so double-encoded input like
+        // "&amp;#39;" or "&amp;lt;" decodes exactly one level (to the literal
+        // "&#39;" / "&lt;") instead of collapsing twice or varying run to run.
         s = decodeNumericEntities(in: s)
+
+        let named: [(String, String)] = [
+            ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+            ("&apos;", "'"), ("&nbsp;", " "),
+            ("&amp;", "&"),
+        ]
+        for (k, v) in named { s = s.replacingOccurrences(of: k, with: v) }
 
         // Collapse excessive blank lines
         s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)

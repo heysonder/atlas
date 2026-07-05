@@ -376,7 +376,8 @@ struct PlayerInfoContent: View {
     }
 
     private func chapterRow(_ chapter: VideoChapter) -> some View {
-        Button {
+        let title = chapter.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Chapter"
+        return Button {
             onTimestampTap(chapter.start)
         } label: {
             HStack(spacing: 10) {
@@ -397,7 +398,7 @@ struct PlayerInfoContent: View {
                         .padding(5)
                 }
 
-                Text(chapter.title?.isEmpty == false ? chapter.title! : "Chapter")
+                Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)

@@ -8,8 +8,10 @@ struct ChannelDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Query private var allSubs: [SubscribedChannel]
-    @Query private var history: [HistoryEntry]
+    /// Just this channel's subscription row (filtered in `init`), not the whole
+    /// table — the page only ever needs the one match.
+    @Query private var matchingSubs: [SubscribedChannel]
+    @Query(sort: \HistoryEntry.watchedAt, order: .reverse) private var history: [HistoryEntry]
 
     @State private var phase: LoadPhase<Channel> = .idle
     @State private var regularVideos: [StreamItem] = []
@@ -19,15 +21,24 @@ struct ChannelDetailView: View {
     @State private var shortsNextpage: String?
     @State private var isLoadingNextPage = false
 
+    init(channelID: String) {
+        self.channelID = channelID
+        _matchingSubs = Query(filter: #Predicate<SubscribedChannel> {
+            $0.channelID == channelID
+        })
+    }
+
     private var subscription: SubscribedChannel? {
-        allSubs.first { $0.channelID == channelID }
+        matchingSubs.first
     }
 
     /// A channel page shows the full catalog (watched videos stay visible), so we
     /// badge what's been seen rather than hiding it the way the Home feed does.
     /// Only videos watched ≥80% earn the badge — opening one and bailing early
-    /// doesn't count as watched.
-    private var watchedIDs: Set<String> { Set(history.filter(\.isWatched).map(\.videoID)) }
+    /// doesn't count as watched. Memoized: playback bumps history every second,
+    /// so the set only rebuilds when the table meaningfully changes.
+    @State private var watchedMemo = WatchedIDsMemo()
+    private var watchedIDs: Set<String> { watchedMemo.ids(for: history) }
 
     var body: some View {
         Group {
@@ -68,6 +79,7 @@ struct ChannelDetailView: View {
                                      shortsLayout: .carousel,
                                      watchedIDs: watchedIDs,
                                      onAppearItem: { handleAppear($0, visibleItems: shown) }) { app.play($0) }
+                        .onScreenVideos(shown)
                         .padding(.horizontal)
                     paginationFooter
                 }
@@ -130,8 +142,8 @@ struct ChannelDetailView: View {
                     Text(channel.name ?? "Channel")
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
-                    if let subs = channel.subscriberCount, subs > 0 {
-                        Text(Format.views(subs)?.replacingOccurrences(of: "views", with: "subscribers") ?? "")
+                    if let subs = Format.subscribers(channel.subscriberCount) {
+                        Text(subs)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

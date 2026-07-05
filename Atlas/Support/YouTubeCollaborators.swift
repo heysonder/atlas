@@ -1,21 +1,55 @@
 import Foundation
 import PipedKit
 
-@MainActor
-enum YouTubeCollaborators {
-    private static var cache: [String: [CreatorChannel]] = [:]
-    private static var inFlight: [String: Task<[CreatorChannel], Never>] = [:]
+/// Resolves a video's collaborator channels by scraping youtube.com directly —
+/// Piped doesn't expose them. Because this contacts YouTube (bypassing the
+/// selected Piped instance), it is opt-in: nothing is fetched unless the user
+/// enables Settings → Privacy → "Resolve Collaborators via YouTube".
+nonisolated enum YouTubeCollaborators {
+    /// UserDefaults key for the opt-in toggle. Defaults to off (false), so no
+    /// request leaves for youtube.com unless the user explicitly enables it.
+    static let settingKey = "atlas.collaborators.resolveViaYouTube"
+
+    static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: settingKey)
+    }
 
     static func channels(for videoID: String) async -> [CreatorChannel] {
-        if let cached = cache[videoID] { return cached }
-        if let task = inFlight[videoID] { return await task.value }
+        guard isEnabled else { return [] }
+        return await store.channels(for: videoID)
+    }
 
-        let task = Task { await fetch(videoID: videoID) }
-        inFlight[videoID] = task
-        let channels = await task.value
-        cache[videoID] = channels
-        inFlight[videoID] = nil
-        return channels
+    private static let store = Store()
+
+    /// Owns the cache and in-flight tasks, keeping the fetch and the heavy
+    /// HTML/JSON parsing off the main actor.
+    private actor Store {
+        private var cache: [String: [CreatorChannel]] = [:]
+        private var order: [String] = []
+        private var inFlight: [String: Task<[CreatorChannel], Never>] = [:]
+        /// Entry cap with oldest-first eviction, so the cache can't grow without bound.
+        private let cacheLimit = 100
+
+        func channels(for videoID: String) async -> [CreatorChannel] {
+            if let cached = cache[videoID] { return cached }
+            if let task = inFlight[videoID] { return await task.value }
+
+            let task = Task { await YouTubeCollaborators.fetch(videoID: videoID) }
+            inFlight[videoID] = task
+            let channels = await task.value
+            insert(channels, for: videoID)
+            inFlight[videoID] = nil
+            return channels
+        }
+
+        private func insert(_ channels: [CreatorChannel], for videoID: String) {
+            guard cache[videoID] == nil else { return }
+            cache[videoID] = channels
+            order.append(videoID)
+            while order.count > cacheLimit {
+                cache.removeValue(forKey: order.removeFirst())
+            }
+        }
     }
 
     private static func fetch(videoID: String) async -> [CreatorChannel] {
@@ -37,8 +71,8 @@ enum YouTubeCollaborators {
             return []
         }
 
-        let channels = items.compactMap(parseChannel)
-        return deduped(channels).count > 1 ? deduped(channels) : []
+        let channels = deduped(items.compactMap(parseChannel))
+        return channels.count > 1 ? channels : []
     }
 
     private static func initialDataJSON(in html: String) -> String? {
@@ -229,7 +263,7 @@ enum YouTubeCollaborators {
 }
 
 private extension Dictionary where Key == String, Value == Any {
-    func value(at path: [String]) -> Any? {
+    nonisolated func value(at path: [String]) -> Any? {
         var current: Any = self
         for segment in path {
             guard let dictionary = current as? [String: Any],
@@ -241,7 +275,7 @@ private extension Dictionary where Key == String, Value == Any {
         return current
     }
 
-    func string(at path: [String]) -> String? {
+    nonisolated func string(at path: [String]) -> String? {
         value(at: path) as? String
     }
 }

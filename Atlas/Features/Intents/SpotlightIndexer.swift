@@ -14,8 +14,13 @@ import UniformTypeIdentifiers
 enum SpotlightIndexer {
     /// Spotlight item ids are namespaced so the tap handler can tell where a hit
     /// came from and so re-indexing one source never clobbers the other.
-    static let downloadDomain = "com.chasemarshall.atlas.downloads"
-    static let historyDomain = "com.chasemarshall.atlas.history"
+    static let downloadDomain = "sh.cmf.atlas.downloads"
+    static let historyDomain = "sh.cmf.atlas.history"
+
+    /// Domains used before the namespace was unified on the bundle id; purged
+    /// once per launch by `reindexAll` so stale items can't linger under them.
+    private static let legacyDomains = ["com.chasemarshall.atlas.downloads",
+                                        "com.chasemarshall.atlas.history"]
 
     private static func itemID(_ videoID: String) -> String { "video:\(videoID)" }
 
@@ -65,6 +70,8 @@ enum SpotlightIndexer {
     /// dedupes by identifier) and keeps Spotlight honest after edits made while
     /// the app wasn't running to receive incremental updates.
     static func reindexAll() {
+        CSSearchableIndex.default()
+            .deleteSearchableItems(withDomainIdentifiers: legacyDomains)
         let downloads = IntentDataStore.downloads()
         let history = IntentDataStore.recentHistory()
 

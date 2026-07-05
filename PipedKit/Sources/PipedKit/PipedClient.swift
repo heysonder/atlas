@@ -36,7 +36,9 @@ public enum PipedError: Error, LocalizedError {
             return .upstream("This instance was blocked by YouTube. Try another instance.")
         }
 
-        return .http(statusCode)
+        // Surface any other upstream message (age restriction, geo blocks, …)
+        // instead of collapsing it into a bare status code.
+        return .upstream(rawMessage)
     }
 
     private static func quotedMessage(in message: String) -> String? {
@@ -57,10 +59,14 @@ private struct PipedServerError: Decodable {
 public struct PipedClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
+    /// Generous because /streams extraction alone can take several seconds on
+    /// self-hosted instances.
+    private static let requestTimeout: TimeInterval = 15
+    private static let resourceTimeout: TimeInterval = 45
     private static let boundedSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 45
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         return URLSession(configuration: configuration)
     }()
 
@@ -78,7 +84,11 @@ public struct PipedClient: Sendable {
     }
 
     public init?(instanceString: String, session: URLSession) {
-        guard let url = URL(string: instanceString) else { return nil }
+        guard let url = URL(string: instanceString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty
+        else { return nil }
         self.init(baseURL: url, session: session)
     }
 
@@ -174,8 +184,7 @@ public struct PipedClient: Sendable {
         videoID: String, categories: [String]
     ) async throws -> [SponsorSegment] {
         guard !categories.isEmpty else { return [] }
-        // Piped expects the categories as a JSON-array string, e.g. ["sponsor","intro"].
-        let json = "[" + categories.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let json = try Self.sponsorCategoriesJSON(categories)
         let res: SponsorSegmentsResponse = try await get(
             "sponsors/\(videoID)", query: ["category": json])
         return res.segments ?? []
@@ -197,6 +206,16 @@ public struct PipedClient: Sendable {
         let resolved = trimmed.isEmpty ? "US" : trimmed.uppercased()
         let items: [StreamItem] = try await get("trending", query: ["region": resolved])
         return items
+    }
+
+    /// Piped expects the categories as a JSON-array string, e.g. ["sponsor","intro"].
+    /// Built with JSONEncoder so quotes/backslashes in a category can't break the array.
+    static func sponsorCategoriesJSON(_ categories: [String]) throws -> String {
+        let data = try JSONEncoder().encode(categories)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw PipedError.badURL
+        }
+        return json
     }
 
     // MARK: Static instance directory (separate host)
@@ -234,22 +253,27 @@ public struct PipedClient: Sendable {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path),
                                   resolvingAgainstBaseURL: false)
         if !query.isEmpty {
-            comps?.percentEncodedQueryItems = query
+            comps?.percentEncodedQueryItems = try query
                 .sorted { $0.key < $1.key }
                 .map {
                     URLQueryItem(
-                        name: percentEncodeQueryComponent($0.key),
-                        value: percentEncodeQueryComponent($0.value))
+                        name: try percentEncodeQueryComponent($0.key),
+                        value: try percentEncodeQueryComponent($0.value))
                 }
         }
         guard let url = comps?.url else { throw PipedError.badURL }
         return url
     }
 
-    private static func percentEncodeQueryComponent(_ value: String) -> String {
+    private static func percentEncodeQueryComponent(_ value: String) throws -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "+&=?#[]")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+        guard let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            // Never hand percentEncodedQueryItems a raw string — it traps on
+            // characters that aren't already percent-encoded.
+            throw PipedError.badURL
+        }
+        return encoded
     }
 
     private static func validate(_ response: URLResponse, data: Data) throws {

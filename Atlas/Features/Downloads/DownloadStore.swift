@@ -10,34 +10,90 @@ nonisolated enum DownloadStore {
         case noTracks
         case exportUnavailable
         case exportFailed(String)
+        case httpStatus(Int)
+        case storageUnavailable(String)
 
         var errorDescription: String? {
             switch self {
             case .noTracks: "The downloaded media was missing a video or audio track."
             case .exportUnavailable: "Couldn't prepare the file for offline playback."
             case .exportFailed(let m): "Saving the video failed: \(m)"
+            case .httpStatus(let code): "The server rejected the download (HTTP \(code))."
+            case .storageUnavailable(let m): "Downloads storage is unavailable: \(m)"
             }
         }
     }
 
     /// `Application Support/Downloads` — created on first access and kept out of
-    /// iCloud/iTunes backups (media is large and re-downloadable).
-    static let directory: URL = {
+    /// iCloud/iTunes backups (media is large and re-downloadable). Resolution is
+    /// strict — no tmp fallback, so persisted rows never point at purgeable
+    /// files. If creation fails, `preparedDirectory()` surfaces the error at
+    /// download time instead.
+    private static let directoryResult: Result<URL, Error> = {
         let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                appropriateFor: nil, create: true))
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Downloads", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        var mutable = dir
-        try? mutable.setResourceValues(values)
-        return dir
+        do {
+            let base = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                  appropriateFor: nil, create: true)
+            let dir = base.appendingPathComponent("Downloads", isDirectory: true)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var mutable = dir
+            try? mutable.setResourceValues(values)   // Best-effort; not worth failing storage over.
+            return .success(dir)
+        } catch {
+            return .failure(error)
+        }
     }()
+
+    /// Best-effort directory URL, for resolving persisted file names to absolute
+    /// URLs. Points at the Application Support location even when creation
+    /// failed (reads simply miss); write paths use `preparedDirectory()`.
+    static var directory: URL {
+        (try? directoryResult.get())
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first.map { $0.appendingPathComponent("Downloads", isDirectory: true) }
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/Downloads",
+                   isDirectory: true)
+    }
+
+    /// The downloads directory, verified created. Download work calls this first
+    /// so a storage failure fails the download with a clear message instead of
+    /// silently writing somewhere transient.
+    static func preparedDirectory() throws -> URL {
+        do {
+            return try directoryResult.get()
+        } catch {
+            throw StoreError.storageUnavailable(error.localizedDescription)
+        }
+    }
 
     static func fileURL(_ name: String) -> URL {
         directory.appendingPathComponent(name)
+    }
+
+    // MARK: Orphan reconciliation
+
+    /// File names in the downloads directory that nothing claims: leftover
+    /// `.video.mp4`/`.audio.m4a` merge temps and final `.mp4`s with no completed
+    /// row (a crash or kill mid-download). Only the store's own naming patterns
+    /// match; anything else is left alone. Pure, so it's directly testable.
+    static func orphanedFileNames(in files: [String], completedFileNames: Set<String>) -> [String] {
+        files.filter { name in
+            guard !completedFileNames.contains(name) else { return false }
+            if name.hasSuffix(".video.mp4") || name.hasSuffix(".audio.m4a") { return true }
+            return name.hasSuffix(".mp4")
+        }
+    }
+
+    /// Deletes orphaned files inside `directory`. Called once at launch, when no
+    /// download can be in flight (the download session is in-process).
+    static func removeOrphanedFiles(completedFileNames: Set<String>) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: directory.path) else { return }
+        for name in orphanedFileNames(in: files, completedFileNames: completedFileNames) {
+            try? fm.removeItem(at: fileURL(name))
+        }
     }
 
     /// Flags a finished file so it isn't swept into device backups.
@@ -99,7 +155,7 @@ nonisolated enum DownloadStore {
             let (data, response) = try await fetch(request, on: session)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             guard (200...299).contains(http.statusCode) else {
-                throw URLError(URLError.Code(rawValue: http.statusCode))   // e.g. 403 / 429
+                throw StoreError.httpStatus(http.statusCode)   // e.g. 403 / 429
             }
 
             try handle.write(contentsOf: data)

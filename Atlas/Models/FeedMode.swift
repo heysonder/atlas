@@ -29,8 +29,12 @@ enum FeedMode: String, CaseIterable, Identifiable {
     var isPersonalized: Bool { self == .forYouCustom }
     var isForYou: Bool { self != .subscriptions }
 
+    /// The `@AppStorage`/UserDefaults key the feed mode is persisted under.
+    /// (FeedView still spells the literal out; keep them in sync.)
+    static let storageKey = "feedMode"
+
     /// The persisted setting, for non-SwiftUI call sites (e.g. the player coordinator).
     static var current: FeedMode {
-        UserDefaults.standard.string(forKey: "feedMode").flatMap(FeedMode.init) ?? .subscriptions
+        UserDefaults.standard.string(forKey: storageKey).flatMap(FeedMode.init) ?? .subscriptions
     }
 }

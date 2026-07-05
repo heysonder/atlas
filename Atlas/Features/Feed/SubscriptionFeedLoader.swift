@@ -65,8 +65,12 @@ final class SubscriptionFeedLoader {
             }
             for (id, channel) in fetched {
                 let videos = (channel?.relatedStreams ?? []).filter(\.isVideo)
+                // Keep the cursor even when page one has no plain videos (e.g.
+                // all Shorts/livestreams) — real uploads may sit a page deeper.
+                // `refillEmptyBuffers` has its own empty-page spin-guard, so a
+                // truly exhausted channel still stops after one refill attempt.
                 states[id] = ChannelState(buffer: sortedNewestFirst(videos),
-                                          cursor: videos.isEmpty ? nil : normalized(channel?.nextpage))
+                                          cursor: normalized(channel?.nextpage))
             }
         }
         didLoad = true
@@ -93,7 +97,9 @@ final class SubscriptionFeedLoader {
                 .max(by: { headDate($0.value) < headDate($1.value) })?.key
             else { break }   // every buffer empty and nothing left to fetch
 
-            let item = states[pick]!.buffer.removeFirst()
+            guard var state = states[pick], !state.buffer.isEmpty else { break }
+            let item = state.buffer.removeFirst()
+            states[pick] = state
             guard let id = item.videoID, !emittedIDs.contains(id) else { continue }
             emittedIDs.insert(id)
             items.append(item)
