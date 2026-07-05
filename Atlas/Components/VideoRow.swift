@@ -20,6 +20,7 @@ struct VideoRow: View {
     /// titles leave ragged gaps and the columns drift into a masonry look.
     var reservesTitleSpace: Bool = false
     var onPlay: () -> Void
+    @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
     @State private var collaborators: [CreatorChannel] = []
     @State private var resolvedIsLive: Bool?
 
@@ -129,7 +130,7 @@ struct VideoRow: View {
         let shouldResolveLiveStatus = item.needsLiveStatusResolution
         guard shouldLoadCollaborators || shouldResolveLiveStatus,
               let videoID = item.videoID else { return }
-        guard let detail = try? await app.resolveStream(videoID) else { return }
+        guard let detail = try? await app.resolveStreamThrottled(videoID) else { return }
 
         if shouldResolveLiveStatus {
             resolvedIsLive = detail.livestream == true
@@ -139,7 +140,10 @@ struct VideoRow: View {
             var loaded = detail.creators?.creatorChannels(verifiedChannelID: detail.channelID,
                                                           uploaderVerified: detail.uploaderVerified ?? false) ?? []
 
-            if loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
+            // The direct-to-YouTube scrape is opt-in; the Piped-side creators
+            // above are always fine to use.
+            if resolveCollaboratorsViaYouTube,
+               loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
                 loaded = loaded.enriched(with: await YouTubeCollaborators.channels(for: videoID))
             }
 

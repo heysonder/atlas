@@ -24,11 +24,19 @@ enum Format {
         guard let count, count >= 0 else { return nil }
         let n = Double(count)
         switch n {
-        case 1_000_000_000...: return String(format: "%.1fB", n / 1_000_000_000)
-        case 1_000_000...:     return String(format: "%.1fM", n / 1_000_000)
-        case 1_000...:         return String(format: "%.1fK", n / 1_000)
+        case 1_000_000_000...: return abbreviated(n / 1_000_000_000, "B")
+        case 1_000_000...:     return abbreviated(n / 1_000_000, "M")
+        case 1_000...:         return abbreviated(n / 1_000, "K")
         default:               return "\(count)"
         }
+    }
+
+    /// YouTube-style: one decimal below 10 of a unit ("8.8K"), none above
+    /// ("38K"), never a trailing ".0".
+    private static func abbreviated(_ value: Double, _ unit: String) -> String {
+        let formatted = value < 10 ? String(format: "%.1f", value) : String(format: "%.0f", value)
+        let trimmed = formatted.hasSuffix(".0") ? String(formatted.dropLast(2)) : formatted
+        return trimmed + unit
     }
 
     /// 8807 -> "8.8K views", 1200000 -> "1.2M views".

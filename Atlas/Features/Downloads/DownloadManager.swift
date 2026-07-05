@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 import PipedKit
+import os
 
 /// Owns offline downloads: resolves a video's streams, fetches the media to disk,
 /// tracks in-flight progress, and records a `DownloadedVideo` on success.
@@ -18,8 +19,22 @@ final class DownloadManager {
     @ObservationIgnored private let modelContext: ModelContext
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
 
+    private static let log = Logger(subsystem: "sh.cmf.atlas", category: "downloads")
+
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
+        reconcileOrphanedFiles()
+    }
+
+    /// Launch-time sweep: no download can be in flight yet (the download session
+    /// is in-process), so leftover merge temps and final `.mp4`s without a
+    /// completed row are orphans from a crash or kill — delete them.
+    private func reconcileOrphanedFiles() {
+        let completed = Set(
+            ((try? modelContext.fetch(FetchDescriptor<DownloadedVideo>())) ?? []).map(\.fileName))
+        Task.detached(priority: .utility) {
+            DownloadStore.removeOrphanedFiles(completedFileNames: completed)
+        }
     }
 
     /// A download in progress (or one that failed and is awaiting retry/dismiss).
@@ -78,12 +93,19 @@ final class DownloadManager {
         }
     }
 
-    /// Cancels an in-flight download and clears its temporary files.
+    /// Cancels an in-flight download and clears its temporary files, including
+    /// a partially written final `.mp4` (progressive downloads write straight to
+    /// it). Only in-flight cancels touch the `.mp4` — once a download completes
+    /// its task is cleared, so a completed file is never deleted here.
     func cancel(_ videoID: String) {
+        let wasInFlight = tasks[videoID] != nil
         tasks[videoID]?.cancel()
         tasks[videoID] = nil
         active[videoID] = nil
         cleanupTemp(videoID)
+        if wasInFlight {
+            try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
+        }
     }
 
     /// Removes a completed download (file + poster + row) or cancels an in-flight one.
@@ -111,10 +133,13 @@ final class DownloadManager {
     private func perform(videoID: String, title: String, uploader: String?,
                          thumbnail: String?, app: AppModel) async {
         do {
-            NSLog("Atlas.download: ▶️ start \(videoID)")
+            Self.log.info("start \(videoID, privacy: .public)")
             let detail = try await app.resolveStream(videoID)
             try Task.checkCancellation()
 
+            // Fail up front, with a clear message, if downloads storage
+            // couldn't be created — never fall back to a transient location.
+            _ = try DownloadStore.preparedDirectory()
             let fileName = videoID + ".mp4"
             let output = DownloadStore.fileURL(fileName)
             var quality: String?
@@ -122,7 +147,7 @@ final class DownloadManager {
             if let source = detail.bestComposedSource(allowAV1: false) {
                 // Best path: high-quality H.264 video-only + AAC audio, merged locally.
                 quality = "\(source.height)p"
-                NSLog("Atlas.download: composing \(source.height)p (video-only + audio)")
+                Self.log.info("composing \(source.height)p (video-only + audio)")
                 // Keep mp4-family extensions: AVFoundation infers a file's
                 // container from its path extension, and a `.tmp` extension makes
                 // the merge fail to open the asset ("Cannot Open").
@@ -132,13 +157,13 @@ final class DownloadManager {
                                        videoDest: videoTmp, audioDest: audioTmp, videoID: videoID)
                 try Task.checkCancellation()
                 setState(videoID, .processing)
-                NSLog("Atlas.download: merging to mp4")
+                Self.log.info("merging to mp4")
                 try await DownloadStore.mergeToMP4(video: videoTmp, audio: audioTmp, output: output)
                 cleanupTemp(videoID)
             } else if let progressive = detail.bestProgressiveDownload {
                 // Fallback: a single muxed file needs no merge.
                 quality = progressive.height > 0 ? "\(progressive.height)p" : nil
-                NSLog("Atlas.download: progressive \(quality ?? "?") single-file")
+                Self.log.info("progressive \(quality ?? "?", privacy: .public) single-file")
                 setState(videoID, .downloading)
                 try await DownloadStore.download(progressive.url, to: output) { [weak self] fraction in
                     Task { @MainActor in self?.setFraction(videoID, fraction) }
@@ -151,6 +176,9 @@ final class DownloadManager {
             DownloadStore.excludeFromBackup(output)
             let thumbName = await saveThumbnail(thumbnail, videoID: videoID)
             let caption = await saveCaption(detail.preferredSubtitle(), videoID: videoID)
+            // A cancel during the (best-effort) sidecar saves above deletes the
+            // media file, so don't record a row pointing at nothing.
+            try Task.checkCancellation()
             let row = DownloadedVideo(
                 videoID: videoID, title: title, uploader: uploader,
                 fileName: fileName, thumbnailFileName: thumbName,
@@ -162,15 +190,16 @@ final class DownloadManager {
                 byteCount: DownloadStore.byteCount(of: output))
             modelContext.insert(row)
             SpotlightIndexer.index(download: row)
-            NSLog("Atlas.download: ✅ done \(videoID) — \(DownloadStore.byteCount(of: output)) bytes")
+            Self.log.info("done \(videoID, privacy: .public) — \(DownloadStore.byteCount(of: output)) bytes")
 
             active[videoID] = nil
             tasks[videoID] = nil
         } catch is CancellationError {
-            NSLog("Atlas.download: ⏹️ cancelled \(videoID)")
+            Self.log.info("cancelled \(videoID, privacy: .public)")
             cleanupTemp(videoID)
+            try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
         } catch {
-            NSLog("Atlas.download: ❌ failed \(videoID) — \(error.localizedDescription)")
+            Self.log.error("failed \(videoID, privacy: .public) — \(error.localizedDescription, privacy: .public)")
             cleanupTemp(videoID)
             try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
             active[videoID]?.state = .failed(error.localizedDescription)

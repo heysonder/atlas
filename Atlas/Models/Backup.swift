@@ -68,6 +68,25 @@ struct AtlasBackup: Codable {
     }
 }
 
+extension AtlasBackup.HistoryDTO {
+    private enum DTOKeys: String, CodingKey {
+        case videoID, title, uploader, thumbnailURL, watchedAt, positionSeconds, durationSeconds
+    }
+
+    /// v1 backups predate the resume-position fields (see `HistoryEntry`), so
+    /// they decode with defaults instead of failing the whole import.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DTOKeys.self)
+        self.init(videoID: try container.decode(String.self, forKey: .videoID),
+                  title: try container.decode(String.self, forKey: .title),
+                  uploader: try container.decodeIfPresent(String.self, forKey: .uploader),
+                  thumbnailURL: try container.decodeIfPresent(String.self, forKey: .thumbnailURL),
+                  watchedAt: try container.decode(Date.self, forKey: .watchedAt),
+                  positionSeconds: try container.decodeIfPresent(Double.self, forKey: .positionSeconds) ?? 0,
+                  durationSeconds: try container.decodeIfPresent(Double.self, forKey: .durationSeconds) ?? 0)
+    }
+}
+
 enum BackupStore {
     /// Write a JSON backup to a temp file and return its URL (for the share sheet).
     static func export(from context: ModelContext) throws -> URL {
@@ -178,7 +197,7 @@ enum BackupStore {
             summary.playlists += 1
         }
 
-        try? context.save()
+        try context.save()
         return summary
     }
 }

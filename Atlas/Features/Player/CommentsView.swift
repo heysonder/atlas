@@ -17,6 +17,12 @@ final class CommentsLoader {
     private(set) var commentCount = -1
     private(set) var didLoad = false
     private(set) var isLoading = false
+    /// The initial fetch failed — distinct from "loaded and empty", so the UI
+    /// can offer a retry instead of a permanent "No comments yet".
+    private(set) var loadFailed = false
+    /// Bumped on every completed page fetch, so pagination `.task(id:)` re-keys
+    /// even when a page adds no new comments but carries a fresh token.
+    private(set) var pageFetchCount = 0
 
     init(client: PipedClient, videoID: String) {
         self.client = client
@@ -33,8 +39,12 @@ final class CommentsLoader {
             nextpage = page.nextpage
             disabled = page.disabled ?? false
             commentCount = page.commentCount ?? -1
+            didLoad = true
+            loadFailed = false
+        } else {
+            loadFailed = true
         }
-        didLoad = true
+        pageFetchCount += 1
     }
 
     /// Appends the next page when one exists. On failure it stops paginating
@@ -50,6 +60,7 @@ final class CommentsLoader {
         } catch {
             nextpage = nil
         }
+        pageFetchCount += 1
     }
 }
 
@@ -90,6 +101,15 @@ struct CommentsView: View {
             LazyVStack(alignment: .leading, spacing: 18) {
                 if loader.disabled {
                     unavailable("Comments are turned off", "bubble.left.and.bubble.right")
+                } else if loader.loadFailed {
+                    VStack(spacing: 12) {
+                        unavailable("Couldn’t load comments", "wifi.exclamationmark")
+                        Button("Retry") {
+                            Task { await loader.loadInitial() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity)
                 } else if loader.comments.isEmpty && loader.didLoad {
                     unavailable("No comments yet", "bubble.left")
                 } else {
@@ -105,7 +125,10 @@ struct CommentsView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .task(id: loader.comments.count) { await loader.loadMore() }
+                            // Keyed on the fetch counter (not the comment
+                            // count): a page can return zero new comments with
+                            // a fresh token, which must still re-trigger.
+                            .task(id: loader.pageFetchCount) { await loader.loadMore() }
                     }
                 }
             }

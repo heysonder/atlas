@@ -16,6 +16,14 @@ struct PlayerInfoCommentsSection: View {
             if let loader {
                 if loader.disabled {
                     commentsNotice("Comments are turned off.")
+                } else if loader.loadFailed {
+                    HStack(spacing: 8) {
+                        commentsNotice("Couldn’t load comments.")
+                        Button("Retry") {
+                            Task { await loader.loadInitial() }
+                        }
+                        .font(.callout.weight(.semibold))
+                    }
                 } else if !loader.didLoad {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -102,7 +110,10 @@ struct PlayerInfoCommentsSection: View {
             ProgressView()
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .task(id: loader.comments.count) { await loader.loadMore() }
+                // Keyed on the fetch counter (not the comment count): a page
+                // can return zero new comments with a fresh token, which must
+                // still re-trigger.
+                .task(id: loader.pageFetchCount) { await loader.loadMore() }
         }
     }
 
