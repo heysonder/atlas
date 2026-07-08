@@ -1,8 +1,12 @@
 import AVFoundation
 import CoreMedia
 import PipedKit
+import VideoToolbox
 
 enum StreamPlaybackBuilder {
+    /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
+    static let deviceSupportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
+
     enum PlaybackSource: Equatable {
         case direct(URL)
         case composed(video: URL, audio: URL)
