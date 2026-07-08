@@ -107,6 +107,10 @@ final class AppModel {
     /// app clears it.
     var queuedVideos: [QueuedVideo] = []
 
+    var canAddToQueueAtEnd: Bool {
+        !queuedVideos.isEmpty
+    }
+
     /// Which player UI handles `nowPlaying`. Defaults to the native full-screen
     /// player so existing behavior is unchanged.
     var playerStyle: PlayerStyle {

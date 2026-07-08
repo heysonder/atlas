@@ -9,8 +9,10 @@ struct QueueMenuItems: View {
         Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
             app.playNext(request)
         }
-        Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
-            app.addToQueue(request)
+        if app.canAddToQueueAtEnd {
+            Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                app.addToQueue(request)
+            }
         }
     }
 }

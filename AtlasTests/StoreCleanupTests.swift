@@ -206,6 +206,40 @@ import PipedKit
 }
 
 @MainActor
+@Test func playlistStoreFindsOrCreatesFavoritesAndDedupesAdds() throws {
+    let container = try makeTestContainer()
+    let context = container.mainContext
+    let request = PlayRequest(videoID: "v1",
+                              title: "One",
+                              uploader: "Creator",
+                              thumbnail: "thumb")
+    let snapshot = PlaylistVideoSnapshot(request: request)
+
+    #expect(!PlaylistStore.isFavorite(videoID: "v1", in: context))
+    #expect(PlaylistStore.addToFavorites(snapshot, in: context) == .added)
+    #expect(PlaylistStore.addToFavorites(snapshot, in: context) == .duplicate)
+    #expect(PlaylistStore.isFavorite(videoID: "v1", in: context))
+
+    let favorites = try #require(PlaylistStore.playlist(named: "favorites", in: context))
+    #expect(favorites.name == PlaylistStore.favoritesPlaylistName)
+    #expect(favorites.videos.count == 1)
+    #expect(favorites.videos.first?.videoID == "v1")
+}
+
+@MainActor
+@Test func playlistStoreRemovesFavoritesByVideoID() throws {
+    let container = try makeTestContainer()
+    let context = container.mainContext
+    let snapshot = PlaylistVideoSnapshot(videoID: "v1", title: "One")
+
+    #expect(PlaylistStore.removeFromFavorites(videoID: "v1", in: context) == .missing)
+    #expect(PlaylistStore.addToFavorites(snapshot, in: context) == .added)
+    #expect(PlaylistStore.removeFromFavorites(videoID: "v1", in: context) == .removed)
+    #expect(!PlaylistStore.isFavorite(videoID: "v1", in: context))
+    #expect(PlaylistStore.removeFromFavorites(videoID: "v1", in: context) == .missing)
+}
+
+@MainActor
 @Test func playbackHistoryStoreIgnoresFinishedResumePositions() throws {
     let container = try makeTestContainer()
     let context = container.mainContext
