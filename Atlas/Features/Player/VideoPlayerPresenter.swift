@@ -2,7 +2,6 @@ import SwiftUI
 import SwiftData
 import AVKit
 import CoreMedia
-import VideoToolbox
 import PipedKit
 
 /// Presents the native fullscreen `AVPlayerViewController` directly (no SwiftUI
@@ -883,7 +882,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         }
 
         /// Whether this device has hardware AV1 decode (iPhone 15 Pro / A17 Pro+).
-        private static let supportsAV1: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
+        private static let supportsAV1: Bool = StreamPlaybackBuilder.deviceSupportsAV1
 
         /// If an upgraded source fails to actually play, swap to its configured fallback.
         private func observeForFailure(

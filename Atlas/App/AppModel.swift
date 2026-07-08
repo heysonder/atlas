@@ -256,6 +256,7 @@ final class AppModel {
     /// same-turn burst of callers (and the prefetch cap) sees it immediately.
     private func startResolution(_ videoID: String) throws -> Task<VideoDetail, Error> {
         let client = try self.client
+        warmAV1Manifest(videoID, client: client)
         let task = Task<VideoDetail, Error> { try await client.streams(videoID: videoID) }
         inflight[videoID] = task
         Task {
@@ -277,6 +278,45 @@ final class AppModel {
             streamCache.removeValue(forKey: oldest.key)
         }
         streamCache[videoID] = (detail, now)
+    }
+
+    // MARK: AV1 HLS manifest warming
+    //
+    // The instance builds an /hls/av1 master manifest with a full extraction on
+    // first request (5–20s measured) and serves repeats from a server-side
+    // cache in ~0.1s, but AVPlayer only fetches the manifest *after* /streams
+    // resolves — paying the two extractions back to back. Requesting the
+    // manifest alongside every /streams fetch runs them concurrently, so by
+    // the time the player asks for it (on tap after a prefetch, or a few
+    // seconds into a cold tap) the instance answers from its warm cache.
+
+    @ObservationIgnored private var manifestWarms: [URL: Date] = [:]
+    /// Re-warm after this long, in case the instance evicted its cached manifest.
+    private static let manifestWarmTTL: TimeInterval = 15 * 60
+
+    /// Fire-and-forget fetch of the AV1 HLS master manifest, deduped per URL so
+    /// repeated resolutions don't re-trigger server-side extractions. Optimistic:
+    /// it runs before /streams reveals whether the video has AV1 streams (the
+    /// endpoint now builds a manifest from whatever codecs exist, so the warm
+    /// work is useful whenever the player ends up on the HLS path).
+    private func warmAV1Manifest(_ videoID: String, client: PipedClient) {
+        guard StreamPlaybackBuilder.deviceSupportsAV1 else { return }
+        let url = client.av1HLSMasterURL(videoID: videoID)
+        let now = Date()
+        if let warmedAt = manifestWarms[url],
+           now.timeIntervalSince(warmedAt) < Self.manifestWarmTTL { return }
+        manifestWarms = manifestWarms.filter {
+            now.timeIntervalSince($0.value) < Self.manifestWarmTTL
+        }
+        manifestWarms[url] = now
+        Task.detached(priority: .utility) {
+            var request = URLRequest(url: url)
+            // A locally cached copy warms nothing — force the round trip.
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            // Cold extraction can take ~20s on tall videos; give it room.
+            request.timeoutInterval = 45
+            _ = try? await URLSession.shared.data(for: request)
+        }
     }
 
     // MARK: Row-driven resolution throttle

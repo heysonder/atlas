@@ -3,7 +3,6 @@ import SwiftData
 import Observation
 import AVKit
 import CoreMedia
-import VideoToolbox
 import PipedKit
 
 /// The "Embedded" player (opt-in via Settings): plays the video inline at the
@@ -354,7 +353,7 @@ final class EmbeddedPlayerModel {
     private var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
 
-    private static let supportsAV1 = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
+    private static let supportsAV1 = StreamPlaybackBuilder.deviceSupportsAV1
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
         self.request = request
