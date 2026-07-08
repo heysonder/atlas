@@ -18,6 +18,15 @@ enum StreamPlaybackBuilder {
         case composedOrDirect
     }
 
+    /// A composition that outranks the manifest currently playing but wasn't
+    /// assembled at startup (assembly loads remote tracks through the proxy,
+    /// which takes seconds). The player assembles it in the background and
+    /// swaps once it's ready.
+    struct ComposedUpgrade: Equatable {
+        let video: URL
+        let audio: URL
+    }
+
     struct PreparedPlayback {
         let item: AVPlayerItem
         let composed: Bool
@@ -25,6 +34,7 @@ enum StreamPlaybackBuilder {
         let failureFallback: FailureFallback
         let selectsPreferredAudio: Bool
         let stallFallbackDelay: TimeInterval
+        var composedUpgrade: ComposedUpgrade? = nil
     }
 
     static let defaultStallFallbackDelay: TimeInterval = 15
@@ -62,16 +72,17 @@ enum StreamPlaybackBuilder {
             preferredLanguages: preferredLanguages
         ) {
         case .direct(let url):
-            let usesAV1HLS = url == av1HLSURL
-            let usesHLS = usesAV1HLS || isHLSPlaylist(url)
-            return PreparedPlayback(
-                item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
-                composed: false,
-                sourceName: usesAV1HLS ? "direct-av1-hls" : (usesHLS ? "direct-hls" : "direct-initial"),
-                failureFallback: usesHLS ? .composedOrDirect : .none,
-                selectsPreferredAudio: !usesAV1HLS,
-                stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay)
+            return directPlayback(url: url, av1HLSURL: av1HLSURL)
         case .composed(let video, let audio):
+            // Assembly takes seconds, so when a manifest exists play it right
+            // away and hand the caller the pending composition to assemble in
+            // the background and swap in once ready.
+            if let manifestURL = av1HLSURL ?? playlistURL(from: detail) {
+                return directPlayback(
+                    url: manifestURL,
+                    av1HLSURL: av1HLSURL,
+                    composedUpgrade: ComposedUpgrade(video: video, audio: audio))
+            }
             guard let composed = await composedItem(
                 video: video, audio: audio, timeout: composedAssemblyTimeout) else {
                 NSLog("Atlas.player: composed startup assembly failed; falling back to direct")
@@ -87,6 +98,42 @@ enum StreamPlaybackBuilder {
         case nil:
             return nil
         }
+    }
+
+    private static func directPlayback(
+        url: URL,
+        av1HLSURL: URL?,
+        composedUpgrade: ComposedUpgrade? = nil
+    ) -> PreparedPlayback {
+        let usesAV1HLS = url == av1HLSURL
+        let usesHLS = usesAV1HLS || isHLSPlaylist(url)
+        return PreparedPlayback(
+            item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
+            composed: false,
+            sourceName: usesAV1HLS ? "direct-av1-hls" : (usesHLS ? "direct-hls" : "direct-initial"),
+            failureFallback: usesHLS ? .composedOrDirect : .none,
+            selectsPreferredAudio: !usesAV1HLS,
+            stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay,
+            composedUpgrade: composedUpgrade)
+    }
+
+    /// Assembles the composition promised by `PreparedPlayback.composedUpgrade`.
+    /// Nil when assembly fails or times out — the interim manifest keeps playing.
+    static func makeComposedUpgradePlayback(
+        _ upgrade: ComposedUpgrade
+    ) async -> PreparedPlayback? {
+        guard let item = await composedItem(
+            video: upgrade.video, audio: upgrade.audio, timeout: composedAssemblyTimeout) else {
+            NSLog("Atlas.player: composed upgrade assembly failed; keeping manifest playback")
+            return nil
+        }
+        return PreparedPlayback(
+            item: item,
+            composed: true,
+            sourceName: "composed-upgrade",
+            failureFallback: .direct,
+            selectsPreferredAudio: true,
+            stallFallbackDelay: defaultStallFallbackDelay)
     }
 
     static func preferredSource(

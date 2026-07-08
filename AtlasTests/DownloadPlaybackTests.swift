@@ -38,6 +38,41 @@ import Testing
     #expect(source == .composed(video: video, audio: audio))
 }
 
+@Test func qualityTieStartsOnHLSMasterWhileComposedAssembles() async throws {
+    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
+
+    let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
+        detail,
+        allowAV1: false,
+        preferredLanguages: ["en-US"]))
+
+    // The composition wins the quality tie but takes seconds to assemble, so
+    // playback starts on the master and carries the pending upgrade.
+    #expect(!playback.composed)
+    #expect(playback.sourceName == "direct-hls")
+    #expect(playback.failureFallback == .composedOrDirect)
+    #expect(playback.composedUpgrade == StreamPlaybackBuilder.ComposedUpgrade(
+        video: URL(string: "https://example.com/1080.mp4")!,
+        audio: URL(string: "https://example.com/audio.m4a")!))
+}
+
+@Test func sharperComposedStartsOnAV1HLSWhileAssembling() async throws {
+    let av1HLS = URL(string: "https://piped.example/hls/av1/WOzcFkld6_g/master.m3u8")!
+    // The AV1 master tops out at 720p, so the 1080p composition outranks it —
+    // but the AV1 master still plays in the interim.
+    let detail = streamPlaybackDetail(
+        av1StreamURL: "https://example.com/720-av1.mp4", av1StreamHeight: 720)
+
+    let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
+        detail,
+        allowAV1: false,
+        av1HLSURL: av1HLS,
+        preferredLanguages: ["en-US"]))
+
+    #expect(playback.sourceName == "direct-av1-hls")
+    #expect(playback.composedUpgrade != nil)
+}
+
 @Test func regularHLSWinsWhenLadderReachesHigherThanComposed() throws {
     let hls = URL(string: "https://example.com/master.m3u8")!
     // A 1440p VP9 rung raises the ladder's ceiling above the 1080p H.264
@@ -185,6 +220,7 @@ import Testing
     #expect(playback.failureFallback == .composedOrDirect)
     #expect(playback.selectsPreferredAudio)
     #expect(playback.stallFallbackDelay == StreamPlaybackBuilder.defaultStallFallbackDelay)
+    #expect(playback.composedUpgrade == nil)
 }
 
 @Test func detectsAV1HLSMasterManifest() {

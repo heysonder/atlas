@@ -47,6 +47,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         private var itemDiagnosticObservers: [NSObjectProtocol] = []
         private var statusObservation: NSKeyValueObservation?
         private var fallbackCheckTask: Task<Void, Never>?
+        private var upgradeTask: Task<Void, Never>?
         private var activePlaybackSource = "unknown"
         private var fallbackInProgress = false
         private var currentRequest: PlayRequest?
@@ -207,6 +208,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                         player: player,
                         fallback: playback.failureFallback,
                         delay: playback.stallFallbackDelay)
+                }
+                if let upgrade = playback.composedUpgrade {
+                    scheduleComposedUpgrade(
+                        upgrade, from: initialItem, detail: detail, player: player)
                 }
                 installProgressTracking(on: player)
                 loadSponsorSegments(for: request, player: player, controller: controller)
@@ -429,6 +434,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             loadTask = nil
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
+            upgradeTask?.cancel()
+            upgradeTask = nil
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
             if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
@@ -608,6 +615,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             loadTask = nil
             fallbackCheckTask?.cancel()
             fallbackCheckTask = nil
+            upgradeTask?.cancel()
+            upgradeTask = nil
             if let player {
                 let t = player.currentTime().seconds
                 if t.isFinite { savePosition(t) }
@@ -950,6 +959,10 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             // signal (status + failed-to-play often arrive together) can't
             // start a competing swap.
             fallbackInProgress = true
+            // The item being replaced is the one a pending upgrade targets;
+            // its swap guards would reject it anyway.
+            upgradeTask?.cancel()
+            upgradeTask = nil
             let detail = await refreshedDetailForFallback(detail, failedItem: item)
             let fallbackPlayback: StreamPlaybackBuilder.PreparedPlayback?
             switch fallback {
@@ -1000,6 +1013,73 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             debugModel.configure(detail: detail, composed: fallbackPlayback.composed, allowAV1: Self.supportsAV1)
             await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
             // `defaultRate` carries the user's selected playback speed.
+            if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
+        }
+
+        /// Startup picked a composition that outranks the playing manifest but
+        /// wasn't assembled yet. Assemble it off the hot path and swap once
+        /// ready — unless playback moved on (new item, or a runtime fallback
+        /// claimed the player first).
+        private func scheduleComposedUpgrade(
+            _ upgrade: StreamPlaybackBuilder.ComposedUpgrade,
+            from item: AVPlayerItem,
+            detail: VideoDetail,
+            player: AVPlayer
+        ) {
+            upgradeTask?.cancel()
+            upgradeTask = Task { [weak self, weak item, weak player] in
+                let playback = await StreamPlaybackBuilder.makeComposedUpgradePlayback(upgrade)
+                guard !Task.isCancelled, let self, let playback, let item, let player else { return }
+                await self.upgradeToComposed(playback, from: item, detail: detail, player: player)
+            }
+        }
+
+        private func upgradeToComposed(
+            _ playback: StreamPlaybackBuilder.PreparedPlayback,
+            from item: AVPlayerItem,
+            detail: VideoDetail,
+            player: AVPlayer
+        ) async {
+            guard !fallbackInProgress,
+                  self.player === player,
+                  player.currentItem === item else { return }
+            // Claim the swap like a fallback would, so a failure signal on the
+            // old item can't start a competing one mid-upgrade.
+            fallbackInProgress = true
+            fallbackCheckTask?.cancel()
+            fallbackCheckTask = nil
+            statusObservation?.invalidate()
+            statusObservation = nil
+            let resume = player.currentTime()
+            let wasPlaying = player.timeControlStatus != .paused
+            NSLog("Atlas.player: composed upgrade videoID=\(currentRequest?.videoID ?? "unknown") from=\(activePlaybackSource)")
+            let upgradeItem = playback.item
+            upgradeItem.externalMetadata = item.externalMetadata
+            if playback.selectsPreferredAudio {
+                await PlayerAudioSelection.selectPreferredAudio(for: upgradeItem)
+                // Whoever replaced the item meanwhile also reset the fallback
+                // state — leave it alone.
+                guard self.player === player, player.currentItem === item else { return }
+            }
+            player.replaceCurrentItem(with: upgradeItem)
+            PlayerCaptionSelection.keepOffByDefault(for: upgradeItem)
+            installEndObserver(for: upgradeItem)
+            installItemDiagnostics(
+                for: upgradeItem,
+                videoID: currentRequest?.videoID ?? "unknown",
+                source: playback.sourceName)
+            debugModel.configure(detail: detail, composed: true, allowAV1: Self.supportsAV1)
+            // The composition can still fail at runtime; keep the direct
+            // fallback armed (this also re-opens `fallbackInProgress`).
+            if playback.failureFallback != .none {
+                observeForFailure(
+                    upgradeItem,
+                    detail: detail,
+                    player: player,
+                    fallback: playback.failureFallback,
+                    stallFallbackDelay: playback.stallFallbackDelay)
+            }
+            await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
             if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
         }
 
