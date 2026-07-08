@@ -23,9 +23,26 @@ import Testing
     #expect(request.thumbnail == download.thumbnailURL?.absoluteString)
 }
 
-@Test func streamPlaybackPrefersRegularHLSOverComposed() throws {
+@Test func composedOvertakesRegularHLSOnQualityTie() throws {
+    let video = URL(string: "https://example.com/1080.mp4")!
+    let audio = URL(string: "https://example.com/audio.m4a")!
+    // The ladder tops out at the same 1080p as the composed pair, so the
+    // guaranteed-top-rung composition wins the tie.
+    let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
+
+    let source = try #require(StreamPlaybackBuilder.preferredSource(
+        detail,
+        allowAV1: false,
+        preferredLanguages: ["en-US"]))
+
+    #expect(source == .composed(video: video, audio: audio))
+}
+
+@Test func regularHLSWinsWhenLadderReachesHigherThanComposed() throws {
     let hls = URL(string: "https://example.com/master.m3u8")!
-    let detail = streamPlaybackDetail(hls: hls.absoluteString)
+    // A 1440p VP9 rung raises the ladder's ceiling above the 1080p H.264
+    // composition (VP9 isn't compose-able on iOS), so ABR keeps priority.
+    let detail = streamPlaybackDetail(hls: hls.absoluteString, vp9StreamHeight: 1440)
 
     let source = try #require(StreamPlaybackBuilder.preferredSource(
         detail,
@@ -141,26 +158,22 @@ import Testing
     #expect(source == .direct(av1HLS))
 }
 
-@Test func regularHLSWinsWhetherOrNotComposedExists() throws {
+@Test func regularHLSWinsWhenNoComposedPairExists() throws {
     let hls = URL(string: "https://example.com/master.m3u8")!
 
-    let withComposed = try #require(StreamPlaybackBuilder.preferredSource(
-        streamPlaybackDetail(hls: hls.absoluteString),
-        allowAV1: true,
-        allowProgressiveFallback: false,
-        preferredLanguages: ["en-US"]))
-    let withoutComposed = try #require(StreamPlaybackBuilder.preferredSource(
+    let source = try #require(StreamPlaybackBuilder.preferredSource(
         streamPlaybackDetail(hls: hls.absoluteString, includeComposedStreams: false),
         allowAV1: true,
         allowProgressiveFallback: false,
         preferredLanguages: ["en-US"]))
 
-    #expect(withComposed == .direct(hls))
-    #expect(withoutComposed == .direct(hls))
+    #expect(source == .direct(hls))
 }
 
 @Test func regularHLSPlaybackKeepsComposedFailureFallback() async throws {
-    let detail = streamPlaybackDetail()
+    // The taller VP9 rung keeps the master ahead of the composition so this
+    // exercises the direct-hls startup path.
+    let detail = streamPlaybackDetail(vp9StreamHeight: 1440)
 
     let playback = try #require(await StreamPlaybackBuilder.makePlayerItem(
         detail,
@@ -235,7 +248,8 @@ private func streamPlaybackDetail(
     audioURL: String = "https://example.com/audio.m4a",
     av1StreamURL: String? = nil,
     av1StreamHeight: Int? = 2160,
-    progressiveURL: String? = nil
+    progressiveURL: String? = nil,
+    vp9StreamHeight: Int? = nil
 ) -> VideoDetail {
     var videoStreams: [PipedKit.Stream] = []
     if includeComposedStreams {
@@ -249,6 +263,19 @@ private func streamPlaybackDetail(
             bitrate: nil,
             width: 1920,
             height: 1080,
+            fps: 30))
+    }
+    if let vp9StreamHeight {
+        videoStreams.append(Stream(
+            url: "https://example.com/\(vp9StreamHeight)-vp9.webm",
+            format: "WEBM",
+            quality: "\(vp9StreamHeight)p",
+            mimeType: "video/webm",
+            codec: "vp9",
+            videoOnly: true,
+            bitrate: nil,
+            width: vp9StreamHeight * 16 / 9,
+            height: vp9StreamHeight,
             fps: 30))
     }
     if let av1StreamURL {
