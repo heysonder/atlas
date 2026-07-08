@@ -9,6 +9,10 @@ struct PlayerInfoCommentsSection: View {
     @Binding var timestampPreviewIndex: TimestampCommentPreviewIndex
     let onTimestampTap: (Int) -> Void
 
+    /// Inline mode presents the full list as a sheet over the still-playing
+    /// video (the Info sheet pushes instead — it already lives in a sheet).
+    @State private var showingAllComments = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             commentsHeader
@@ -33,8 +37,6 @@ struct PlayerInfoCommentsSection: View {
                     }
                 } else if loader.comments.isEmpty {
                     commentsNotice("No comments yet.")
-                } else if inline {
-                    inlineComments(loader)
                 } else {
                     ForEach(previewComments(loader)) { comment in
                         CommentRow(
@@ -43,8 +45,24 @@ struct PlayerInfoCommentsSection: View {
                             videoID: videoID,
                             onTimestampTap: onTimestampTap)
                     }
-                    viewAllCommentsLink(loader)
+                    if inline {
+                        allCommentsSheetButton
+                    } else {
+                        viewAllCommentsLink(loader)
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $showingAllComments) {
+            if let loader {
+                NavigationStack {
+                    CommentsView(loader: loader, onTimestampTap: onTimestampTap)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                // Medium keeps the video visible and interactive above the
+                // sheet, so comments read alongside playback.
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
         }
     }
@@ -95,26 +113,22 @@ struct PlayerInfoCommentsSection: View {
         return timestampPreviewIndex.activeComment(at: Int(currentPlaybackSeconds.rounded(.down)))
     }
 
-    /// All comments, expanded in place and paginated as the user scrolls — used
-    /// in the embedded player so comments never push to a separate page.
-    @ViewBuilder private func inlineComments(_ loader: CommentsLoader) -> some View {
-        ForEach(loader.comments) { comment in
-            CommentRow(
-                comment: comment,
-                client: loader.client,
-                videoID: videoID,
-                onTimestampTap: onTimestampTap)
-            Divider()
+    private var allCommentsSheetButton: some View {
+        Button {
+            showingAllComments = true
+        } label: {
+            HStack {
+                Text("View all comments")
+                Spacer()
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.semibold))
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.tint)
+            .padding(.top, 2)
+            .contentShape(Rectangle())
         }
-        if loader.nextpage != nil {
-            ProgressView()
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                // Keyed on the fetch counter (not the comment count): a page
-                // can return zero new comments with a fresh token, which must
-                // still re-trigger.
-                .task(id: loader.pageFetchCount) { await loader.loadMore() }
-        }
+        .buttonStyle(.plain)
     }
 
     private func viewAllCommentsLink(_ loader: CommentsLoader) -> some View {

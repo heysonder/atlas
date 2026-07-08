@@ -37,10 +37,9 @@ struct PlayerInfoContent: View {
     let videoID: String
     let currentPlaybackSeconds: Double?
     let onTimestampTap: (Int) -> Void
-    /// Inline layout for the embedded player: comments expanded in place (no
-    /// navigation push). Feedback uses the same circular channel-row buttons in
-    /// both the embedded player and Info sheet.
-    /// Defaults off, so the Info sheet keeps its compact comments preview.
+    /// Inline layout for the embedded player: comments expand in place behind
+    /// a collapsed preview (no navigation push). Defaults off, so the Info
+    /// sheet keeps its compact comments preview + "View all" push.
     var inline: Bool = false
 
     @State private var loader: CommentsLoader?
@@ -125,6 +124,13 @@ struct PlayerInfoContent: View {
 
             descriptionBlock
 
+            if !visibleChapters.isEmpty {
+                Divider()
+                chaptersSection
+            }
+
+            Divider()
+
             PlayerInfoCommentsSection(
                 loader: loader,
                 videoID: videoID,
@@ -132,11 +138,6 @@ struct PlayerInfoContent: View {
                 inline: inline,
                 timestampPreviewIndex: $timestampPreviewIndex,
                 onTimestampTap: onTimestampTap)
-
-            if !visibleChapters.isEmpty {
-                Divider()
-                chaptersSection
-            }
 
             if !app.queuedVideos.isEmpty {
                 Divider()
@@ -189,11 +190,7 @@ struct PlayerInfoContent: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 8) {
-                if inline && showFeedback {
-                    feedbackButton(more: true)
-                    feedbackButton(more: false)
-                }
-                if !inline { videoActionsMenu }
+                videoActionsMenu
                 if canSubscribe { subscribeButton }
             }
         }
@@ -208,27 +205,6 @@ struct PlayerInfoContent: View {
         if !channels.isEmpty {
             fallbackCollaborators = channels
         }
-    }
-
-    /// Circular thumbs-up / thumbs-down matching the subscribe button, used in
-    /// the embedded player's channel row. Tapping the active one clears it.
-    private func feedbackButton(more: Bool) -> some View {
-        let active = more ? feedback > 0 : feedback < 0
-        return Button {
-            let target = more ? 1 : -1
-            feedback = (feedback == target) ? 0 : target
-            onFeedback(feedback)
-        } label: {
-            Image(systemName: more ? (active ? "hand.thumbsup.fill" : "hand.thumbsup")
-                                   : (active ? "hand.thumbsdown.fill" : "hand.thumbsdown"))
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(active ? Color.accentColor : .primary)
-                .frame(width: 44, height: 44)
-                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
-        .accessibilityLabel(more ? "Suggest more" : "Suggest less")
     }
 
     private var subscribeButton: some View {
