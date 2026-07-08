@@ -188,16 +188,10 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
 
 /// An inline `AVPlayerViewController` that adds a custom **close (✕)** control to
 /// the native transport row — sitting beside PiP / AirPlay / full-screen and
-/// auto-hiding with the controls.
-///
-/// iOS exposes no public API for this (custom transport-bar items are tvOS-only,
-/// which is why the full-screen player's "Info" button is a floating overlay
-/// instead). So we reach into the controls' *private* view hierarchy: on each
-/// layout pass we locate the busiest horizontal control row and append our
-/// button if it isn't already attached. Everything is guarded — if a future iOS
-/// reorganises the hierarchy and the row can't be found, we simply add nothing
-/// (no crash; the player just lacks the extra button). Scoped to the embedded
-/// player only; the full-screen `VideoPlayerPresenter` is deliberately untouched.
+/// auto-hiding with the controls — via the shared `TransportBarButtonInstaller`
+/// (see that type for how the private hierarchy is matched and guarded). No
+/// fallback here: if the row can't be found the player just lacks the extra
+/// button, and the SwiftUI navigation bar's ✕ still closes the page.
 final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControllerDelegate {
     var onClose: (() -> Void)?
     /// Reports PiP start/stop so the embedded model can defer teardown while
@@ -205,7 +199,7 @@ final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControll
     /// PiP, so the callback (and the model it captures) survives the SwiftUI
     /// cover being dismissed.
     var onPiPActiveChanged: ((Bool) -> Void)?
-    private weak var closeButton: UIButton?
+    private let closeButtonInstaller = TransportBarButtonInstaller()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -222,85 +216,14 @@ final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControll
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        ensureCloseButton()
-    }
-
-    private func ensureCloseButton() {
         guard onClose != nil else { return }
-        // Still attached from an earlier pass — leave it be.
-        if let closeButton, closeButton.superview != nil { return }
-
-        let buttons = Self.allButtons(in: view)
-        guard !buttons.isEmpty else { return }   // controls not built yet (or out-of-process)
-
-        // Strategy 1: append to the horizontal stack holding the most buttons.
-        if let row = Self.bestControlRow(in: view) {
-            let button = makeCloseButton()
-            row.addArrangedSubview(button)
-            closeButton = button
-            return
+        closeButtonInstaller.ensureInstalled(in: view) {
+            TransportBarButtonInstaller.makeControlButton(
+                systemImage: "xmark",
+                accessibilityLabel: "Close"
+            ) { [weak self] in self?.onClose?() }
         }
-
-        // Strategy 2 (no stack): sit beside the bottom-most control button, in its superview.
-        guard let anchor = buttons.max(by: {
-            let a = $0.convert($0.bounds, to: view), b = $1.convert($1.bounds, to: view)
-            return (a.maxY, a.maxX) < (b.maxY, b.maxX)
-        }), let bar = anchor.superview else { return }
-        let button = makeCloseButton()
-        button.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.centerYAnchor.constraint(equalTo: anchor.centerYAnchor),
-            button.leadingAnchor.constraint(equalTo: anchor.trailingAnchor, constant: 16)
-        ])
-        closeButton = button
     }
-
-    private func makeCloseButton() -> UIButton {
-        let button = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        button.setImage(UIImage(systemName: "xmark", withConfiguration: config), for: .normal)
-        button.tintColor = .white
-        button.accessibilityLabel = "Close"
-        button.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
-        return button
-    }
-
-    private static func allButtons(in root: UIView) -> [UIButton] {
-        var found: [UIButton] = []
-        func walk(_ v: UIView) {
-            if let b = v as? UIButton { found.append(b) }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return found
-    }
-
-    /// The most likely transport-control row: the horizontal `UIStackView` with
-    /// the most buttons, breaking ties toward the lowest one on screen (the
-    /// bottom bar, where PiP / AirPlay / full-screen live).
-    private static func bestControlRow(in root: UIView) -> UIStackView? {
-        var best: UIStackView?
-        var bestButtons = 0
-        var bestY: CGFloat = 0
-        func walk(_ v: UIView) {
-            if let stack = v as? UIStackView, stack.axis == .horizontal {
-                let buttons = stack.arrangedSubviews.reduce(into: 0) { count, sub in
-                    if sub is UIButton { count += 1 }
-                }
-                if buttons > 0 {
-                    let y = stack.convert(stack.bounds, to: root).maxY
-                    if buttons > bestButtons || (buttons == bestButtons && y > bestY) {
-                        best = stack; bestButtons = buttons; bestY = y
-                    }
-                }
-            }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return best
-    }
-
 }
 
 /// Owns the `AVPlayer` for the embedded player and mirrors the full-screen

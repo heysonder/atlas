@@ -114,7 +114,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             player.appliesMediaSelectionCriteriaAutomatically = false
             // Keep buffering/stall behavior at AVPlayer defaults
             // (automaticallyWaitsToMinimizeStalling defaults to true).
-            let controller = AVPlayerViewController()
+            let controller = FullscreenPlayerController()
             controller.player = player
             controller.delegate = self
             controller.allowsPictureInPicturePlayback = true
@@ -187,7 +187,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 currentDetail = detail
                 currentDetailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
                 installDebugOverlay(on: controller)
-                installInfoButton(on: controller)
+                installInfoControl(on: controller)
                 // Resume from a saved position (ignore if we're at/near the end).
                 if let resume = savedPosition(for: request.videoID),
                    resume >= PlaybackHistoryStore.minWatchSeconds {
@@ -713,12 +713,36 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             overlay.bringSubviewToFront(host.view)
         }
 
-        /// iOS's `AVPlayerViewController` has no public API to add transport-bar
-        /// buttons (those are tvOS-only), so we layer a small Liquid Glass "Info"
-        /// button into the sanctioned `contentOverlayView`. The host view is
-        /// pinned to the top-trailing corner and sized to the button itself, so
-        /// it only ever receives touches inside that small area — it can't
-        /// intercept taps elsewhere (notably the tab-bar region at the bottom).
+        /// Wires the Info action into the native transport row (see
+        /// `FullscreenPlayerController`), where the button hides and shows with
+        /// the rest of the controls. Only if that private-hierarchy match fails
+        /// does the floating overlay pill get installed instead. Called on
+        /// every load (queue advancement reuses the controller); re-wiring the
+        /// closures is idempotent, and `installInfoButton` re-creates the
+        /// overlay that `resetForItemReplacement` removed when the fallback is
+        /// already active.
+        private func installInfoControl(on controller: AVPlayerViewController) {
+            observePlaybackForInfoButton(on: controller.player)
+            guard let controller = controller as? FullscreenPlayerController else {
+                installInfoButton(on: controller)
+                return
+            }
+            controller.onInfoTap = { [weak self] in self?.presentInfo() }
+            controller.onInfoButtonUnavailable = { [weak self, weak controller] in
+                guard let self, let controller, self.playerVC === controller else { return }
+                self.installInfoButton(on: controller)
+            }
+            if controller.infoButtonUnavailable {
+                installInfoButton(on: controller)
+            }
+        }
+
+        /// Fallback when the native transport row can't be found: a small
+        /// Liquid Glass "Info" button layered into the sanctioned
+        /// `contentOverlayView`. The host view is pinned to the top-trailing
+        /// corner and sized to the button itself, so it only ever receives
+        /// touches inside that small area — it can't intercept taps elsewhere
+        /// (notably the tab-bar region at the bottom).
         private func installInfoButton(on controller: AVPlayerViewController) {
             guard infoButtonHost == nil, let overlay = controller.contentOverlayView else { return }
 
@@ -736,12 +760,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     equalTo: overlay.safeAreaLayoutGuide.trailingAnchor, constant: -12)
             ])
             infoButtonHost = host
-            observePlaybackForInfoButton(on: controller.player)
         }
 
-        /// Collapses the Info button to its glyph while playing and expands it to
-        /// the labeled pill whenever the video is paused (i.e. the transport
-        /// controls are likely on screen), driven off the player's transport state.
+        /// Collapses the fallback Info pill to its glyph while playing and
+        /// expands it to the labeled pill whenever the video is paused (i.e. the
+        /// transport controls are likely on screen), driven off the player's
+        /// transport state. Also feeds the timeControl diagnostics log, so it
+        /// runs even when the native-row Info button is in use.
         private func observePlaybackForInfoButton(on player: AVPlayer?) {
             timeControlObservation?.invalidate()
             guard let player else { return }

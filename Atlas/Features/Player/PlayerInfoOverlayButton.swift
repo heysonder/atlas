@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Drives the in-player "Info" button. While the video plays the button shows
-/// just the ⓘ glyph; when the coordinator sets `isPaused` it expands to reveal
-/// the "Info" label, matching the more discoverable controls-visible state.
+/// Drives the *fallback* in-player "Info" button, used only when the native
+/// transport-row Info control couldn't be installed (see
+/// `FullscreenPlayerController`). While the video plays the button shows just
+/// the ⓘ glyph; when the coordinator sets `isPaused` it expands to reveal the
+/// "Info" label, matching the more discoverable controls-visible state.
 @MainActor
 @Observable
 final class InfoButtonModel {

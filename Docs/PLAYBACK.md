@@ -30,7 +30,7 @@ The fullscreen player:
 - Allows AirPlay.
 - Lets AVKit own Now Playing state.
 - Keeps the player attached for background audio.
-- Adds an Info overlay button.
+- Adds an Info button to the native transport controls (falls back to a floating overlay pill if the private controls hierarchy can't be matched).
 - Adds an optional Stats for Nerds overlay.
 - Adds a SponsorBlock skip overlay when enabled segments are active.
 
@@ -162,7 +162,7 @@ Actions:
 
 ## Info sheet and comments
 
-The fullscreen player installs an Info button over the player. The button presents `PlayerInfoSheet`, which wraps `PlayerInfoContent`.
+The fullscreen player places an Info button in the native transport-control row (shared `TransportBarButtonInstaller`; the floating overlay pill remains as an automatic fallback). The button presents `PlayerInfoSheet`, which wraps `PlayerInfoContent`.
 
 Player info includes:
 

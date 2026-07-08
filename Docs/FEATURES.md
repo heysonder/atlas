@@ -74,7 +74,7 @@ Both player styles support:
 - Runtime fallback when a selected stream fails.
 - Optional Stats for Nerds diagnostics.
 
-The fullscreen player adds an Info button over the video. The Info sheet shows title, creator row, subscribe, playlist actions, feedback where applicable, description, comments, chapters, and queue.
+The fullscreen player adds an Info button to the transport controls. The Info sheet shows title, creator row, subscribe, playlist actions, feedback where applicable, description, comments, chapters, and queue.
 
 The embedded player shows the same info content below the inline player. Comments are expanded in place rather than pushed to a separate comments page.
 
