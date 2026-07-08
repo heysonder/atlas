@@ -39,17 +39,26 @@ struct SearchView: View {
         .searchable(text: $query, placement: .automatic, prompt: "Search YouTube")
         .searchFocused($searchFocused)
         .searchSuggestions {
-            ForEach(historySuggestions) { entry in
-                Button { selectSearchHistory(entry) } label: {
-                    Label(entry.displayTitle, systemImage: "clock.arrow.circlepath")
+            // Only while the field is focused. The system keeps the suggestion
+            // list over the content whenever this builder is non-empty and
+            // search is active — and recording a successful search into history
+            // makes `historySuggestions` match the just-submitted query, which
+            // re-presented the list on top of the results (feeling like the
+            // search never ran). Gating on focus guarantees results are visible
+            // the moment the keyboard drops.
+            if searchFocused {
+                ForEach(historySuggestions) { entry in
+                    Button { selectSearchHistory(entry) } label: {
+                        Label(entry.displayTitle, systemImage: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
-            ForEach(remoteSuggestions, id: \.self) { suggestion in
-                Button { selectSuggestion(suggestion) } label: {
-                    Label(suggestion, systemImage: "magnifyingglass")
+                ForEach(remoteSuggestions, id: \.self) { suggestion in
+                    Button { selectSuggestion(suggestion) } label: {
+                        Label(suggestion, systemImage: "magnifyingglass")
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .onChange(of: query) { _, newValue in
@@ -76,14 +85,13 @@ struct SearchView: View {
         Task { await runSearch() }
     }
 
-    /// Re-tapping the search tab while already here: clear any existing query
-    /// and pop the keyboard so the user can start typing immediately.
+    /// Re-tapping the search tab while already here: pop the keyboard so the
+    /// user can start typing immediately. Deliberately NON-destructive — on the
+    /// iOS 26 search tab this token bumps for ordinary taps on the tab-bar
+    /// search field (TabView re-writes `.search` to the selection binding), so
+    /// clearing the query/results here nuked in-progress searches and forced
+    /// the user to retype them. The field's clear button covers "start over".
     private func focusForFreshSearch() {
-        suggestTask?.cancel()
-        suggestions = []
-        query = ""
-        phase = .idle
-        nextpage = nil
         searchFocused = true
     }
 
