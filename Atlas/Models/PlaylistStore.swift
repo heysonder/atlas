@@ -46,9 +46,16 @@ struct PlaylistVideoSnapshot: Equatable {
 
 @MainActor
 enum PlaylistStore {
+    static let favoritesPlaylistName = "Favorites"
+
     enum AddResult: Equatable {
         case added
         case duplicate
+        case missing
+    }
+
+    enum RemoveResult: Equatable {
+        case removed
         case missing
     }
 
@@ -77,6 +84,21 @@ enum PlaylistStore {
     }
 
     @discardableResult
+    static func removeVideoID(_ videoID: String, from playlist: Playlist,
+                              in context: ModelContext, save: Bool = false) -> RemoveResult {
+        let videos = playlist.videos.filter { $0.videoID == videoID }
+        guard !videos.isEmpty else {
+            return .missing
+        }
+        playlist.videos.removeAll { $0.videoID == videoID }
+        for video in videos {
+            context.delete(video)
+        }
+        if save { try? context.save() }
+        return .removed
+    }
+
+    @discardableResult
     static func createPlaylist(named rawName: String, in context: ModelContext) -> Playlist? {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
@@ -95,5 +117,36 @@ enum PlaylistStore {
         return playlists.first {
             $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
         }
+    }
+
+    static func favoritesPlaylist(in context: ModelContext, createIfNeeded: Bool = false) -> Playlist? {
+        if let playlist = playlist(named: favoritesPlaylistName, in: context) {
+            return playlist
+        }
+        guard createIfNeeded else { return nil }
+        return createPlaylist(named: favoritesPlaylistName, in: context)
+    }
+
+    static func isFavorite(videoID: String, in context: ModelContext) -> Bool {
+        guard let playlist = favoritesPlaylist(in: context) else { return false }
+        return containsVideoID(videoID, in: playlist)
+    }
+
+    @discardableResult
+    static func addToFavorites(_ snapshot: PlaylistVideoSnapshot,
+                               in context: ModelContext,
+                               save: Bool = false) -> AddResult {
+        guard let playlist = favoritesPlaylist(in: context, createIfNeeded: true) else {
+            return .missing
+        }
+        return add(snapshot, to: playlist, in: context, save: save)
+    }
+
+    @discardableResult
+    static func removeFromFavorites(videoID: String,
+                                    in context: ModelContext,
+                                    save: Bool = false) -> RemoveResult {
+        guard let playlist = favoritesPlaylist(in: context) else { return .missing }
+        return removeVideoID(videoID, from: playlist, in: context, save: save)
     }
 }
