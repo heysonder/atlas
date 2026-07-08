@@ -113,7 +113,9 @@ struct RootView: View {
     }
 
     /// Wraps the tab selection so re-tapping the search tab while already on the
-    /// search page bumps a token SearchView listens to (clear field + refocus).
+    /// search page bumps a token SearchView listens to (refocus the field).
+    /// Note: on the iOS 26 search tab this fires for ordinary taps on the
+    /// tab-bar search field too, so the handler must stay non-destructive.
     private var searchAwareSelection: Binding<AppModel.TabSelection> {
         Binding {
             app.selectedTab

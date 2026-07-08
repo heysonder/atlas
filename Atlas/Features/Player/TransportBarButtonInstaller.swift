@@ -2,52 +2,21 @@ import AVKit
 import UIKit
 
 /// Attaches a custom button to `AVPlayerViewController`'s native transport
-/// controls so it sits beside PiP / AirPlay / full-screen and auto-hides with
-/// them.
+/// controls so it sits beside the system controls and auto-hides with them.
 ///
 /// iOS exposes no public API for this (custom transport-bar items are
 /// tvOS-only, still true as of the iOS 27 SDK), so this reaches into the
-/// controls' *private* view hierarchy: on each layout pass it locates the
-/// busiest horizontal control row and appends the button if it isn't already
-/// attached. Everything is guarded — if a future iOS reorganises the hierarchy
-/// and the row can't be found, nothing is added (no crash; callers decide
-/// whether to fall back to an overlay).
+/// controls' *private* view hierarchy on each layout pass. Everything is
+/// guarded — if a future iOS reorganises the hierarchy and no anchor is
+/// found, nothing is added (no crash; callers decide whether to fall back to
+/// an overlay). Appending *into* AVKit's views is deliberately avoided: it
+/// stopped working on iOS 27 for stacks (the embedded ✕ was lost that way),
+/// and glass capsules don't hit-test children outside their own bounds.
 @MainActor
 final class TransportBarButtonInstaller {
     private weak var button: UIButton?
 
     var isInstalled: Bool { button?.superview != nil }
-
-    /// Attempts to (re)attach the button; call from `viewDidLayoutSubviews`.
-    /// A no-op while the button from an earlier pass is still attached.
-    func ensureInstalled(in root: UIView, makeButton: () -> UIButton) {
-        guard !isInstalled else { return }
-
-        let buttons = Self.allButtons(in: root)
-        guard !buttons.isEmpty else { return }   // controls not built yet
-
-        // Strategy 1: append to the horizontal stack holding the most buttons.
-        if let row = Self.bestControlRow(in: root) {
-            let button = makeButton()
-            row.addArrangedSubview(button)
-            self.button = button
-            return
-        }
-
-        // Strategy 2 (no stack): sit beside the bottom-most control button, in its superview.
-        guard let anchor = buttons.max(by: {
-            let a = $0.convert($0.bounds, to: root), b = $1.convert($1.bounds, to: root)
-            return (a.maxY, a.maxX) < (b.maxY, b.maxX)
-        }), let bar = anchor.superview else { return }
-        let button = makeButton()
-        button.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.centerYAnchor.constraint(equalTo: anchor.centerYAnchor),
-            button.leadingAnchor.constraint(equalTo: anchor.trailingAnchor, constant: 16)
-        ])
-        self.button = button
-    }
 
     /// Places the button in the player's top bar, *beside* the leading
     /// (close / AirPlay) control cluster instead of inside it. The iOS 26
@@ -124,55 +93,6 @@ final class TransportBarButtonInstaller {
         return found
     }
 
-    /// A button styled to match the native transport controls.
-    static func makeControlButton(
-        systemImage: String,
-        accessibilityLabel: String,
-        action: @escaping () -> Void
-    ) -> UIButton {
-        let button = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        button.setImage(UIImage(systemName: systemImage, withConfiguration: config), for: .normal)
-        button.tintColor = .white
-        button.accessibilityLabel = accessibilityLabel
-        button.addAction(UIAction { _ in action() }, for: .touchUpInside)
-        return button
-    }
-
-    private static func allButtons(in root: UIView) -> [UIButton] {
-        var found: [UIButton] = []
-        func walk(_ v: UIView) {
-            if let b = v as? UIButton { found.append(b) }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return found
-    }
-
-    /// The most likely transport-control row: the horizontal `UIStackView` with
-    /// the most buttons, breaking ties toward the lowest one on screen (the
-    /// bottom bar, where PiP / AirPlay / full-screen live).
-    private static func bestControlRow(in root: UIView) -> UIStackView? {
-        var best: UIStackView?
-        var bestButtons = 0
-        var bestY: CGFloat = 0
-        func walk(_ v: UIView) {
-            if let stack = v as? UIStackView, stack.axis == .horizontal {
-                let buttons = stack.arrangedSubviews.reduce(into: 0) { count, sub in
-                    if sub is UIButton { count += 1 }
-                }
-                if buttons > 0 {
-                    let y = stack.convert(stack.bounds, to: root).maxY
-                    if buttons > bestButtons || (buttons == bestButtons && y > bestY) {
-                        best = stack; bestButtons = buttons; bestY = y
-                    }
-                }
-            }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return best
-    }
 }
 
 /// The full-screen player controller: places the **Info** control in the

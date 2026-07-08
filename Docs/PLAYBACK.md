@@ -162,7 +162,7 @@ Actions:
 
 ## Info sheet and comments
 
-The fullscreen player places an Info button in the native transport-control row (shared `TransportBarButtonInstaller`; the floating overlay pill remains as an automatic fallback). The button presents `PlayerInfoSheet`, which wraps `PlayerInfoContent`.
+The fullscreen player places an Info button in the native transport controls, beside the close/AirPlay cluster (`TransportBarButtonInstaller`; the floating overlay pill remains as an automatic fallback). The button presents `PlayerInfoSheet`, which wraps `PlayerInfoContent`.
 
 Player info includes:
 
