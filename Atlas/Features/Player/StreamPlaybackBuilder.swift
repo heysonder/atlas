@@ -18,6 +18,15 @@ enum StreamPlaybackBuilder {
         case composedOrDirect
     }
 
+    /// A composition that outranks the manifest currently playing but wasn't
+    /// assembled at startup (assembly loads remote tracks through the proxy,
+    /// which takes seconds). The player assembles it in the background and
+    /// swaps once it's ready.
+    struct ComposedUpgrade: Equatable {
+        let video: URL
+        let audio: URL
+    }
+
     struct PreparedPlayback {
         let item: AVPlayerItem
         let composed: Bool
@@ -25,6 +34,7 @@ enum StreamPlaybackBuilder {
         let failureFallback: FailureFallback
         let selectsPreferredAudio: Bool
         let stallFallbackDelay: TimeInterval
+        var composedUpgrade: ComposedUpgrade? = nil
     }
 
     static let defaultStallFallbackDelay: TimeInterval = 15
@@ -40,9 +50,10 @@ enum StreamPlaybackBuilder {
 
     /// Builds the cleanest playable item first: an ABR manifest (AV1 HLS when
     /// the device and video support it, otherwise YouTube's own HLS master) so
-    /// AVPlayer owns quality selection. The fixed-bitrate composed pair only
-    /// takes over when it is strictly sharper than the best rung the manifest
-    /// can offer; runtime fallback handles manifests that fail to play.
+    /// AVPlayer owns quality selection. The fixed-bitrate composed pair takes
+    /// over when it is strictly sharper than the AV1 master's best rung, or at
+    /// least matches YouTube's master (quality ties go to the composition);
+    /// runtime fallback handles manifests that fail to play.
     static func makePlayerItem(
         _ detail: VideoDetail,
         allowAV1: Bool,
@@ -61,16 +72,17 @@ enum StreamPlaybackBuilder {
             preferredLanguages: preferredLanguages
         ) {
         case .direct(let url):
-            let usesAV1HLS = url == av1HLSURL
-            let usesHLS = usesAV1HLS || isHLSPlaylist(url)
-            return PreparedPlayback(
-                item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
-                composed: false,
-                sourceName: usesAV1HLS ? "direct-av1-hls" : (usesHLS ? "direct-hls" : "direct-initial"),
-                failureFallback: usesHLS ? .composedOrDirect : .none,
-                selectsPreferredAudio: !usesAV1HLS,
-                stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay)
+            return directPlayback(url: url, av1HLSURL: av1HLSURL)
         case .composed(let video, let audio):
+            // Assembly takes seconds, so when a manifest exists play it right
+            // away and hand the caller the pending composition to assemble in
+            // the background and swap in once ready.
+            if let manifestURL = av1HLSURL ?? playlistURL(from: detail) {
+                return directPlayback(
+                    url: manifestURL,
+                    av1HLSURL: av1HLSURL,
+                    composedUpgrade: ComposedUpgrade(video: video, audio: audio))
+            }
             guard let composed = await composedItem(
                 video: video, audio: audio, timeout: composedAssemblyTimeout) else {
                 NSLog("Atlas.player: composed startup assembly failed; falling back to direct")
@@ -86,6 +98,42 @@ enum StreamPlaybackBuilder {
         case nil:
             return nil
         }
+    }
+
+    private static func directPlayback(
+        url: URL,
+        av1HLSURL: URL?,
+        composedUpgrade: ComposedUpgrade? = nil
+    ) -> PreparedPlayback {
+        let usesAV1HLS = url == av1HLSURL
+        let usesHLS = usesAV1HLS || isHLSPlaylist(url)
+        return PreparedPlayback(
+            item: playerItem(forDirectURL: url, usesAV1HLS: usesAV1HLS),
+            composed: false,
+            sourceName: usesAV1HLS ? "direct-av1-hls" : (usesHLS ? "direct-hls" : "direct-initial"),
+            failureFallback: usesHLS ? .composedOrDirect : .none,
+            selectsPreferredAudio: !usesAV1HLS,
+            stallFallbackDelay: usesAV1HLS ? av1HLSStallFallbackDelay : defaultStallFallbackDelay,
+            composedUpgrade: composedUpgrade)
+    }
+
+    /// Assembles the composition promised by `PreparedPlayback.composedUpgrade`.
+    /// Nil when assembly fails or times out — the interim manifest keeps playing.
+    static func makeComposedUpgradePlayback(
+        _ upgrade: ComposedUpgrade
+    ) async -> PreparedPlayback? {
+        guard let item = await composedItem(
+            video: upgrade.video, audio: upgrade.audio, timeout: composedAssemblyTimeout) else {
+            NSLog("Atlas.player: composed upgrade assembly failed; keeping manifest playback")
+            return nil
+        }
+        return PreparedPlayback(
+            item: item,
+            composed: true,
+            sourceName: "composed-upgrade",
+            failureFallback: .direct,
+            selectsPreferredAudio: true,
+            stallFallbackDelay: defaultStallFallbackDelay)
     }
 
     static func preferredSource(
@@ -111,12 +159,14 @@ enum StreamPlaybackBuilder {
             return .direct(av1HLSURL)
         }
         if let url = playlistURL(from: detail) {
-            // YouTube's HLS master is built from the AVC/VP9 ladder, so an AV1
-            // composition taller than that ladder beats it (e.g. an AV1 device
-            // playing a video whose non-AV1 streams top out lower).
+            // YouTube's HLS master is built from the AVC/VP9 ladder. It only
+            // outranks the composed pair when that ladder can actually reach
+            // *higher* — on a quality tie the composition wins, trading ABR for
+            // a guaranteed top rung (user rule 2026-07-08). When the ceiling is
+            // unknown, trust the manifest.
             if let source = composedSource,
                let ceiling = detail.maxNonAV1VideoStreamHeight,
-               source.height > ceiling {
+               source.height >= ceiling {
                 return .composed(video: source.video, audio: source.audio)
             }
             return .direct(url)
