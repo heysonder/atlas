@@ -365,6 +365,7 @@ final class EmbeddedPlayerModel {
     func start() {
         guard !started else { return }
         started = true
+        updateFavoritesCommand(for: request)
         if let local = request.localURL {
             loadLocal(local)
         } else {
@@ -525,6 +526,9 @@ final class EmbeddedPlayerModel {
         lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
+        if app.nowPlaying == nil || app.nowPlaying?.videoID == request.videoID {
+            updateFavoritesCommand(for: nil)
+        }
     }
 
     // MARK: Queue advancement
@@ -687,6 +691,7 @@ final class EmbeddedPlayerModel {
             resetForItemReplacement()
             request = next
             app.nowPlaying = next
+            updateFavoritesCommand(for: next)
             if let local = next.localURL {
                 loadLocal(local)
             } else {
@@ -724,6 +729,12 @@ final class EmbeddedPlayerModel {
         lastProgressSaveSeconds = nil
         isReady = false
         player.replaceCurrentItem(with: nil)
+    }
+
+    private func updateFavoritesCommand(for request: PlayRequest?) {
+        PlayerFavoritesRemoteCommand.shared.update(
+            request: request,
+            modelContext: request == nil ? nil : modelContext)
     }
 
     // MARK: Resume / progress (shared with the full-screen player via HistoryEntry)

@@ -108,6 +108,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             if playerVC != nil { hardStop() }   // replace any existing (incl. PiP) player
             presentedID = request.videoID
             currentRequest = request
+            updateFavoritesCommand(for: request)
 
             let player = AVPlayer()
             player.appliesMediaSelectionCriteriaAutomatically = false
@@ -425,6 +426,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             presentedID = next.videoID
             currentRequest = next
             app.nowPlaying = next
+            updateFavoritesCommand(for: next)
             player.replaceCurrentItem(with: nil)
             loadTask = Task { await load(next, player: player, controller: controller) }
         }
@@ -660,6 +662,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             currentDetail = nil
             currentDetailLoadedAt = nil
             pipActive = false
+            updateFavoritesCommand(for: nil)
+        }
+
+        private func updateFavoritesCommand(for request: PlayRequest?) {
+            PlayerFavoritesRemoteCommand.shared.update(
+                request: request,
+                modelContext: request == nil ? nil : modelContext)
         }
 
         private func showError(on controller: AVPlayerViewController, _ message: String) {
