@@ -11,8 +11,11 @@ import PipedKit
 /// (`VideoPlayerPresenter`) is untouched and remains the default.
 struct EmbeddedPlayerView: View {
     @State private var model: EmbeddedPlayerModel
+    /// Live offset of the swipe-down-to-dismiss drag on the video area.
+    @State private var dragOffset: CGFloat = 0
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
         _model = State(initialValue: EmbeddedPlayerModel(
@@ -25,20 +28,15 @@ struct EmbeddedPlayerView: View {
                 videoArea
                 infoArea
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.body.weight(.semibold))
-                    }
-                    .accessibilityLabel("Close")
-                }
-            }
+            // No navigation bar on the root: the video pins to the top of the
+            // safe area instead of sitting under a mostly-empty bar. Pushed
+            // destinations (channel pages) still get their own bar.
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
                 ChannelDetailView(channelID: id)
             }
         }
+        .offset(y: dragOffset)
         .task { model.start() }
         .onDisappear {
             // Keeps the player alive while PiP is running (mirrors the
@@ -56,7 +54,6 @@ struct EmbeddedPlayerView: View {
     private var videoArea: some View {
         InlineVideoPlayer(player: model.player,
                           isReady: model.isReady,
-                          onClose: { dismiss() },
                           onPiPActiveChanged: { [model] in model.setPiPActive($0) })
             .aspectRatio(model.detail?.aspectRatio ?? 16.0 / 9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
@@ -73,6 +70,48 @@ struct EmbeddedPlayerView: View {
                         .tint(.white)
                 }
             }
+            .overlay(alignment: .topLeading) {
+                dismissButton.padding(10)
+            }
+            .simultaneousGesture(dismissDrag)
+    }
+
+    /// Floating dismiss control over the video's top-left corner. Injecting an
+    /// ✕ into AVKit's private transport-control hierarchy stopped working on
+    /// iOS 27, so closing the player is this button plus the swipe-down drag.
+    private var dismissButton: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .accessibilityLabel("Close")
+    }
+
+    /// Drag the video down to dismiss the player, YouTube-style. Attached with
+    /// `simultaneousGesture` and a 20pt threshold so the native tap-to-show
+    /// controls and the transport bar keep working; only predominantly
+    /// vertical drags move the view.
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onChanged { value in
+                let dy = value.translation.height
+                guard dy > 0, dy > abs(value.translation.width) else { return }
+                dragOffset = dy
+            }
+            .onEnded { value in
+                if value.translation.height > 140
+                    || value.predictedEndTranslation.height > 320 {
+                    dismiss()
+                } else if reduceMotion {
+                    dragOffset = 0
+                } else {
+                    withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
+                }
+            }
     }
 
     // MARK: Info
@@ -81,32 +120,42 @@ struct EmbeddedPlayerView: View {
         if let detail = model.detail {
             if let client = model.client {
                 ScrollView {
-                    PlayerInfoContent(
-                        title: detail.title ?? model.request.title,
-                        uploader: detail.uploader ?? model.request.uploader,
-                        uploaderDisplayName: model.request.uploader ?? detail.uploader,
-                        uploaderAvatar: detail.uploaderAvatar,
-                        channelID: detail.channelID,
-                        creators: detail.creators ?? [],
-                        subscriberCount: detail.uploaderSubscriberCount,
-                        uploaderVerified: detail.uploaderVerified ?? false,
-                        thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
-                        duration: detail.duration,
-                        description: model.plainDescription,
-                        chapters: detail.chapters ?? [],
-                        canSubscribe: detail.channelID != nil,
-                        isSubscribed: model.isSubscribed(detail.channelID),
-                        onToggleSubscribe: { model.setSubscription($0, detail: detail) },
-                        showFeedback: FeedMode.current.isPersonalized,
-                        feedback: model.currentFeedbackSignal(),
-                        onFeedback: { model.setFeedback($0, detail: detail) },
-                        onQueuedVideoPlay: { model.playQueued($0) },
-                        client: client,
-                        videoID: model.request.videoID,
-                        currentPlaybackSeconds: model.currentPlaybackSeconds,
-                        onTimestampTap: { model.seek(to: $0) },
-                        inline: true)
-                        .padding()
+                    VStack(alignment: .leading, spacing: 16) {
+                        PlayerInfoContent(
+                            title: detail.title ?? model.request.title,
+                            uploader: detail.uploader ?? model.request.uploader,
+                            uploaderDisplayName: model.request.uploader ?? detail.uploader,
+                            uploaderAvatar: detail.uploaderAvatar,
+                            channelID: detail.channelID,
+                            creators: detail.creators ?? [],
+                            subscriberCount: detail.uploaderSubscriberCount,
+                            uploaderVerified: detail.uploaderVerified ?? false,
+                            thumbnail: detail.thumbnailUrl ?? model.request.thumbnail,
+                            duration: detail.duration,
+                            description: model.plainDescription,
+                            chapters: detail.chapters ?? [],
+                            canSubscribe: detail.channelID != nil,
+                            isSubscribed: model.isSubscribed(detail.channelID),
+                            onToggleSubscribe: { model.setSubscription($0, detail: detail) },
+                            showFeedback: FeedMode.current.isPersonalized,
+                            feedback: model.currentFeedbackSignal(),
+                            onFeedback: { model.setFeedback($0, detail: detail) },
+                            onQueuedVideoPlay: { model.playQueued($0) },
+                            client: client,
+                            videoID: model.request.videoID,
+                            currentPlaybackSeconds: model.currentPlaybackSeconds,
+                            onTimestampTap: { model.seek(to: $0) },
+                            inline: true)
+
+                        if let related = detail.relatedStreams, !related.isEmpty {
+                            Divider()
+                            PlayerRelatedSection(
+                                related: related,
+                                currentVideoID: model.request.videoID,
+                                onPlay: { model.playRelated($0) })
+                        }
+                    }
+                    .padding()
                 }
             } else {
                 ContentUnavailableView {
@@ -162,7 +211,6 @@ struct EmbeddedPlayerView: View {
 private struct InlineVideoPlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     let isReady: Bool
-    let onClose: () -> Void
     let onPiPActiveChanged: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> InlinePlayerController {
@@ -171,14 +219,12 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.updatesNowPlayingInfoCenter = true
         controller.videoGravity = .resizeAspect
-        controller.onClose = onClose
         controller.onPiPActiveChanged = onPiPActiveChanged
         if isReady { controller.player = player }
         return controller
     }
 
     func updateUIViewController(_ controller: InlinePlayerController, context: Context) {
-        controller.onClose = onClose
         controller.onPiPActiveChanged = onPiPActiveChanged
         if isReady, controller.player !== player {
             controller.player = player
@@ -186,26 +232,12 @@ private struct InlineVideoPlayer: UIViewControllerRepresentable {
     }
 }
 
-/// An inline `AVPlayerViewController` that adds a custom **close (✕)** control to
-/// the native transport row — sitting beside PiP / AirPlay / full-screen and
-/// auto-hiding with the controls.
-///
-/// iOS exposes no public API for this (custom transport-bar items are tvOS-only,
-/// which is why the full-screen player's "Info" button is a floating overlay
-/// instead). So we reach into the controls' *private* view hierarchy: on each
-/// layout pass we locate the busiest horizontal control row and append our
-/// button if it isn't already attached. Everything is guarded — if a future iOS
-/// reorganises the hierarchy and the row can't be found, we simply add nothing
-/// (no crash; the player just lacks the extra button). Scoped to the embedded
-/// player only; the full-screen `VideoPlayerPresenter` is deliberately untouched.
+/// An inline `AVPlayerViewController` that reports PiP start/stop so the
+/// embedded model can defer teardown while PiP is active. AVKit keeps this
+/// controller alive for the duration of PiP, so the callback (and the model it
+/// captures) survives the SwiftUI cover being dismissed.
 final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControllerDelegate {
-    var onClose: (() -> Void)?
-    /// Reports PiP start/stop so the embedded model can defer teardown while
-    /// PiP is active. AVKit keeps this controller alive for the duration of
-    /// PiP, so the callback (and the model it captures) survives the SwiftUI
-    /// cover being dismissed.
     var onPiPActiveChanged: ((Bool) -> Void)?
-    private weak var closeButton: UIButton?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -219,88 +251,6 @@ final class InlinePlayerController: AVPlayerViewController, AVPlayerViewControll
     func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
         onPiPActiveChanged?(false)
     }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        ensureCloseButton()
-    }
-
-    private func ensureCloseButton() {
-        guard onClose != nil else { return }
-        // Still attached from an earlier pass — leave it be.
-        if let closeButton, closeButton.superview != nil { return }
-
-        let buttons = Self.allButtons(in: view)
-        guard !buttons.isEmpty else { return }   // controls not built yet (or out-of-process)
-
-        // Strategy 1: append to the horizontal stack holding the most buttons.
-        if let row = Self.bestControlRow(in: view) {
-            let button = makeCloseButton()
-            row.addArrangedSubview(button)
-            closeButton = button
-            return
-        }
-
-        // Strategy 2 (no stack): sit beside the bottom-most control button, in its superview.
-        guard let anchor = buttons.max(by: {
-            let a = $0.convert($0.bounds, to: view), b = $1.convert($1.bounds, to: view)
-            return (a.maxY, a.maxX) < (b.maxY, b.maxX)
-        }), let bar = anchor.superview else { return }
-        let button = makeCloseButton()
-        button.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.centerYAnchor.constraint(equalTo: anchor.centerYAnchor),
-            button.leadingAnchor.constraint(equalTo: anchor.trailingAnchor, constant: 16)
-        ])
-        closeButton = button
-    }
-
-    private func makeCloseButton() -> UIButton {
-        let button = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        button.setImage(UIImage(systemName: "xmark", withConfiguration: config), for: .normal)
-        button.tintColor = .white
-        button.accessibilityLabel = "Close"
-        button.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
-        return button
-    }
-
-    private static func allButtons(in root: UIView) -> [UIButton] {
-        var found: [UIButton] = []
-        func walk(_ v: UIView) {
-            if let b = v as? UIButton { found.append(b) }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return found
-    }
-
-    /// The most likely transport-control row: the horizontal `UIStackView` with
-    /// the most buttons, breaking ties toward the lowest one on screen (the
-    /// bottom bar, where PiP / AirPlay / full-screen live).
-    private static func bestControlRow(in root: UIView) -> UIStackView? {
-        var best: UIStackView?
-        var bestButtons = 0
-        var bestY: CGFloat = 0
-        func walk(_ v: UIView) {
-            if let stack = v as? UIStackView, stack.axis == .horizontal {
-                let buttons = stack.arrangedSubviews.reduce(into: 0) { count, sub in
-                    if sub is UIButton { count += 1 }
-                }
-                if buttons > 0 {
-                    let y = stack.convert(stack.bounds, to: root).maxY
-                    if buttons > bestButtons || (buttons == bestButtons && y > bestY) {
-                        best = stack; bestButtons = buttons; bestY = y
-                    }
-                }
-            }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(root)
-        return best
-    }
-
 }
 
 /// Owns the `AVPlayer` for the embedded player and mirrors the full-screen
@@ -674,6 +624,15 @@ final class EmbeddedPlayerModel {
 
     func playQueued(_ queued: QueuedVideo) {
         guard let next = app.removeFromQueue(queued) else { return }
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite { savePosition(seconds) }
+        advance(to: next)
+    }
+
+    /// Plays a tapped related video: saves the current position, then hands the
+    /// request to `advance`, which re-presents the cover with a fresh model.
+    func playRelated(_ item: StreamItem) {
+        guard let next = PlayRequest(item: item) else { return }
         let seconds = player.currentTime().seconds
         if seconds.isFinite { savePosition(seconds) }
         advance(to: next)
