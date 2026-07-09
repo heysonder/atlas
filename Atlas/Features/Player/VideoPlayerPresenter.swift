@@ -137,7 +137,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             }
             do {
                 let client = try app.client
-                let detail = try await app.resolveStream(request.videoID)
+                let detail = try await app.resolveStreamForPlayback(request.videoID)
                 guard !Task.isCancelled else { return }
                 // Only try AV1 HLS when it can actually work: the device decodes
                 // AV1 and the instance extracted AV1 streams (otherwise the

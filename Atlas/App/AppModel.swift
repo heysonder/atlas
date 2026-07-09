@@ -250,17 +250,32 @@ final class AppModel {
 
     /// Returns the stream details, using a cached/in-flight result when available
     /// so a tap doesn't re-pay the full extraction latency.
+    ///
+    /// Does NOT warm the AV1 HLS manifest: bulk metadata callers (recommendation
+    /// ranking, row enrichment, downloads) resolve dozens of videos per pass, and
+    /// each manifest warm costs the instance a full extraction — enough of them
+    /// at once starves the video that's actually playing. Playback-likely paths
+    /// use `resolveStreamForPlayback` / `prefetchStream`, which do warm.
     func resolveStream(_ videoID: String) async throws -> VideoDetail {
         if let cached = cachedDetail(videoID) { return cached }
         if let task = inflight[videoID] { return try await task.value }
-        return try await startResolution(videoID).value
+        return try await startResolution(videoID, warmingManifest: false).value
+    }
+
+    /// Stream details for a video that is about to play: additionally warms the
+    /// AV1 HLS manifest (even on a cache hit — a metadata resolution may have
+    /// filled the cache without warming) so AVPlayer finds it hot.
+    func resolveStreamForPlayback(_ videoID: String) async throws -> VideoDetail {
+        if let client = try? client { warmAV1Manifest(videoID, client: client) }
+        return try await resolveStream(videoID)
     }
 
     /// Starts a fetch and registers it in `inflight` *synchronously*, so a
     /// same-turn burst of callers (and the prefetch cap) sees it immediately.
-    private func startResolution(_ videoID: String) throws -> Task<VideoDetail, Error> {
+    private func startResolution(_ videoID: String,
+                                 warmingManifest: Bool) throws -> Task<VideoDetail, Error> {
         let client = try self.client
-        warmAV1Manifest(videoID, client: client)
+        if warmingManifest { warmAV1Manifest(videoID, client: client) }
         let task = Task<VideoDetail, Error> { try await client.streams(videoID: videoID) }
         inflight[videoID] = task
         Task {
@@ -290,9 +305,12 @@ final class AppModel {
     // first request (5–20s measured) and serves repeats from a server-side
     // cache in ~0.1s, but AVPlayer only fetches the manifest *after* /streams
     // resolves — paying the two extractions back to back. Requesting the
-    // manifest alongside every /streams fetch runs them concurrently, so by
-    // the time the player asks for it (on tap after a prefetch, or a few
-    // seconds into a cold tap) the instance answers from its warm cache.
+    // manifest alongside a playback-likely /streams fetch runs them
+    // concurrently, so by the time the player asks for it (on tap after a
+    // prefetch, or a few seconds into a cold tap) the instance answers from
+    // its warm cache. Only playback-likely paths warm: each warm is a full
+    // extraction server-side, so bulk metadata resolution must never fan
+    // these out.
 
     @ObservationIgnored private var manifestWarms: [URL: Date] = [:]
     /// Re-warm after this long, in case the instance evicted its cached manifest.
@@ -382,7 +400,7 @@ final class AppModel {
               cachedDetail(videoID) == nil,
               inflight[videoID] == nil,
               inflight.count < 2 else { return }
-        _ = try? startResolution(videoID)
+        _ = try? startResolution(videoID, warmingManifest: true)
     }
 
     static func normalize(_ raw: String) -> String {
