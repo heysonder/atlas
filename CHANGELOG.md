@@ -9,9 +9,10 @@ Atlas has not published a tagged release yet.
 ## Unreleased
 
 ### Added
-- **Public-repository foundations.** Added a contributor guide, strict Swift
-  formatting contract, editor defaults, GitHub Actions build/test validation,
-  and an Apple privacy manifest for UserDefaults and disk-space access.
+- **Public-repository foundations.** Added contributor and security-reporting
+  guides, public design principles, a strict Swift formatting contract, editor
+  defaults, GitHub Actions build/test validation, and an Apple privacy manifest
+  for UserDefaults and disk-space access.
 - **Safety regression coverage.** Added focused tests for backups, persistence
   limits, downloads, instance isolation, media policy, pagination, comments,
   image loading, stream identity, and playback fallback behavior.
