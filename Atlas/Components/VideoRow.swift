@@ -38,9 +38,10 @@ struct VideoRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: onPlay) {
                 ZStack(alignment: .bottomTrailing) {
+                    Color.clear
+                        .aspectRatio(16 / 9, contentMode: .fit)
                     Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
-                        .aspectRatio(16 / 9, contentMode: .fill)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .opacity(watched ? 0.55 : 1)
                         .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
