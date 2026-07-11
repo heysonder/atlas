@@ -40,13 +40,14 @@ struct VideoRow: View {
                 ZStack(alignment: .bottomTrailing) {
                     Color.clear
                         .aspectRatio(16 / 9, contentMode: .fit)
-                    Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .opacity(watched ? 0.55 : 1)
-                        .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
-                        .overlay(alignment: .topLeading) {
-                            if watched { WatchedBadge().padding(8) }
+                        .overlay {
+                            Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .opacity(watched ? 0.55 : 1)
+                                .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
+                                .overlay(alignment: .topLeading) {
+                                    if watched { WatchedBadge().padding(8) }
+                                }
                         }
                     playbackStatePill
                 }
