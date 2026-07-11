@@ -186,14 +186,20 @@ private func registerPolicyClientResponse(
     let bufferedURL = URL(string: "https://public.test/buffered-\(UUID().uuidString)")!
     let streamedURL = URL(string: "https://public.test/streamed-\(UUID().uuidString)")!
     let payload = Data((0..<9).map(UInt8.init))
+    let contentLength = String(payload.count)
+    let streamedChunks = [
+        Data(payload.prefix(3)),
+        Data(payload.dropFirst(3).prefix(3)),
+        Data(payload.suffix(3)),
+    ]
     registerPolicyClientResponse(
         url: bufferedURL,
-        headers: ["Content-Length": "\(payload.count)"],
+        headers: ["Content-Length": contentLength],
         chunks: [payload])
     registerPolicyClientResponse(
         url: streamedURL,
-        headers: ["Content-Length": "\(payload.count)"],
-        chunks: [payload.prefix(3), payload.dropFirst(3).prefix(3), payload.suffix(3)].map(Data.init))
+        headers: ["Content-Length": contentLength],
+        chunks: streamedChunks)
     defer {
         PolicyClientTestProtocol.unregister(bufferedURL)
         PolicyClientTestProtocol.unregister(streamedURL)
