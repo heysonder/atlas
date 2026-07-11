@@ -114,6 +114,7 @@ Store helper types such as `PlaybackHistoryStore`, `PlaylistStore`, `Subscriptio
 `PipedKit` is the API and decoding boundary. It contains:
 
 - `PipedClient`.
+- Network destination and redirect policy.
 - Codable response models.
 - Piped error mapping.
 - Stream and subtitle helpers.

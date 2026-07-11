@@ -1,78 +1,13 @@
-import SwiftUI
 import PipedKit
-
-/// One row in a feed: a full-width video, a run of Shorts (1–2 per row), or a
-/// single horizontal Shorts shelf (carousel layout).
-private enum FeedRow: Identifiable {
-    case video(StreamItem)
-    case shorts([StreamItem])
-    case shelf([StreamItem])
-
-    var id: String {
-        switch self {
-        case .video(let v): "v:" + v.id
-        case .shorts(let s): "s:" + s.map(\.id).joined(separator: "+")
-        case .shelf(let s): "shelf:" + s.map(\.id).joined(separator: "+")
-        }
-    }
-}
-
-/// Inline layout: groups a flat item list so that Shorts always pair up
-/// two-per-row, while regular videos stay full width.
-///
-/// A lone Short is held back to pair with the *next* Short rather than taking a
-/// full-width row with half of it empty — so interspersed Shorts (one here, a few
-/// there) still pack two-per-row instead of wasting space. Video order is
-/// preserved; a held-back Short surfaces at the next Short's position. Only a
-/// final leftover Short (when the total count is odd) ever sits alone.
-private func inlineFeedRows(_ items: [StreamItem]) -> [FeedRow] {
-    var rows: [FeedRow] = []
-    var pending: StreamItem?   // a single Short waiting for a partner
-    for item in items {
-        if item.isShort == true {
-            if let first = pending {
-                rows.append(.shorts([first, item]))
-                pending = nil
-            } else {
-                pending = item
-            }
-        } else {
-            rows.append(.video(item))
-        }
-    }
-    if let last = pending { rows.append(.shorts([last])) }
-    return rows
-}
-
-/// Carousel layout: pulls every Short into one horizontal shelf placed just below
-/// the first few videos, so the feed leads with full videos and Shorts never
-/// break the vertical rhythm. Video order is otherwise preserved.
-private func carouselFeedRows(_ items: [StreamItem]) -> [FeedRow] {
-    let shorts = items.filter { $0.isShort == true }
-    let videos = items.filter { $0.isShort != true }
-    guard !shorts.isEmpty else { return videos.map(FeedRow.video) }
-
-    var rows: [FeedRow] = []
-    let insertAfter = min(3, videos.count)   // lead with up to 3 videos, then the shelf
-    for (i, video) in videos.enumerated() {
-        rows.append(.video(video))
-        if i + 1 == insertAfter { rows.append(.shelf(shorts)) }
-    }
-    if videos.isEmpty { rows.append(.shelf(shorts)) }
-    return rows
-}
-
-private func groupedFeedRows(_ items: [StreamItem], layout: ShortsLayout) -> [FeedRow] {
-    switch layout {
-    case .inline: inlineFeedRows(items)
-    case .carousel: carouselFeedRows(items)
-    }
-}
+import SwiftUI
 
 /// A `LazyVStack` of videos that renders Shorts as paired 9:16 posters (or one
 /// horizontal shelf, in carousel layout) and warms upcoming thumbnails as rows
 /// appear. Shared by the feed, search, recs, channel.
 struct GroupedVideoList: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     let items: [StreamItem]
     var avatarFallback: String? = nil
     var channelIDFallback: String? = nil
@@ -88,12 +23,28 @@ struct GroupedVideoList: View {
     var onAppearItem: ((StreamItem) -> Void)? = nil
     let onPlay: (StreamItem) -> Void
 
-    /// iPhone (compact) stays a single column; iPad and larger (regular) break the
-    /// feed into an adaptive grid that fits as many columns as the width allows.
-    @Environment(\.horizontalSizeClass) private var hSize
+    init(
+        items: [StreamItem],
+        avatarFallback: String? = nil,
+        channelIDFallback: String? = nil,
+        spacing: CGFloat = 20,
+        shortsLayout: ShortsLayout = .inline,
+        watchedIDs: Set<String> = [],
+        onAppearItem: ((StreamItem) -> Void)? = nil,
+        onPlay: @escaping (StreamItem) -> Void
+    ) {
+        self.items = StreamItemIdentity.firstOccurrences(in: items)
+        self.avatarFallback = avatarFallback
+        self.channelIDFallback = channelIDFallback
+        self.spacing = spacing
+        self.shortsLayout = shortsLayout
+        self.watchedIDs = watchedIDs
+        self.onAppearItem = onAppearItem
+        self.onPlay = onPlay
+    }
 
     var body: some View {
-        if hSize == .regular {
+        if horizontalSizeClass == .regular {
             gridLayout
         } else {
             stackLayout
@@ -103,11 +54,12 @@ struct GroupedVideoList: View {
     /// Single-column feed (iPhone): full-width videos with Shorts paired 2-up or
     /// pulled into a shelf, per `shortsLayout`.
     private var stackLayout: some View {
-        LazyVStack(spacing: spacing) {
-            ForEach(groupedFeedRows(items, layout: shortsLayout)) { row in
+        let firstIndexByID = firstIndexByID()
+        return LazyVStack(spacing: spacing) {
+            ForEach(groupedVideoRows(items, layout: shortsLayout)) { row in
                 switch row {
                 case .video(let item):
-                    videoCell(item)
+                    videoCell(item, index: firstIndexByID[item.id])
                 case .shorts(let pair):
                     HStack(alignment: .top, spacing: 12) {
                         ForEach(pair) { short in
@@ -116,10 +68,13 @@ struct GroupedVideoList: View {
                         }
                         if pair.count == 1 { Color.clear.frame(maxWidth: .infinity) }
                     }
-                    .onAppear { pair.forEach(appeared) }
+                    .onAppear {
+                        pair.forEach { appeared($0, index: firstIndexByID[$0.id]) }
+                    }
                 case .shelf(let shorts):
-                    ShortsShelf(items: shorts, watchedIDs: watchedIDs,
-                                onAppearItem: onAppearItem, onPlay: onPlay)
+                    ShortsShelf(
+                        items: shorts, watchedIDs: watchedIDs,
+                        onAppearItem: onAppearItem, onPlay: onPlay)
                 }
             }
         }
@@ -133,6 +88,7 @@ struct GroupedVideoList: View {
         let track = [GridItem(.adaptive(minimum: 300), spacing: 16, alignment: .top)]
         let shorts = items.filter { $0.isShort == true }
         let videos = items.filter { $0.isShort != true }
+        let firstIndexByID = firstIndexByID()
         // Lead with a few videos, then the shelf, then the rest — so the feed opens
         // on real videos rather than a wall of Shorts. With an adaptive column count
         // we no longer know the row size, so we lead with a fixed handful.
@@ -143,16 +99,27 @@ struct GroupedVideoList: View {
         return LazyVStack(spacing: spacing) {
             if !lead.isEmpty {
                 LazyVGrid(columns: track, spacing: spacing) {
-                    ForEach(lead) { videoCell($0, reservesTitleSpace: true) }
+                    ForEach(lead) {
+                        videoCell(
+                            $0,
+                            index: firstIndexByID[$0.id],
+                            reservesTitleSpace: true)
+                    }
                 }
             }
             if !shorts.isEmpty {
-                ShortsShelf(items: shorts, watchedIDs: watchedIDs,
-                            onAppearItem: onAppearItem, onPlay: onPlay)
+                ShortsShelf(
+                    items: shorts, watchedIDs: watchedIDs,
+                    onAppearItem: onAppearItem, onPlay: onPlay)
             }
             if !rest.isEmpty {
                 LazyVGrid(columns: track, spacing: spacing) {
-                    ForEach(rest) { videoCell($0, reservesTitleSpace: true) }
+                    ForEach(rest) {
+                        videoCell(
+                            $0,
+                            index: firstIndexByID[$0.id],
+                            reservesTitleSpace: true)
+                    }
                 }
             }
         }
@@ -160,14 +127,20 @@ struct GroupedVideoList: View {
 
     /// One video card, shared by the stack and grid layouts. The grid reserves a
     /// two-line title height so every card matches, keeping the columns aligned.
-    private func videoCell(_ item: StreamItem, reservesTitleSpace: Bool = false) -> some View {
-        VideoRow(item: item,
-                 avatarFallback: avatarFallback,
-                 channelIDFallback: channelIDFallback,
-                 watched: isWatched(item),
-                 reservesTitleSpace: reservesTitleSpace) { onPlay(item) }
-            .videoContextMenu(item)
-            .onAppear { appeared(item) }
+    private func videoCell(
+        _ item: StreamItem,
+        index: Int?,
+        reservesTitleSpace: Bool = false
+    ) -> some View {
+        VideoRow(
+            item: item,
+            avatarFallback: avatarFallback,
+            channelIDFallback: channelIDFallback,
+            watched: isWatched(item),
+            reservesTitleSpace: reservesTitleSpace
+        ) { onPlay(item) }
+        .videoContextMenu(item)
+        .onAppear { appeared(item, index: index) }
     }
 
     private func isWatched(_ item: StreamItem) -> Bool {
@@ -177,19 +150,34 @@ struct GroupedVideoList: View {
 
     /// Notify + warm the thumbnails of the next handful of items so they're ready
     /// before the user scrolls to them.
-    private func appeared(_ item: StreamItem) {
+    private func appeared(_ item: StreamItem, index: Int?) {
         onAppearItem?(item)
-        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
-        let start = idx + 1, end = min(start + 10, items.count)
+        guard let index else { return }
+        let start = index + 1
+        let end = min(start + 10, items.count)
         guard start < end else { return }
-        let urls = items[start..<end].map { Thumbnail.upgraded($0.thumbnail) }
-        Task { await ThumbnailPrefetcher.shared.prefetch(urls) }
+        let urls = items[start..<end].map { ThumbnailURL.upgraded($0.thumbnail) }
+        guard let client = try? app.httpClient else { return }
+        let generation = app.instanceGeneration
+        Task {
+            await ThumbnailPrefetcher.shared.prefetch(
+                urls, client: client, generation: generation)
+        }
+    }
+
+    /// Preserves the previous first-match behavior when malformed input contains
+    /// duplicate ids, while avoiding one linear lookup for every appearing row.
+    private func firstIndexByID() -> [String: Int] {
+        Dictionary(
+            items.enumerated().map { ($0.element.id, $0.offset) },
+            uniquingKeysWith: { first, _ in first })
     }
 }
 
 /// A horizontal, swipeable row of Shorts posters with a "Shorts" header. Lazily
 /// loads posters so a long shelf doesn't fetch every thumbnail up front.
 private struct ShortsShelf: View {
+    @Environment(AppModel.self) private var app
     let items: [StreamItem]
     var watchedIDs: Set<String> = []
     var onAppearItem: ((StreamItem) -> Void)? = nil
@@ -201,22 +189,30 @@ private struct ShortsShelf: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Shorts", systemImage: "play.square.stack.fill")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(items) { short in
-                        ShortPoster(item: short,
-                                    watched: short.videoID.map(watchedIDs.contains) ?? false) { onPlay(short) }
-                            .videoContextMenu(short)
-                            .frame(width: cardWidth)
-                            .onAppear { onAppearItem?(short) }
+                        ShortPoster(
+                            item: short,
+                            watched: short.videoID.map(watchedIDs.contains) ?? false
+                        ) { onPlay(short) }
+                        .videoContextMenu(short)
+                        .frame(width: cardWidth)
+                        .onAppear { onAppearItem?(short) }
                     }
                 }
             }
             .scrollClipDisabled()
         }
         .onAppear {
-            let urls = items.prefix(8).map { Thumbnail.upgraded($0.thumbnail) }
-            Task { await ThumbnailPrefetcher.shared.prefetch(urls) }
+            let urls = items.prefix(8).map { ThumbnailURL.upgraded($0.thumbnail) }
+            guard let client = try? app.httpClient else { return }
+            let generation = app.instanceGeneration
+            Task {
+                await ThumbnailPrefetcher.shared.prefetch(
+                    urls, client: client, generation: generation)
+            }
         }
     }
 }

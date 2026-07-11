@@ -3,19 +3,25 @@
 All notable changes to Atlas are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Tagged releases will use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Atlas has not published a tagged release yet.
 
-## [Unreleased]
+## Unreleased
 
 ### Added
+- **Public-repository foundations.** Added a contributor guide, strict Swift
+  formatting contract, editor defaults, GitHub Actions build/test validation,
+  and an Apple privacy manifest for UserDefaults and disk-space access.
+- **Safety regression coverage.** Added focused tests for backups, persistence
+  limits, downloads, instance isolation, media policy, pagination, comments,
+  image loading, stream identity, and playback fallback behavior.
 - **Siri & App Intents.** Atlas now exposes its core actions to Siri, Spotlight,
   and the Shortcuts app. Say "Search Atlas", "Resume watching in Atlas" (which
   replies with a spoken line and a snippet card), "Open For You", or "Open Atlas
   downloads". Watched videos and offline downloads are published to Spotlight —
   downloads are findable and playable fully offline — and tapping a result jumps
-  straight into the player, preferring the local file when present. On iOS 27,
-  on-screen awareness lets Siri act on the video you're looking at in the feed
-  ("play this", "download this"). New `Atlas/Features/Intents/` module:
+  straight into the player, preferring the local file when present. New
+  `Atlas/Features/Intents/` module:
   `VideoEntity`, the intents, `AtlasShortcuts`, and `SpotlightIndexer`.
 - **For You learns from searches, saves, and subscriptions.** Beyond watch
   history and thumbs, the personalized feed now folds in your recent searches,
@@ -37,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoints with `Comment` / `CommentsPage` models.
 
 ### Changed
+- **Network and download boundaries are policy-enforced.** API, media, image,
+  caption, artwork, redirect, and download requests now share the selected
+  instance's destination policy, bounded response handling, and checked range
+  parsing. Download paths and cleanup are contained to recognized artifacts.
+- **Persistence and backups are bounded and transactional.** Remote metadata is
+  normalized before storage, backup imports validate before mutation, and
+  rejected writes no longer leave UI or partial records out of sync.
+- **Large implementation files are domain-focused.** Player, recommendation,
+  download, backup, PipedKit model, and test catch-alls were split while keeping
+  existing state and lifecycle ownership.
+- **Accessibility and large text were strengthened.** Media rows now expose
+  useful VoiceOver state, queue reordering has accessible actions, controls meet
+  normal target sizes, and library/player layouts adapt at accessibility sizes.
 - **"Watched" now means ≥80% seen.** The Watched badge, the Home feed's
   hide-watched filter, and the For You candidate exclusion all now treat a video
   as watched only once you've seen ≥80% of it (near-finishes count — end cards and
@@ -49,7 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Show more / less* toggle so the comments below stay reachable; the sheet
   opens at the medium detent and reveals comments as you drag it up.
 
-## [1.0.0] - 2026-06-13
+### Fixed
+- Instance changes now cancel or reject stale feed, image, playback, cache, and
+  media work instead of applying results from a previous Piped endpoint.
+- Pagination and refresh failures preserve loaded content and expose explicit
+  retry paths without cursor loops, silent truncation, or duplicate row IDs.
+- Playlist/Favorites creation, App Intent writes, download restart/cleanup, and
+  player Info state now preserve atomicity and validated-store behavior.
+
+## Initial MVP baseline - 2026-06-13
 
 Initial MVP — a native, privacy-respecting YouTube client for iOS built on
 [Piped](https://github.com/TeamPiped/Piped) (SwiftUI + Liquid Glass, iOS 26).
@@ -67,6 +94,3 @@ Initial MVP — a native, privacy-respecting YouTube client for iOS built on
 - **PipedKit.** A standalone Swift package wrapping the Piped API: Codable
   models, an async `PipedClient`, the public instance directory, and
   stream-selection logic.
-
-[Unreleased]: https://github.com/heysonder/atlas/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/heysonder/atlas/releases/tag/v1.0.0

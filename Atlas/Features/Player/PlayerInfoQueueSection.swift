@@ -5,6 +5,7 @@ struct PlayerInfoQueueSection: View {
     let onQueuedVideoPlay: (QueuedVideo) -> Void
 
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draggedQueuedVideoID: UUID?
 
     private var queueItems: [QueueDisplayItem] {
@@ -24,6 +25,7 @@ struct PlayerInfoQueueSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityAddTraits(.isHeader)
 
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(queueItems) { item in
@@ -37,7 +39,8 @@ struct PlayerInfoQueueSection: View {
                             delegate: QueueDropDelegate(
                                 item: item,
                                 draggedQueuedVideoID: $draggedQueuedVideoID,
-                                app: app))
+                                app: app,
+                                reduceMotion: reduceMotion))
                 }
             }
         }
@@ -78,15 +81,46 @@ struct PlayerInfoQueueSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
         .accessibilityLabel("Play \(queued.request.title)")
+        .accessibilityValue(accessibilityValue(for: queued, position: position))
+        .accessibilityActions {
+            if position > 0 {
+                Button("Move earlier") { moveQueuedVideo(from: position, to: position - 1) }
+            }
+            if position + 1 < app.queuedVideos.count {
+                Button("Move later") { moveQueuedVideo(from: position, to: position + 1) }
+            }
+        }
+    }
+
+    private func accessibilityValue(for queued: QueuedVideo, position: Int) -> String {
+        var values = ["\(position + 1) of \(app.queuedVideos.count)"]
+        if let uploader = queued.request.uploader, !uploader.isEmpty {
+            values.append("by \(uploader)")
+        }
+        if queued.request.localURL != nil { values.append("downloaded") }
+        return values.joined(separator: ", ")
+    }
+
+    private func moveQueuedVideo(from source: Int, to destination: Int) {
+        guard app.queuedVideos.indices.contains(source), app.queuedVideos.indices.contains(destination)
+        else { return }
+        withAnimation(reduceMotion ? nil : .snappy) {
+            app.moveQueuedVideos(
+                from: IndexSet(integer: source),
+                to: destination > source ? destination + 1 : destination)
+        }
     }
 
     private func queueThumbnail(_ queued: QueuedVideo, position: Int) -> some View {
         ZStack(alignment: .topLeading) {
-            Thumbnail(url: queued.request.thumbnail)
-                .aspectRatio(16 / 9, contentMode: .fill)
-                .frame(width: 84, height: 47)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Thumbnail(
+                url: queued.request.thumbnail,
+                networkScope: .selectedInstance
+            )
+            .aspectRatio(16 / 9, contentMode: .fill)
+            .frame(width: 84, height: 47)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             Text("\(position + 1)")
                 .font(.caption2.weight(.bold))
@@ -111,15 +145,16 @@ private struct QueueDropDelegate: DropDelegate {
     let item: QueueDisplayItem
     @Binding var draggedQueuedVideoID: UUID?
     let app: AppModel
+    let reduceMotion: Bool
 
     func dropEntered(info: DropInfo) {
         guard let draggedQueuedVideoID,
-              draggedQueuedVideoID != item.id,
-              let source = app.queuedVideos.firstIndex(where: { $0.id == draggedQueuedVideoID }),
-              let destination = app.queuedVideos.firstIndex(where: { $0.id == item.id })
+            draggedQueuedVideoID != item.id,
+            let source = app.queuedVideos.firstIndex(where: { $0.id == draggedQueuedVideoID }),
+            let destination = app.queuedVideos.firstIndex(where: { $0.id == item.id })
         else { return }
 
-        withAnimation(.snappy) {
+        withAnimation(reduceMotion ? nil : .snappy) {
             app.moveQueuedVideos(
                 from: IndexSet(integer: source),
                 to: destination > source ? destination + 1 : destination)

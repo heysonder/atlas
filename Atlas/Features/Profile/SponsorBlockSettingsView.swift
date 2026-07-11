@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// The SponsorBlock master switch plus per-category skip toggles.
 struct SponsorBlockSettingsView: View {
@@ -16,8 +16,9 @@ struct SponsorBlockSettingsView: View {
                     }
                 }
             } footer: {
-                Text("Crowdsourced segment data from your Piped instance. A “Skip” button "
-                     + "appears over the video when an enabled segment plays — tap it to jump past.")
+                Text(
+                    "Crowdsourced segment data from your Piped instance. A “Skip” button "
+                        + "appears over the video when an enabled segment plays — tap it to jump past.")
             }
         }
         .navigationTitle("SponsorBlock")

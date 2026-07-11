@@ -1,128 +1,109 @@
 import Foundation
 
-public enum PipedError: Error, LocalizedError {
-    case badURL
-    case http(Int)
-    case upstream(String)
-    case noPlayableStream
-    case decoding(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .badURL: "Invalid request URL."
-        case .http(let code): "Server returned HTTP \(code)."
-        case .upstream(let message): message
-        case .noPlayableStream: "This instance couldn't load a playable stream. Try another instance."
-        case .decoding(let m): "Couldn't read the response: \(m)"
-        }
-    }
-
-    static func fromHTTPStatus(_ statusCode: Int, data: Data) -> PipedError {
-        guard let body = try? JSONDecoder().decode(PipedServerError.self, from: data),
-              let rawMessage = body.error?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !rawMessage.isEmpty
-        else {
-            return .http(statusCode)
-        }
-
-        if rawMessage.contains("LIVE_STREAM_OFFLINE") {
-            if let quoted = Self.quotedMessage(in: rawMessage) {
-                return .upstream("This live event has not started yet. \(quoted)")
-            }
-            return .upstream("This live event has not started yet.")
-        }
-
-        if rawMessage.contains("SignInConfirmNotBotException") {
-            return .upstream("This instance was blocked by YouTube. Try another instance.")
-        }
-
-        // Surface any other upstream message (age restriction, geo blocks, …)
-        // instead of collapsing it into a bare status code.
-        return .upstream(rawMessage)
-    }
-
-    private static func quotedMessage(in message: String) -> String? {
-        guard let first = message.firstIndex(of: "\"") else { return nil }
-        let rest = message[message.index(after: first)...]
-        guard let last = rest.firstIndex(of: "\"") else { return nil }
-        let quoted = rest[..<last].trimmingCharacters(in: .whitespacesAndNewlines)
-        return quoted.isEmpty ? nil : quoted
-    }
-}
-
-private struct PipedServerError: Decodable {
-    let error: String?
-}
-
 /// A thin async client for one Piped instance.
 /// `baseURL` is an instance's api_url, e.g. https://api.piped.private.coffee
 public struct PipedClient: Sendable {
     public let baseURL: URL
-    private let session: URLSession
+    private let load: @Sendable (URLRequest) async throws -> (Data, URLResponse)
     /// Generous because /streams extraction alone can take several seconds on
     /// self-hosted instances.
     private static let requestTimeout: TimeInterval = 15
     private static let resourceTimeout: TimeInterval = 45
-    private static let boundedSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = requestTimeout
-        configuration.timeoutIntervalForResource = resourceTimeout
-        return URLSession(configuration: configuration)
-    }()
 
     public init(baseURL: URL) {
-        self.init(baseURL: baseURL, session: Self.boundedSession)
+        self.init(baseURL: baseURL, configuration: Self.boundedConfiguration)
     }
 
     public init(baseURL: URL, session: URLSession) {
+        self.init(baseURL: baseURL, configuration: Self.copiedConfiguration(from: session))
+    }
+
+    private init(baseURL: URL, configuration: URLSessionConfiguration) {
         self.baseURL = baseURL
-        self.session = session
+        if let context = try? InstanceNetworkContext(instanceURL: baseURL) {
+            let client = PolicyHTTPClient(context: context, configuration: configuration)
+            load = { request in try await client.data(for: request) }
+        } else {
+            load = { _ in throw NetworkPolicyError.invalidURL }
+        }
+    }
+
+    public init(context: InstanceNetworkContext) {
+        self.init(context: context, configuration: Self.boundedConfiguration)
+    }
+
+    private init(context: InstanceNetworkContext, configuration: URLSessionConfiguration) {
+        baseURL = context.baseURL
+        let client = PolicyHTTPClient(context: context, configuration: configuration)
+        load = { request in try await client.data(for: request) }
     }
 
     public init?(instanceString: String) {
-        self.init(instanceString: instanceString, session: Self.boundedSession)
+        self.init(instanceString: instanceString, generation: 0)
+    }
+
+    public init?(instanceString: String, generation: UInt64) {
+        guard let url = URL(string: instanceString),
+            let context = try? InstanceNetworkContext(
+                instanceURL: url, generation: generation)
+        else { return nil }
+        self.init(context: context)
     }
 
     public init?(instanceString: String, session: URLSession) {
         guard let url = URL(string: instanceString),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = url.host, !host.isEmpty
+            let context = try? InstanceNetworkContext(instanceURL: url)
         else { return nil }
-        self.init(baseURL: url, session: session)
+        self.init(
+            context: context,
+            configuration: Self.copiedConfiguration(from: session))
     }
 
     // MARK: Endpoints
 
     /// `filter` is a Piped search filter: "videos", "channels", "playlists", "all".
-    /// Returns just the items; use `searchPage` when you also need the `nextpage`
+    /// Returns just the items; use `searchPage` when you also need the next-page
     /// token to paginate.
     public func search(_ query: String, filter: String = "videos") async throws -> [StreamItem] {
         try await searchPage(query, filter: filter).items ?? []
     }
 
-    /// First page of search results, keeping the `nextpage` token so callers can
+    /// First page of search results, keeping the next-page token so callers can
     /// continue with `searchNextPage`.
     public func searchPage(_ query: String, filter: String = "videos") async throws -> SearchResponse {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return SearchResponse(items: [], nextpage: nil, suggestion: nil, corrected: nil)
+            return SearchResponse(items: [], nextPage: nil, suggestion: nil, corrected: nil)
         }
         return try await get("search", query: ["q": trimmed, "filter": filter])
     }
 
-    /// Continues a search with the `nextpage` token from a previous `searchPage`
+    /// Continues a search with the next-page token from a previous `searchPage`
     /// (or `searchNextPage`). Piped's `/nextpage/search` still wants the original
     /// `q` + `filter` alongside the token.
-    public func searchNextPage(_ query: String, filter: String = "videos",
-                               nextpage: String) async throws -> SearchResponse {
+    public func searchNextPage(
+        _ query: String,
+        filter: String = "videos",
+        nextPage: String
+    ) async throws -> SearchResponse {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return SearchResponse(items: [], nextpage: nil, suggestion: nil, corrected: nil)
+            return SearchResponse(items: [], nextPage: nil, suggestion: nil, corrected: nil)
         }
-        return try await get("nextpage/search", query: [
-            "nextpage": nextpage, "q": trimmed, "filter": filter
-        ])
+        return try await get(
+            "nextpage/search",
+            query: [
+                "nextpage": nextPage, "q": trimmed, "filter": filter,
+            ])
+    }
+
+    @available(*, deprecated, renamed: "searchNextPage(_:filter:nextPage:)")
+    public func searchNextPage(
+        _ query: String,
+        filter: String = "videos",
+        nextpage: String
+    ) async throws -> SearchResponse {
+        try await searchNextPage(query, filter: filter, nextPage: nextpage)
     }
 
     /// Autocomplete suggestions for a partial query.
@@ -149,20 +130,30 @@ public struct PipedClient: Sendable {
         try await get("channel/\(id)")
     }
 
-    /// Continues paging a channel's uploads with the `nextpage` token returned by
+    /// Continues paging a channel's uploads with the next-page token returned by
     /// `/channel/:channelId` or a previous channel next-page response.
+    public func channelNextPage(id: String, nextPage: String) async throws -> Channel {
+        try await get("nextpage/channel/\(id)", query: ["nextpage": nextPage])
+    }
+
+    @available(*, deprecated, renamed: "channelNextPage(id:nextPage:)")
     public func channelNextPage(id: String, nextpage: String) async throws -> Channel {
-        try await get("nextpage/channel/\(id)", query: ["nextpage": nextpage])
+        try await channelNextPage(id: id, nextPage: nextpage)
     }
 
     /// Loads one of the channel tabs advertised by `/channel/:channelId`, such as
     /// the Shorts tab. Pass the tab's raw `data` value back to Piped unchanged.
-    public func channelTab(data: String, nextpage: String? = nil) async throws -> ChannelTabPage {
+    public func channelTab(data: String, nextPage: String? = nil) async throws -> ChannelTabPage {
         var query = ["data": data]
-        if let nextpage {
-            query["nextpage"] = nextpage
+        if let nextPage {
+            query["nextpage"] = nextPage
         }
         return try await get("channels/tabs", query: query)
+    }
+
+    @available(*, deprecated, renamed: "channelTab(data:nextPage:)")
+    public func channelTab(data: String, nextpage: String?) async throws -> ChannelTabPage {
+        try await channelTab(data: data, nextPage: nextpage)
     }
 
     /// First page of a video's comments. `CommentsPage.disabled` is true when the
@@ -171,10 +162,15 @@ public struct PipedClient: Sendable {
         try await get("comments/\(videoID)")
     }
 
-    /// Continues paging comments (or replies) with a `nextpage` / `repliesPage`
+    /// Continues paging comments (or replies) with a next-page / `repliesPage`
     /// token returned by a previous `comments(videoID:)` call.
+    public func commentsNextPage(videoID: String, nextPage: String) async throws -> CommentsPage {
+        try await get("nextpage/comments/\(videoID)", query: ["nextpage": nextPage])
+    }
+
+    @available(*, deprecated, renamed: "commentsNextPage(videoID:nextPage:)")
     public func commentsNextPage(videoID: String, nextpage: String) async throws -> CommentsPage {
-        try await get("nextpage/comments/\(videoID)", query: ["nextpage": nextpage])
+        try await commentsNextPage(videoID: videoID, nextPage: nextpage)
     }
 
     /// Crowdsourced SponsorBlock skip segments for a video, proxied by the
@@ -193,9 +189,11 @@ public struct PipedClient: Sendable {
     /// Aggregated, reverse-chronological feed for the given channel ids.
     public func feed(channelIDs: [String]) async throws -> [StreamItem] {
         guard !channelIDs.isEmpty else { return [] }
-        let items: [StreamItem] = try await get("feed/unauthenticated", query: [
-            "channels": channelIDs.joined(separator: ",")
-        ])
+        let items: [StreamItem] = try await get(
+            "feed/unauthenticated",
+            query: [
+                "channels": channelIDs.joined(separator: ",")
+            ])
         return items
     }
 
@@ -221,12 +219,20 @@ public struct PipedClient: Sendable {
     // MARK: Static instance directory (separate host)
 
     public static func fetchInstances() async throws -> [PipedInstance] {
-        try await fetchInstances(session: Self.boundedSession)
+        try await fetchInstances(configuration: boundedConfiguration)
     }
 
     public static func fetchInstances(session: URLSession) async throws -> [PipedInstance] {
+        try await fetchInstances(configuration: copiedConfiguration(from: session))
+    }
+
+    private static func fetchInstances(
+        configuration: URLSessionConfiguration
+    ) async throws -> [PipedInstance] {
+        let context = InstanceNetworkContext.publicInternet()
+        let client = PolicyHTTPClient(context: context, configuration: configuration)
         let url = URL(string: "https://piped-instances.kavin.rocks/")!
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await client.data(from: url)
         try Self.validate(response, data: data)
         do {
             return try JSONDecoder().decode([PipedInstance].self, from: data)
@@ -240,7 +246,7 @@ public struct PipedClient: Sendable {
     private func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
         let url = try Self.url(baseURL: baseURL, path: path, query: query)
 
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await load(URLRequest(url: url))
         try Self.validate(response, data: data)
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -250,10 +256,12 @@ public struct PipedClient: Sendable {
     }
 
     static func url(baseURL: URL, path: String, query: [String: String] = [:]) throws -> URL {
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path),
-                                  resolvingAgainstBaseURL: false)
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false)
         if !query.isEmpty {
-            comps?.percentEncodedQueryItems = try query
+            comps?.percentEncodedQueryItems =
+                try query
                 .sorted { $0.key < $1.key }
                 .map {
                     URLQueryItem(
@@ -281,5 +289,17 @@ public struct PipedClient: Sendable {
         guard (200..<300).contains(http.statusCode) else {
             throw PipedError.fromHTTPStatus(http.statusCode, data: data)
         }
+    }
+
+    private static var boundedConfiguration: URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        return configuration
+    }
+
+    private static func copiedConfiguration(from session: URLSession) -> URLSessionConfiguration {
+        let configuration = session.configuration
+        return (configuration.copy() as? URLSessionConfiguration) ?? configuration
     }
 }

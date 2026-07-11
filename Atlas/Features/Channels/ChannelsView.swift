@@ -1,6 +1,6 @@
-import SwiftUI
-import SwiftData
 import PipedKit
+import SwiftData
+import SwiftUI
 
 struct ChannelsView: View {
     @Environment(AppModel.self) private var app
@@ -22,7 +22,10 @@ struct ChannelsView: View {
                     ForEach(channels) { channel in
                         NavigationLink(value: channel.channelID) {
                             HStack(spacing: 12) {
-                                Avatar(url: channel.avatarURL, size: 44)
+                                Avatar(
+                                    url: channel.avatarURL,
+                                    size: 44,
+                                    networkScope: .selectedInstance)
                                 Text(channel.name).font(.body.weight(.medium))
                             }
                         }

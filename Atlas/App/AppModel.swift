@@ -1,88 +1,9 @@
-import SwiftUI
+import Foundation
+import Observation
 import PipedKit
 
-/// A request to open the full-screen player. Carries enough to show a header
-/// immediately while the full stream details load.
-struct PlayRequest: Identifiable, Hashable {
-    let videoID: String
-    let title: String
-    let uploader: String?
-    let thumbnail: String?
-    /// When set, the player plays this local file directly and skips the network
-    /// stream resolution entirely (offline playback of a download).
-    let localURL: URL?
-    /// Optional local caption file saved next to a downloaded video.
-    let localCaptionURL: URL?
-    let localCaptionMimeType: String?
-    var id: String { videoID }
-
-    nonisolated init(videoID: String, title: String, uploader: String? = nil,
-                     thumbnail: String? = nil, localURL: URL? = nil,
-                     localCaptionURL: URL? = nil, localCaptionMimeType: String? = nil) {
-        self.videoID = videoID
-        self.title = title
-        self.uploader = uploader
-        self.thumbnail = thumbnail
-        self.localURL = localURL
-        self.localCaptionURL = localCaptionURL
-        self.localCaptionMimeType = localCaptionMimeType
-    }
-
-    nonisolated init?(item: StreamItem) {
-        guard let videoID = item.videoID else { return nil }
-        self.init(videoID: videoID,
-                  title: item.displayTitle,
-                  uploader: item.uploaderName,
-                  thumbnail: item.thumbnail)
-    }
-
-    @MainActor
-    init(download: DownloadedVideo, fallbackThumbnail: String? = nil) {
-        self.init(videoID: download.videoID,
-                  title: download.title,
-                  uploader: download.uploader,
-                  thumbnail: download.thumbnailURL?.absoluteString ?? fallbackThumbnail,
-                  localURL: download.fileURL,
-                  localCaptionURL: download.captionURL,
-                  localCaptionMimeType: download.captionMimeType)
-    }
-}
-
-/// One transient item in the in-memory playback queue.
-struct QueuedVideo: Identifiable, Hashable {
-    let id: UUID
-    let request: PlayRequest
-
-    init(_ request: PlayRequest, id: UUID = UUID()) {
-        self.id = id
-        self.request = request
-    }
-}
-
-/// Which player UI opens when you tap a video. The native full-screen player is
-/// the default; the embedded option plays inline with the info panel beneath it.
-enum PlayerStyle: String, CaseIterable, Identifiable {
-    case fullscreen
-    case embedded
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .fullscreen: "Fullscreen"
-        case .embedded: "Embedded"
-        }
-    }
-
-    var blurb: String {
-        switch self {
-        case .fullscreen:
-            "Tapping a video opens the native full-screen player; tap ⓘ for details."
-        case .embedded:
-            "Tapping a video opens an inline player with the channel, description, and comments scrolling beneath it."
-        }
-    }
-}
+typealias StreamResolver = @Sendable (PipedClient, String) async throws -> VideoDetail
+typealias ManifestWarmer = @Sendable (URL) async throws -> Void
 
 /// App-wide state: which instance we talk to, and what's currently playing.
 @MainActor
@@ -91,10 +12,23 @@ final class AppModel {
     /// Persisted instance api_url. Empty means the user has not opted into a
     /// Piped instance, so online surfaces must not create a network client.
     var instanceURLString: String {
-        didSet { instanceStore.save(instanceURLString) }
+        didSet {
+            instanceStore.save(instanceURLString)
+            guard oldValue != instanceURLString else { return }
+            rotateInstanceGeneration()
+        }
     }
 
+    /// Changes whenever the selected Piped endpoint changes. Network-backed views
+    /// include this in their load identity so old-instance results cannot apply.
+    private(set) var instanceGeneration: UInt64 = 0
+
     @ObservationIgnored private let instanceStore: InstanceStore
+    @ObservationIgnored private let streamResolver: StreamResolver
+    @ObservationIgnored private let manifestWarmer: ManifestWarmer?
+    @ObservationIgnored private var instanceNetworkContext: InstanceNetworkContext?
+    @ObservationIgnored private var instancePipedClient: PipedClient?
+    @ObservationIgnored private var instanceHTTPClient: PolicyHTTPClient?
 
     /// Set to present the player from anywhere.
     var nowPlaying: PlayRequest?
@@ -106,10 +40,6 @@ final class AppModel {
     /// Transient session queue. It intentionally is not persisted; closing the
     /// app clears it.
     var queuedVideos: [QueuedVideo] = []
-
-    var canAddToQueueAtEnd: Bool {
-        !queuedVideos.isEmpty
-    }
 
     /// Which player UI handles `nowPlaying`. Defaults to the native full-screen
     /// player so existing behavior is unchanged.
@@ -197,20 +127,33 @@ final class AppModel {
     var libraryTarget: LibraryTarget?
 
     static let instanceKey = InstanceStore.defaultsKey
-    nonisolated static let missingInstanceMessage = "Set a Piped instance in Settings before using online video features."
+    nonisolated static let missingInstanceMessage =
+        "Set a Piped instance in Settings before using online video features."
 
-    init(persistenceRecoveryMessage: String? = nil, instanceStore: InstanceStore = .live) {
+    init(
+        persistenceRecoveryMessage: String? = nil,
+        instanceStore: InstanceStore = .live,
+        streamResolver: @escaping StreamResolver = { client, videoID in
+            try await client.streams(videoID: videoID)
+        },
+        manifestWarmer: ManifestWarmer? = nil
+    ) {
         let defaults = UserDefaults.standard
         self.instanceStore = instanceStore
+        self.streamResolver = streamResolver
+        self.manifestWarmer = manifestWarmer
         self.persistenceRecoveryMessage = persistenceRecoveryMessage
         hideShorts = defaults.bool(forKey: Self.hideShortsKey)
-        shortsLayout = defaults.string(forKey: Self.shortsLayoutKey)
+        shortsLayout =
+            defaults.string(forKey: Self.shortsLayoutKey)
             .flatMap(ShortsLayout.init(rawValue:)) ?? .inline
-        playerStyle = defaults.string(forKey: Self.playerStyleKey)
+        playerStyle =
+            defaults.string(forKey: Self.playerStyleKey)
             .flatMap(PlayerStyle.init(rawValue:)) ?? .fullscreen
         statsForNerdsEnabled = defaults.bool(forKey: Self.statsForNerdsKey)
         // SponsorBlock defaults to on; absent key means a fresh install.
-        sponsorBlockEnabled = defaults.object(forKey: Self.sponsorBlockKey) == nil
+        sponsorBlockEnabled =
+            defaults.object(forKey: Self.sponsorBlockKey) == nil
             ? true : defaults.bool(forKey: Self.sponsorBlockKey)
         if let raw = defaults.array(forKey: Self.sponsorCategoriesKey) as? [String] {
             sponsorCategories = Set(raw.compactMap(SponsorCategory.init(rawValue:)))
@@ -218,22 +161,49 @@ final class AppModel {
             sponsorCategories = Self.defaultSponsorCategories
         }
         instanceURLString = instanceStore.load()
+        instanceNetworkContext = Self.makeNetworkContext(
+            instanceURLString, generation: instanceGeneration)
+        instancePipedClient = instanceNetworkContext.map { PipedClient(context: $0) }
+        instanceHTTPClient = instanceNetworkContext.map { PolicyHTTPClient(context: $0) }
     }
 
     /// A client for the currently selected instance.
     var client: PipedClient {
         get throws {
-            guard let client = PipedClient(instanceString: instanceURLString) else {
+            guard let instancePipedClient else {
                 throw AtlasNetworkError.missingPipedInstance
             }
-            return client
+            return instancePipedClient
         }
     }
 
+    var httpClient: PolicyHTTPClient {
+        get throws {
+            guard let instanceHTTPClient else {
+                throw AtlasNetworkError.missingPipedInstance
+            }
+            return instanceHTTPClient
+        }
+    }
+
+    nonisolated static let publicHTTPClient = PolicyHTTPClient(context: .publicInternet())
+
     // MARK: Stream resolution cache (warms the slow /streams extraction)
 
-    @ObservationIgnored private var streamCache: [String: (detail: VideoDetail, at: Date)] = [:]
-    @ObservationIgnored private var inflight: [String: Task<VideoDetail, Error>] = [:]
+    private struct CachedStream {
+        let generation: UInt64
+        let detail: VideoDetail
+        let at: Date
+    }
+
+    private struct InflightResolution {
+        let id: UUID
+        let generation: UInt64
+        let task: Task<VideoDetail, Error>
+    }
+
+    @ObservationIgnored private var streamCache: [String: CachedStream] = [:]
+    @ObservationIgnored private var inflight: [String: InflightResolution] = [:]
     /// How long cached details are reused before re-fetching (one hour). Signed
     /// stream URLs stay valid for longer, so this is comfortably safe; playback
     /// failure recovery uses `refreshStream` when it suspects expiry.
@@ -244,7 +214,9 @@ final class AppModel {
     /// The cached detail for a video, when present and still within the TTL.
     private func cachedDetail(_ videoID: String) -> VideoDetail? {
         guard let cached = streamCache[videoID],
-              Date().timeIntervalSince(cached.at) < Self.streamTTL else { return nil }
+            cached.generation == instanceGeneration,
+            Date().timeIntervalSince(cached.at) < Self.streamTTL
+        else { return nil }
         return cached.detail
     }
 
@@ -257,9 +229,18 @@ final class AppModel {
     /// at once starves the video that's actually playing. Playback-likely paths
     /// use `resolveStreamForPlayback` / `prefetchStream`, which do warm.
     func resolveStream(_ videoID: String) async throws -> VideoDetail {
+        let generation = instanceGeneration
         if let cached = cachedDetail(videoID) { return cached }
-        if let task = inflight[videoID] { return try await task.value }
-        return try await startResolution(videoID, warmingManifest: false).value
+        let task: Task<VideoDetail, Error>
+        if let active = inflight[videoID], active.generation == generation {
+            task = active.task
+        } else {
+            task = try startResolution(videoID, warmingManifest: false).task
+        }
+        let detail = try await task.value
+        try Task.checkCancellation()
+        guard generation == instanceGeneration else { throw CancellationError() }
+        return detail
     }
 
     /// Stream details for a video that is about to play: additionally warms the
@@ -272,31 +253,47 @@ final class AppModel {
 
     /// Starts a fetch and registers it in `inflight` *synchronously*, so a
     /// same-turn burst of callers (and the prefetch cap) sees it immediately.
-    private func startResolution(_ videoID: String,
-                                 warmingManifest: Bool) throws -> Task<VideoDetail, Error> {
+    private func startResolution(
+        _ videoID: String,
+        warmingManifest: Bool
+    ) throws -> InflightResolution {
+        let generation = instanceGeneration
         let client = try self.client
         if warmingManifest { warmAV1Manifest(videoID, client: client) }
-        let task = Task<VideoDetail, Error> { try await client.streams(videoID: videoID) }
-        inflight[videoID] = task
+        let resolver = streamResolver
+        let requestID = UUID()
+        let task = Task<VideoDetail, Error> {
+            let detail = try await resolver(client, videoID)
+            try Task.checkCancellation()
+            return detail
+        }
+        let active = InflightResolution(id: requestID, generation: generation, task: task)
+        inflight[videoID] = active
         Task {
-            if let detail = try? await task.value {
-                cacheDetail(detail, for: videoID)
+            let result = await task.result
+            guard generation == instanceGeneration,
+                inflight[videoID]?.id == requestID
+            else { return }
+            if case .success(let detail) = result {
+                cacheDetail(detail, for: videoID, generation: generation)
             }
             inflight[videoID] = nil
         }
-        return task
+        return active
     }
 
     /// Inserts into the cache, pruning expired entries and trimming to the cap
     /// (oldest first) so the cache can't grow without bound over a long session.
-    private func cacheDetail(_ detail: VideoDetail, for videoID: String) {
+    private func cacheDetail(_ detail: VideoDetail, for videoID: String, generation: UInt64) {
+        guard generation == instanceGeneration else { return }
         let now = Date()
         streamCache = streamCache.filter { now.timeIntervalSince($0.value.at) < Self.streamTTL }
         while streamCache.count >= Self.streamCacheLimit,
-              let oldest = streamCache.min(by: { $0.value.at < $1.value.at }) {
+            let oldest = streamCache.min(by: { $0.value.at < $1.value.at })
+        {
             streamCache.removeValue(forKey: oldest.key)
         }
-        streamCache[videoID] = (detail, now)
+        streamCache[videoID] = CachedStream(generation: generation, detail: detail, at: now)
     }
 
     // MARK: AV1 HLS manifest warming
@@ -313,6 +310,12 @@ final class AppModel {
     // these out.
 
     @ObservationIgnored private var manifestWarms: [URL: Date] = [:]
+    private struct ManifestWarm {
+        let id: UUID
+        let generation: UInt64
+        let task: Task<Void, Never>
+    }
+    @ObservationIgnored private var manifestWarmTasks: [URL: ManifestWarm] = [:]
     /// Re-warm after this long, in case the instance evicted its cached manifest.
     private static let manifestWarmTTL: TimeInterval = 15 * 60
 
@@ -326,25 +329,49 @@ final class AppModel {
         let url = client.av1HLSMasterURL(videoID: videoID)
         let now = Date()
         if let warmedAt = manifestWarms[url],
-           now.timeIntervalSince(warmedAt) < Self.manifestWarmTTL { return }
+            now.timeIntervalSince(warmedAt) < Self.manifestWarmTTL
+        {
+            return
+        }
         manifestWarms = manifestWarms.filter {
             now.timeIntervalSince($0.value) < Self.manifestWarmTTL
         }
         manifestWarms[url] = now
-        Task.detached(priority: .utility) {
-            var request = URLRequest(url: url)
-            // A locally cached copy warms nothing — force the round trip.
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            // Cold extraction can take ~20s on tall videos; give it room.
-            request.timeoutInterval = 45
-            _ = try? await URLSession.shared.data(for: request)
+        let generation = instanceGeneration
+        let requestID = UUID()
+        let warmer = manifestWarmer
+        let httpClient = try? self.httpClient
+        let task = Task(priority: .utility) {
+            if let warmer {
+                try? await warmer(url)
+            } else if let httpClient {
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                request.timeoutInterval = 45
+                _ = try? await httpClient.data(for: request)
+            }
+            try? Task.checkCancellation()
+        }
+        manifestWarmTasks[url] = ManifestWarm(
+            id: requestID, generation: generation, task: task)
+        Task {
+            await task.value
+            guard generation == instanceGeneration,
+                manifestWarmTasks[url]?.id == requestID
+            else { return }
+            manifestWarmTasks[url] = nil
         }
     }
 
     // MARK: Row-driven resolution throttle
 
-    @ObservationIgnored private var throttledResolutions = 0
-    @ObservationIgnored private var throttleWaiters: [CheckedContinuation<Void, Never>] = []
+    private struct ThrottleWaiter {
+        let id: UUID
+        let generation: UInt64
+        let continuation: CheckedContinuation<UUID?, Never>
+    }
+    @ObservationIgnored private var throttleLeases: Set<UUID> = []
+    @ObservationIgnored private var throttleWaiters: [ThrottleWaiter] = []
     private static let throttledResolutionLimit = 2
 
     /// Like `resolveStream`, but bounded: at most a couple of row-driven
@@ -352,27 +379,67 @@ final class AppModel {
     /// number of slow /streams extractions. Cache and in-flight hits return
     /// immediately without taking a slot; everything else queues FIFO.
     func resolveStreamThrottled(_ videoID: String) async throws -> VideoDetail {
+        let generation = instanceGeneration
         if let cached = cachedDetail(videoID) { return cached }
-        if let task = inflight[videoID] { return try await task.value }
-        await acquireThrottleSlot()
-        defer { releaseThrottleSlot() }
+        if let active = inflight[videoID], active.generation == generation {
+            let detail = try await active.task.value
+            try Task.checkCancellation()
+            guard generation == instanceGeneration else { throw CancellationError() }
+            return detail
+        }
+        guard let lease = await acquireThrottleSlot(generation: generation) else {
+            throw CancellationError()
+        }
+        defer { releaseThrottleSlot(lease) }
+        try Task.checkCancellation()
+        guard generation == instanceGeneration else { throw CancellationError() }
         return try await resolveStream(videoID)
     }
 
-    private func acquireThrottleSlot() async {
-        if throttledResolutions < Self.throttledResolutionLimit {
-            throttledResolutions += 1
-            return
+    private func acquireThrottleSlot(generation: UInt64) async -> UUID? {
+        guard !Task.isCancelled else { return nil }
+        let lease = UUID()
+        if throttleLeases.count < Self.throttledResolutionLimit {
+            throttleLeases.insert(lease)
+            return lease
         }
-        await withCheckedContinuation { throttleWaiters.append($0) }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                throttleWaiters.append(
+                    ThrottleWaiter(
+                        id: lease, generation: generation, continuation: continuation))
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelThrottleWaiter(lease)
+            }
+        }
     }
 
-    private func releaseThrottleSlot() {
-        if throttleWaiters.isEmpty {
-            throttledResolutions -= 1
-        } else {
-            // Hand the slot straight to the next waiter.
-            throttleWaiters.removeFirst().resume()
+    private func cancelThrottleWaiter(_ lease: UUID) {
+        if let index = throttleWaiters.firstIndex(where: { $0.id == lease }) {
+            let waiter = throttleWaiters.remove(at: index)
+            waiter.continuation.resume(returning: nil)
+        } else if throttleLeases.contains(lease) {
+            releaseThrottleSlot(lease)
+        }
+    }
+
+    private func releaseThrottleSlot(_ lease: UUID) {
+        guard throttleLeases.remove(lease) != nil else { return }
+        while !throttleWaiters.isEmpty {
+            let waiter = throttleWaiters.removeFirst()
+            guard waiter.generation == instanceGeneration else {
+                waiter.continuation.resume(returning: nil)
+                continue
+            }
+            throttleLeases.insert(waiter.id)
+            waiter.continuation.resume(returning: waiter.id)
+            break
         }
     }
 
@@ -397,10 +464,39 @@ final class AppModel {
     /// can't slip past the cap.
     func prefetchStream(_ videoID: String?) {
         guard let videoID,
-              cachedDetail(videoID) == nil,
-              inflight[videoID] == nil,
-              inflight.count < 2 else { return }
+            cachedDetail(videoID) == nil,
+            inflight[videoID] == nil,
+            inflight.count < 2
+        else { return }
         _ = try? startResolution(videoID, warmingManifest: true)
+    }
+
+    private func rotateInstanceGeneration() {
+        instanceGeneration &+= 1
+        let generation = instanceGeneration
+        Task { await ThumbnailPrefetcher.shared.reset(generation: generation) }
+        for active in inflight.values { active.task.cancel() }
+        inflight.removeAll()
+        streamCache.removeAll()
+        for warm in manifestWarmTasks.values { warm.task.cancel() }
+        manifestWarmTasks.removeAll()
+        manifestWarms.removeAll()
+        throttleLeases.removeAll()
+        let waiters = throttleWaiters
+        throttleWaiters.removeAll()
+        for waiter in waiters { waiter.continuation.resume(returning: nil) }
+        instanceNetworkContext = Self.makeNetworkContext(
+            instanceURLString, generation: instanceGeneration)
+        instancePipedClient = instanceNetworkContext.map { PipedClient(context: $0) }
+        instanceHTTPClient = instanceNetworkContext.map { PolicyHTTPClient(context: $0) }
+    }
+
+    private static func makeNetworkContext(
+        _ rawURL: String,
+        generation: UInt64
+    ) -> InstanceNetworkContext? {
+        guard let url = URL(string: rawURL) else { return nil }
+        return try? InstanceNetworkContext(instanceURL: url, generation: generation)
     }
 
     static func normalize(_ raw: String) -> String {
@@ -409,46 +505,6 @@ final class AppModel {
 
     static func isValidInstanceURL(_ raw: String) -> Bool {
         InstanceStore.isValidInstanceURL(raw)
-    }
-
-    func play(_ item: StreamItem) {
-        guard let request = PlayRequest(item: item) else { return }
-        nowPlaying = request
-    }
-
-    func playNext(_ request: PlayRequest) {
-        queuedVideos.insert(QueuedVideo(request), at: 0)
-    }
-
-    func addToQueue(_ request: PlayRequest) {
-        queuedVideos.append(QueuedVideo(request))
-    }
-
-    func removeFromQueue(_ queued: QueuedVideo) -> PlayRequest? {
-        guard let index = queuedVideos.firstIndex(where: { $0.id == queued.id }) else { return nil }
-        return queuedVideos.remove(at: index).request
-    }
-
-    func moveQueuedVideos(from offsets: IndexSet, to destination: Int) {
-        queuedVideos.move(fromOffsets: offsets, toOffset: destination)
-    }
-
-    func dequeueNext() -> PlayRequest? {
-        guard !queuedVideos.isEmpty else { return nil }
-        return queuedVideos.removeFirst().request
-    }
-
-    func clearQueue() {
-        queuedVideos.removeAll()
-    }
-
-    func playPlaylistVideo(_ video: PlaylistVideo) {
-        nowPlaying = PlayRequest(videoID: video.videoID, title: video.title,
-                                 uploader: video.uploader, thumbnail: video.thumbnailURL)
-    }
-
-    func playDownloaded(_ video: DownloadedVideo) {
-        nowPlaying = PlayRequest(download: video)
     }
 }
 

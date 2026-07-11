@@ -25,12 +25,21 @@ final class DownloadedVideo {
     var byteCount: Int64
     var createdAt: Date
 
-    init(videoID: String, title: String, uploader: String? = nil,
-         fileName: String, thumbnailFileName: String? = nil,
-         captionFileName: String? = nil, captionMimeType: String? = nil,
-         captionLanguageCode: String? = nil, captionName: String? = nil,
-         durationSeconds: Int = 0, qualityLabel: String? = nil,
-         byteCount: Int64 = 0, createdAt: Date = .now) {
+    init(
+        videoID: String,
+        title: String,
+        uploader: String? = nil,
+        fileName: String,
+        thumbnailFileName: String? = nil,
+        captionFileName: String? = nil,
+        captionMimeType: String? = nil,
+        captionLanguageCode: String? = nil,
+        captionName: String? = nil,
+        durationSeconds: Int = 0,
+        qualityLabel: String? = nil,
+        byteCount: Int64 = 0,
+        createdAt: Date = .now
+    ) {
         self.videoID = videoID
         self.title = title
         self.uploader = uploader
@@ -47,9 +56,18 @@ final class DownloadedVideo {
     }
 
     /// Absolute URL of the media file, resolved against the current container.
-    var fileURL: URL { DownloadStore.fileURL(fileName) }
+    var fileURL: URL? {
+        DownloadStore.fileURL(fileName, expected: [.media])
+    }
+
     /// Absolute URL of the cached poster, if one was saved.
-    var thumbnailURL: URL? { thumbnailFileName.map(DownloadStore.fileURL) }
+    var thumbnailURL: URL? {
+        thumbnailFileName.flatMap { DownloadStore.fileURL($0, expected: [.thumbnail]) }
+    }
     /// Absolute URL of the caption track, if one was saved.
-    var captionURL: URL? { captionFileName.map(DownloadStore.fileURL) }
+    var captionURL: URL? {
+        captionFileName.flatMap {
+            DownloadStore.fileURL($0, expected: [.captionVTT, .captionTTML])
+        }
+    }
 }

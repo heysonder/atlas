@@ -16,7 +16,7 @@ The player reads the current mode too, because feedback controls are only shown 
 
 ## Signals
 
-The personalized system uses local signals only:
+The personalized system derives its profile and ranking weights from local signals:
 
 - Watch history.
 - Resume position and known duration.
@@ -26,7 +26,10 @@ The personalized system uses local signals only:
 - Suggest More / Suggest Less feedback.
 - Cached video category and tag metadata from `/streams`.
 
-No recommendation data syncs to Piped or YouTube.
+Atlas does not upload a recommendation profile or library database. It does send
+recent search terms and video or channel identifiers derived from those local
+signals to the selected Piped instance when gathering search, related-video,
+channel, stream-metadata, or trending candidates.
 
 ## Candidate sources
 

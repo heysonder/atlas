@@ -4,8 +4,8 @@ import Foundation
 /// in `UserDefaults` via `AppModel.shortsLayout`. Only applies when Shorts are
 /// shown (i.e. "Hide Shorts" is off); search and channels always use `.inline`.
 enum ShortsLayout: String, CaseIterable, Identifiable, Sendable {
-    case inline      // paired two-per-row, mixed into the feed (default)
-    case carousel    // collected into one horizontal shelf near the top
+    case inline  // paired two-per-row, mixed into the feed (default)
+    case carousel  // collected into one horizontal shelf near the top
 
     var id: String { rawValue }
 

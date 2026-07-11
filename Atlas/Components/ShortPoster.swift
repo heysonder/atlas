@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// A self-contained 9:16 poster for a YouTube Short: the title is laid over the
 /// bottom of the thumbnail (channel/views/time are dropped — they don't matter
@@ -17,16 +17,17 @@ struct ShortPoster: View {
     var body: some View {
         Button(action: onPlay) {
             Color.clear
-                .aspectRatio(9/16, contentMode: .fit)
+                .aspectRatio(9 / 16, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .overlay {
-                    Thumbnail(url: item.thumbnail)
-                        .aspectRatio(16/9, contentMode: .fill)
+                    Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
+                        .aspectRatio(16 / 9, contentMode: .fill)
                         .opacity(watched ? 0.55 : 1)
                 }
                 .overlay {
-                    LinearGradient(colors: [.clear, .black.opacity(0.8)],
-                                   startPoint: .center, endPoint: .bottom)
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.8)],
+                        startPoint: .center, endPoint: .bottom)
                 }
                 .overlay(alignment: .bottomLeading) {
                     Text(item.displayTitle)
@@ -53,5 +54,18 @@ struct ShortPoster: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(item.displayTitle)
+        .accessibilityValue(playbackAccessibilityValue)
+    }
+
+    private var playbackAccessibilityValue: String {
+        var values = ["Short"]
+        if watched { values.append("Watched") }
+        if item.isLive {
+            values.append("Live")
+        } else {
+            let duration = Format.duration(item.duration)
+            if !duration.isEmpty { values.append("Duration \(duration)") }
+        }
+        return values.joined(separator: ", ")
     }
 }

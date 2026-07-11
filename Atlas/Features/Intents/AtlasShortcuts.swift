@@ -59,8 +59,7 @@ struct AtlasShortcuts: AppShortcutsProvider {
         // spoken inside the phrase, and the query matches it by name.
         // A phrase can interpolate only ONE parameter, so we speak the playlist
         // and let Siri ask "which video?" (via the parameter's requestValueDialog),
-        // which the searchable VideoEntity resolves from your description. "Add
-        // this to …" additionally tries on-screen awareness on a real device.
+        // which the searchable VideoEntity can resolve from a description.
         AppShortcut(
             intent: AddToPlaylistIntent(),
             phrases: [

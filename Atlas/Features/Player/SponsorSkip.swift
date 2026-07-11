@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// Drives the in-player "Skip …" button. The player coordinator sets `prompt`
 /// when the playhead enters an enabled SponsorBlock segment and clears it when
@@ -11,7 +11,7 @@ final class SponsorSkipModel {
     /// prompt isn't re-created (and re-animated) every observer tick.
     struct Prompt: Equatable {
         let id: String
-        let noun: String   // e.g. "Sponsor", "Self-promo"
+        let noun: String  // e.g. "Sponsor", "Self-promo"
     }
 
     var prompt: Prompt?
@@ -39,6 +39,8 @@ struct SkipSponsorButton: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
+                        .frame(minHeight: 44)
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Capsule())

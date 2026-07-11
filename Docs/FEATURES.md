@@ -95,7 +95,11 @@ It includes:
 - Chapters.
 - Upcoming queue.
 
-Collaborator enrichment can optionally fetch from youtube.com directly. It is off by default and controlled by Settings -> Privacy -> Resolve Collaborators via YouTube.
+Atlas sends API, search, recommendation, and SponsorBlock requests to the
+selected Piped instance. Playback, images, and captions can directly contact
+hosts referenced by the instance response. Collaborator enrichment can also
+fetch from youtube.com directly; it is off by default and controlled by Settings
+-> Privacy -> Resolve Collaborators via YouTube.
 
 ## Queue
 

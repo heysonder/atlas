@@ -9,6 +9,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "PipedKit"),
-        .testTarget(name: "PipedKitTests", dependencies: ["PipedKit"])
+        .testTarget(name: "PipedKitTests", dependencies: ["PipedKit"]),
     ]
 )

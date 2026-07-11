@@ -1,5 +1,5 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
@@ -17,9 +17,10 @@ struct BackupSettingsView: View {
                 Button("Export Data…", systemImage: "square.and.arrow.up") { exportData() }
                 Button("Import Data…", systemImage: "square.and.arrow.down") { importing = true }
             } footer: {
-                Text("Saves your history, searches, subscriptions, playlists, and Suggest "
-                     + "more / less ratings to a JSON file. Export before changing the "
-                     + "app's bundle identifier, then import into the new install.")
+                Text(
+                    "Saves your history, searches, subscriptions, playlists, and Suggest "
+                        + "more / less ratings to a JSON file. Export before changing the "
+                        + "app's bundle identifier, then import into the new install.")
             }
         }
         .navigationTitle("Backup & Data")
@@ -31,8 +32,11 @@ struct BackupSettingsView: View {
             case .failure(let error): backupResult = error.localizedDescription
             }
         }
-        .alert("Backup", isPresented: Binding(
-            get: { backupResult != nil }, set: { if !$0 { backupResult = nil } })) {
+        .alert(
+            "Backup",
+            isPresented: Binding(
+                get: { backupResult != nil }, set: { if !$0 { backupResult = nil } })
+        ) {
             Button("OK", role: .cancel) { backupResult = nil }
         } message: {
             Text(backupResult ?? "")

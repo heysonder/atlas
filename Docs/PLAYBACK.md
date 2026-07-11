@@ -186,7 +186,10 @@ Only segments with `actionType == "skip"` and positive duration are usable. Atla
 
 ## Diagnostics
 
-Stats for Nerds shows an overlay with playback diagnostics. Player logs use `NSLog` with `Atlas.player` and include source names such as:
+Stats for Nerds shows an overlay with playback diagnostics. Player diagnostics
+use unified `Logger` entries under the `sh.cmf.atlas` subsystem and `player`
+category. Video IDs are private and hash-masked; bounded source/event labels,
+numeric playback measurements, and error domains/codes are public. Source names include:
 
 - `direct-av1-hls`.
 - `direct-hls`.

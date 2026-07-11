@@ -4,7 +4,9 @@ enum Format {
     /// 1695 -> "28:15", 65 -> "1:05".
     static func duration(_ seconds: Int?) -> String {
         guard let seconds, seconds > 0 else { return "" }
-        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
         return h > 0
             ? String(format: "%d:%02d:%02d", h, m, s)
             : String(format: "%d:%02d", m, s)
@@ -13,7 +15,9 @@ enum Format {
     /// Scrubber clock that always renders, including zero: 0 -> "0:00", 65 -> "1:05".
     static func clock(_ seconds: Int) -> String {
         let s = max(seconds, 0)
-        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
+        let h = s / 3600
+        let m = (s % 3600) / 60
+        let sec = s % 60
         return h > 0
             ? String(format: "%d:%02d:%02d", h, m, sec)
             : String(format: "%d:%02d", m, sec)
@@ -25,9 +29,9 @@ enum Format {
         let n = Double(count)
         switch n {
         case 1_000_000_000...: return abbreviated(n / 1_000_000_000, "B")
-        case 1_000_000...:     return abbreviated(n / 1_000_000, "M")
-        case 1_000...:         return abbreviated(n / 1_000, "K")
-        default:               return "\(count)"
+        case 1_000_000...: return abbreviated(n / 1_000_000, "M")
+        case 1_000...: return abbreviated(n / 1_000, "K")
+        default: return "\(count)"
         }
     }
 
@@ -62,20 +66,24 @@ enum Format {
         guard let uploadedMillis, uploadedMillis > 0 else { return nil }
         let seconds = Date().timeIntervalSince1970 - Double(uploadedMillis) / 1000
         guard seconds >= 0 else { return nil }
-        let minute = 60.0, hour = 3600.0, day = 86_400.0
-        let week = day * 7, month = day * 30, year = day * 365
+        let minute = 60.0
+        let hour = 3600.0
+        let day = 86_400.0
+        let week = day * 7
+        let month = day * 30
+        let year = day * 365
         func ago(_ value: Double, _ unit: String) -> String {
             let n = max(Int(value), 1)
             return "\(n) \(unit)\(n == 1 ? "" : "s") ago"
         }
         switch seconds {
         case ..<minute: return "just now"
-        case ..<hour:   return ago(seconds / minute, "minute")
-        case ..<day:    return ago(seconds / hour, "hour")
-        case ..<week:   return ago(seconds / day, "day")
-        case ..<month:  return ago(seconds / week, "week")
-        case ..<year:   return ago(seconds / month, "month")
-        default:        return ago(seconds / year, "year")
+        case ..<hour: return ago(seconds / minute, "minute")
+        case ..<day: return ago(seconds / hour, "hour")
+        case ..<week: return ago(seconds / day, "day")
+        case ..<month: return ago(seconds / week, "week")
+        case ..<year: return ago(seconds / month, "month")
+        default: return ago(seconds / year, "year")
         }
     }
 }

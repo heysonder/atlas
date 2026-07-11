@@ -1,12 +1,10 @@
 import SwiftUI
-import PipedKit
 
 struct PlayerInfoCommentsSection: View {
     let loader: CommentsLoader?
     let videoID: String
     let currentPlaybackSeconds: Double?
     let inline: Bool
-    @Binding var timestampPreviewIndex: TimestampCommentPreviewIndex
     let onTimestampTap: (Int) -> Void
 
     /// Inline mode presents the full list as a sheet over the still-playing
@@ -77,6 +75,7 @@ struct PlayerInfoCommentsSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func commentsNotice(_ text: String) -> some View {
@@ -96,7 +95,9 @@ struct PlayerInfoCommentsSection: View {
             selected.append(first)
         }
 
-        if let active = activeTimestampComment(in: comments), !selected.containsComment(active) {
+        if let active = loader.activeTimestampComment(at: currentPlaybackSeconds),
+            !selected.containsComment(active)
+        {
             selected.append(active)
         }
 
@@ -105,12 +106,6 @@ struct PlayerInfoCommentsSection: View {
         }
 
         return Array(selected.prefix(2))
-    }
-
-    private func activeTimestampComment(in comments: [CommentDisplay]) -> CommentDisplay? {
-        guard let currentPlaybackSeconds, currentPlaybackSeconds.isFinite else { return nil }
-        timestampPreviewIndex.updateIfNeeded(comments)
-        return timestampPreviewIndex.activeComment(at: Int(currentPlaybackSeconds.rounded(.down)))
     }
 
     private var allCommentsSheetButton: some View {
@@ -126,6 +121,7 @@ struct PlayerInfoCommentsSection: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(.tint)
             .padding(.top, 2)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -144,60 +140,15 @@ struct PlayerInfoCommentsSection: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(.tint)
             .padding(.top, 2)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-private extension [CommentDisplay] {
-    func containsComment(_ comment: CommentDisplay) -> Bool {
+extension [CommentDisplay] {
+    fileprivate func containsComment(_ comment: CommentDisplay) -> Bool {
         contains { $0.id == comment.id }
-    }
-}
-
-struct TimestampCommentPreviewIndex {
-    private struct Entry {
-        let comment: CommentDisplay
-        let timestamp: CommentTimestamp
-        let commentIndex: Int
-    }
-
-    private var signature = ""
-    private var entries: [Entry] = []
-    private let activeWindow = 10
-
-    mutating func updateIfNeeded(_ comments: [CommentDisplay]) {
-        let newSignature = signature(for: comments)
-        guard newSignature != signature else { return }
-        signature = newSignature
-        entries = comments.enumerated().flatMap { index, comment in
-            comment.timestamps.map { Entry(comment: comment, timestamp: $0, commentIndex: index) }
-        }
-        .sorted {
-            if $0.timestamp.seconds == $1.timestamp.seconds {
-                return $0.commentIndex < $1.commentIndex
-            }
-            return $0.timestamp.seconds < $1.timestamp.seconds
-        }
-    }
-
-    func activeComment(at playhead: Int) -> CommentDisplay? {
-        var best: Entry?
-        for entry in entries {
-            if entry.timestamp.seconds > playhead { break }
-            guard playhead < entry.timestamp.seconds + activeWindow else { continue }
-            if best == nil
-                || entry.timestamp.seconds > best!.timestamp.seconds
-                || (entry.timestamp.seconds == best!.timestamp.seconds
-                    && entry.commentIndex < best!.commentIndex) {
-                best = entry
-            }
-        }
-        return best?.comment
-    }
-
-    private func signature(for comments: [CommentDisplay]) -> String {
-        guard let first = comments.first else { return "empty" }
-        return "\(comments.count)|\(first.id)|\(comments.last?.id ?? "")"
     }
 }

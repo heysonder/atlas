@@ -1,6 +1,5 @@
 name: Atlas
 options:
-  bundleIdPrefix: com.chasemarshall
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -62,7 +61,6 @@ targets:
       - path: AtlasTests
     dependencies:
       - target: Atlas
-      - package: PipedKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.cmf.atlas.tests

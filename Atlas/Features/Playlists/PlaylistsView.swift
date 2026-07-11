@@ -1,13 +1,14 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct PlaylistsView: View {
-    @Environment(\.modelContext) private var context
-    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \Playlist.createdAt, order: .reverse) private var playlists: [Playlist]
 
     @State private var creating = false
     @State private var newName = ""
+    @State private var creationError: String?
 
     var body: some View {
         Group {
@@ -20,7 +21,7 @@ struct PlaylistsView: View {
                     Button("New Playlist") { creating = true }
                         .buttonStyle(.borderedProminent)
                 }
-            } else if hSize == .regular {
+            } else if horizontalSizeClass == .regular {
                 AdaptiveGrid(minCardWidth: 300) {
                     ForEach(playlists) { playlist in
                         NavigationLink {
@@ -30,7 +31,9 @@ struct PlaylistsView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            Button(role: .destructive) { context.delete(playlist) } label: {
+                            Button(role: .destructive) {
+                                PlaylistStore.delete(playlist, in: modelContext)
+                            } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
@@ -60,44 +63,77 @@ struct PlaylistsView: View {
             TextField("Name", text: $newName)
             Button("Cancel", role: .cancel) { newName = "" }
             Button("Create") { create() }
+                .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .alert(
+            "Playlist Not Created",
+            isPresented: Binding(
+                get: { creationError != nil },
+                set: { if !$0 { creationError = nil } })
+        ) {
+            Button("OK", role: .cancel) { creationError = nil }
+        } message: {
+            Text(creationError ?? "")
         }
     }
 
     private func create() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         newName = ""
-        guard !name.isEmpty else { return }
-        context.insert(Playlist(name: name))
+        guard PlaylistStore.createPlaylist(named: name, in: modelContext) != nil else {
+            creationError =
+                "Atlas couldn’t create that playlist. The name may already exist or a storage limit was reached."
+            return
+        }
     }
 
     private func delete(_ offsets: IndexSet) {
-        for index in offsets { context.delete(playlists[index]) }
+        for index in offsets {
+            PlaylistStore.delete(playlists[index], in: modelContext)
+        }
     }
 }
 
 /// One playlist as a horizontal row, shared by the iPhone `List` and iPad grid.
 private struct PlaylistRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let playlist: Playlist
+
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 12) {
-            PlaylistThumb(playlist: playlist)
+        if dynamicTypeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 2) {
-                Text(playlist.name).font(.body.weight(.medium)).lineLimit(1)
-                Text("\(playlist.videos.count) video\(playlist.videos.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.secondary)
+                PlaylistThumbnail(playlist: playlist)
+                details
             }
-            Spacer(minLength: 0)
+        } else {
+            HStack(spacing: 12) {
+                PlaylistThumbnail(playlist: playlist)
+                details
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(playlist.name)
+                .font(.body.weight(.medium))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            Text("\(playlist.videos.count) video\(playlist.videos.count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
 
 /// Small stacked-thumbnail preview of a playlist's first video.
-private struct PlaylistThumb: View {
+private struct PlaylistThumbnail: View {
     let playlist: Playlist
     var body: some View {
         let first = playlist.orderedVideos.first
-        Thumbnail(url: first?.thumbnailURL)
-            .aspectRatio(16/9, contentMode: .fill)
+        Thumbnail(url: first?.thumbnailURL, networkScope: .selectedInstance)
+            .aspectRatio(16 / 9, contentMode: .fill)
             .frame(width: 84, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .overlay(alignment: .bottomTrailing) {
@@ -108,92 +144,6 @@ private struct PlaylistThumb: View {
                     .foregroundStyle(.white)
                     .padding(3)
             }
-    }
-}
-
-struct PlaylistDetailView: View {
-    @Bindable var playlist: Playlist
-
-    @Environment(AppModel.self) private var app
-    @Environment(\.modelContext) private var context
-    @Environment(\.horizontalSizeClass) private var hSize
-
-    var body: some View {
-        Group {
-            if playlist.videos.isEmpty {
-                ContentUnavailableView("Empty playlist", systemImage: "music.note.list",
-                    description: Text("Long-press a video anywhere and choose Add to Playlist."))
-            } else if hSize == .regular {
-                AdaptiveGrid {
-                    ForEach(playlist.orderedVideos) { video in
-                        Button { app.playPlaylistVideo(video) } label: {
-                            PlaylistVideoRow(video: video).libraryCard()
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: playRequest(for: video))
-                            Button(role: .destructive) { context.delete(video) } label: {
-                                Label("Remove", systemImage: "trash")
-                            }
-                        }
-                    }
-                }
-            } else {
-                List {
-                    ForEach(playlist.orderedVideos) { video in
-                        Button { app.playPlaylistVideo(video) } label: {
-                            PlaylistVideoRow(video: video)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: playRequest(for: video))
-                        }
-                    }
-                    .onDelete(perform: removeVideos)
-                }
-            }
-        }
-        .navigationTitle(playlist.name)
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func removeVideos(_ offsets: IndexSet) {
-        let ordered = playlist.orderedVideos
-        for index in offsets { context.delete(ordered[index]) }
-    }
-
-    private func playRequest(for video: PlaylistVideo) -> PlayRequest {
-        PlayRequest(videoID: video.videoID, title: video.title,
-                    uploader: video.uploader, thumbnail: video.thumbnailURL)
-    }
-}
-
-/// One playlist video as a horizontal row, shared by the iPhone `List` and the
-/// iPad card grid.
-private struct PlaylistVideoRow: View {
-    let video: PlaylistVideo
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Thumbnail(url: video.thumbnailURL)
-                    .aspectRatio(16/9, contentMode: .fill)
-                    .frame(width: 120, height: 68)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                let d = Format.duration(video.duration)
-                if !d.isEmpty {
-                    Text(d).font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(.black.opacity(0.75), in: Capsule())
-                        .foregroundStyle(.white).padding(5)
-                }
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(video.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                if let uploader = video.uploader {
-                    Text(uploader).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-        }
+            .accessibilityHidden(true)
     }
 }

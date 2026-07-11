@@ -8,6 +8,13 @@ enum SearchHistoryStore {
         guard let display = SearchEntry.displayText(raw) else { return nil }
         let key = SearchEntry.normalize(display)
         guard !key.isEmpty else { return nil }
+        do {
+            try PersistedMetadataPolicy.requireIdentifier(key, field: "search.query")
+            try PersistedMetadataPolicy.requireText(display, field: "search.displayQuery")
+            try PersistedMetadataPolicy.requireFiniteDate(now, field: "search.lastSearchedAt")
+        } catch {
+            return nil
+        }
 
         var descriptor = FetchDescriptor<SearchEntry>(
             predicate: #Predicate { $0.query == key })
@@ -24,6 +31,10 @@ enum SearchHistoryStore {
             return nil
         }
 
+        guard let count = try? context.fetchCount(FetchDescriptor<SearchEntry>()),
+            count < PersistedMetadataPolicy.maximumSearches,
+            PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context)
+        else { return nil }
         let entry = SearchEntry(query: key, displayQuery: display, lastSearchedAt: now)
         context.insert(entry)
         return entry

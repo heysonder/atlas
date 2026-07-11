@@ -4,6 +4,28 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+*.xcarchive
+*.xcresult
+*.ipa
+
+# Local configuration and signing material
+.env
+.env.*
+!.env.example
+*.cer
+*.csr
+*.key
+*.mobileprovision
+*.p12
+
+# Editors and local patch artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.orig
+*.rej
 
 # Codex local workspace state
 .codex/

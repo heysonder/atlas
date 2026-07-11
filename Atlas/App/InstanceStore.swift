@@ -1,4 +1,5 @@
 import Foundation
+import PipedKit
 import Security
 import os
 
@@ -19,9 +20,10 @@ struct KeychainInstanceStore: InstanceSecureStoring {
 
         var result: AnyObject?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8),
-              !value.isEmpty else { return nil }
+            let data = result as? Data,
+            let value = String(data: data, encoding: .utf8),
+            !value.isEmpty
+        else { return nil }
         return value
     }
 
@@ -52,7 +54,7 @@ struct KeychainInstanceStore: InstanceSecureStoring {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
         ]
     }
 }
@@ -73,12 +75,14 @@ struct InstanceStore {
     func load() -> String {
         let candidates = [
             defaults.string(forKey: Self.defaultsKey),
-            secureStore.loadInstanceURL()
+            secureStore.loadInstanceURL(),
         ].compactMap { $0 }
 
-        if let resolved = candidates
+        if let resolved =
+            candidates
             .map(Self.normalize)
-            .first(where: Self.isValidInstanceURL) {
+            .first(where: Self.isValidInstanceURL)
+        {
             save(resolved)
             return resolved
         }
@@ -117,8 +121,9 @@ struct InstanceStore {
         while value.hasSuffix("/") { value.removeLast() }
         let lower = value.lowercased()
         if lower.contains("://"),
-           !lower.hasPrefix("http://"),
-           !lower.hasPrefix("https://") {
+            !lower.hasPrefix("http://"),
+            !lower.hasPrefix("https://")
+        {
             return value
         }
         if !lower.hasPrefix("http://") && !lower.hasPrefix("https://") {
@@ -128,67 +133,7 @@ struct InstanceStore {
     }
 
     static func isValidInstanceURL(_ raw: String) -> Bool {
-        guard let url = URL(string: normalize(raw)),
-              let scheme = url.scheme?.lowercased(),
-              let host = url.host,
-              !host.isEmpty else { return false }
-
-        switch scheme {
-        case "https":
-            return true
-        case "http":
-            return isPlainHTTPAllowedHost(host)
-        default:
-            return false
-        }
-    }
-
-    private static func isPlainHTTPAllowedHost(_ host: String) -> Bool {
-        var normalizedHost = host
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-            .lowercased()
-
-        while normalizedHost.hasSuffix(".") {
-            normalizedHost.removeLast()
-        }
-
-        guard !normalizedHost.isEmpty else { return false }
-        if normalizedHost == "localhost" || normalizedHost == "0.0.0.0" {
-            return true
-        }
-        if isPrivateIPv4Host(normalizedHost) || isPrivateIPv6Host(normalizedHost) {
-            return true
-        }
-
-        return !normalizedHost.contains(".") && !normalizedHost.contains(":")
-    }
-
-    private static func isPrivateIPv4Host(_ host: String) -> Bool {
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return false }
-
-        let octets = parts.compactMap { Int($0) }
-        guard octets.count == 4,
-              octets.allSatisfy({ (0...255).contains($0) }) else { return false }
-
-        let first = octets[0]
-        let second = octets[1]
-        return first == 10
-            || first == 127
-            || (first == 172 && (16...31).contains(second))
-            || (first == 192 && second == 168)
-            || (first == 169 && second == 254)
-    }
-
-    private static func isPrivateIPv6Host(_ host: String) -> Bool {
-        guard host.contains(":") else { return false }
-        if host == "::1" { return true }
-
-        guard let firstSegment = host.split(separator: ":", omittingEmptySubsequences: false).first,
-              let firstValue = UInt16(firstSegment, radix: 16) else { return false }
-
-        return (0xfc00...0xfdff).contains(firstValue)
-            || (0xfe80...0xfebf).contains(firstValue)
+        guard let url = URL(string: normalize(raw)) else { return false }
+        return (try? InstanceNetworkContext(instanceURL: url)) != nil
     }
 }

@@ -1,6 +1,6 @@
-import SwiftUI
-import SwiftData
 import PipedKit
+import SwiftData
+import SwiftUI
 
 /// "Related" videos beneath the embedded player's info column, built from the
 /// `relatedStreams` the /streams response already carries — no extra fetch.
@@ -15,7 +15,9 @@ struct PlayerRelatedSection: View {
     let onPlay: (StreamItem) -> Void
 
     private var videos: [StreamItem] {
-        app.filteringShorts(related.filter { $0.isVideo && $0.videoID != currentVideoID })
+        StreamItemIdentity.firstOccurrences(
+            in: app.filteringShorts(
+                related.filter { $0.isVideo && $0.videoID != currentVideoID }))
     }
 
     var body: some View {
@@ -26,6 +28,7 @@ struct PlayerRelatedSection: View {
                 HStack(spacing: 6) {
                     Text("Related")
                         .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
                     Text("\(videos.count)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -33,9 +36,10 @@ struct PlayerRelatedSection: View {
 
                 LazyVStack(alignment: .leading, spacing: 20) {
                     ForEach(videos) { item in
-                        VideoRow(item: item,
-                                 watched: item.videoID.map(watchedIDs.contains) ?? false,
-                                 onPlay: { onPlay(item) })
+                        VideoRow(
+                            item: item,
+                            watched: item.videoID.map(watchedIDs.contains) ?? false,
+                            onPlay: { onPlay(item) })
                     }
                 }
             }

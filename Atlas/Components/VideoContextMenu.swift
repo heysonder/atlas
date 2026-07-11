@@ -1,6 +1,6 @@
-import SwiftUI
-import SwiftData
 import PipedKit
+import SwiftData
+import SwiftUI
 
 /// The long-press menu shown on a video card: download for offline viewing and
 /// add to a playlist. Shared by every card list via `.videoContextMenu(item)`.
@@ -18,6 +18,7 @@ struct VideoContextMenu: ViewModifier {
     @AppStorage(FeedMode.storageKey) private var feedMode: FeedMode = .subscriptions
     @State private var creatingNew = false
     @State private var newName = ""
+    @State private var playlistError: String?
 
     /// What the menu needs to render, resolved at menu-open time.
     private struct MenuData {
@@ -32,7 +33,10 @@ struct VideoContextMenu: ViewModifier {
             .contextMenu {
                 if item.isVideo {
                     let data = fetchMenuData()
-                    if feedMode.isPersonalized { feedbackButtons(currentSignal: data.signal); Divider() }
+                    if feedMode.isPersonalized {
+                        feedbackButtons(currentSignal: data.signal)
+                        Divider()
+                    }
                     queueButtons(download: data.download)
                     Divider()
                     downloadButton(download: data.download)
@@ -49,6 +53,17 @@ struct VideoContextMenu: ViewModifier {
                 TextField("Name", text: $newName)
                 Button("Cancel", role: .cancel) { newName = "" }
                 Button("Create") { createAndAdd() }
+                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .alert(
+                "Playlist Not Updated",
+                isPresented: Binding(
+                    get: { playlistError != nil },
+                    set: { if !$0 { playlistError = nil } })
+            ) {
+                Button("OK", role: .cancel) { playlistError = nil }
+            } message: {
+                Text(playlistError ?? "")
             }
     }
 
@@ -56,8 +71,10 @@ struct VideoContextMenu: ViewModifier {
     /// plus this video's feedback and download rows by unique id.
     private func fetchMenuData() -> MenuData {
         var data = MenuData()
-        data.playlists = (try? context.fetch(FetchDescriptor<Playlist>(
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))) ?? []
+        data.playlists =
+            (try? context.fetch(
+                FetchDescriptor<Playlist>(
+                    sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))) ?? []
         guard let videoID = item.videoID else { return data }
         data.signal = FeedbackStore.signal(for: videoID, in: context)
         var downloadFetch = FetchDescriptor<DownloadedVideo>(
@@ -69,14 +86,20 @@ struct VideoContextMenu: ViewModifier {
 
     /// "Suggest more / less" — each toggles off if it's already the current state.
     @ViewBuilder private func feedbackButtons(currentSignal sig: Int) -> some View {
-        Button("Suggest More",
-               systemImage: sig > 0 ? "hand.thumbsup.fill" : "hand.thumbsup") {
+        Button(
+            "Suggest More",
+            systemImage: sig > 0 ? "hand.thumbsup.fill" : "hand.thumbsup"
+        ) {
             FeedbackStore.set(sig > 0 ? 0 : 1, for: item, in: context)
         }
-        Button("Suggest Less",
-               systemImage: sig < 0 ? "hand.thumbsdown.fill" : "hand.thumbsdown") {
+        .accessibilityValue(sig > 0 ? "Selected" : "Not selected")
+        Button(
+            "Suggest Less",
+            systemImage: sig < 0 ? "hand.thumbsdown.fill" : "hand.thumbsdown"
+        ) {
             FeedbackStore.set(sig < 0 ? 0 : -1, for: item, in: context)
         }
+        .accessibilityValue(sig < 0 ? "Selected" : "Not selected")
     }
 
     @ViewBuilder private func queueButtons(download: DownloadedVideo?) -> some View {
@@ -110,15 +133,20 @@ struct VideoContextMenu: ViewModifier {
 
     private func add(to playlist: Playlist) {
         guard let snapshot = PlaylistVideoSnapshot(item: item) else { return }
-        PlaylistStore.add(snapshot, to: playlist, in: context)
+        if PlaylistStore.add(snapshot, to: playlist, in: context) == .missing {
+            playlistError = "Atlas couldn’t add this video. Check available storage and try again."
+        }
     }
 
     private func createAndAdd() {
         let name = newName.trimmingCharacters(in: .whitespaces)
         newName = ""
         guard !name.isEmpty else { return }
-        guard let playlist = PlaylistStore.createPlaylist(named: name, in: context) else { return }
-        add(to: playlist)
+        guard let snapshot = PlaylistVideoSnapshot(item: item) else { return }
+        if PlaylistStore.createPlaylist(named: name, adding: snapshot, in: context) != .added {
+            playlistError =
+                "Atlas couldn’t create that playlist. The name may already exist or a storage limit was reached."
+        }
     }
 }
 

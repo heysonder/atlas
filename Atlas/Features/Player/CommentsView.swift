@@ -1,94 +1,4 @@
 import SwiftUI
-import Observation
-import PipedKit
-
-/// Loads and paginates a video's comments. Shared between the preview shown in
-/// `PlayerInfoSheet` and the full `CommentsView` that's pushed from it, so the
-/// list is fetched once and survives navigation.
-@MainActor
-@Observable
-final class CommentsLoader {
-    let client: PipedClient
-    let videoID: String
-
-    private(set) var comments: [CommentDisplay] = []
-    private(set) var nextpage: String?
-    private(set) var disabled = false
-    private(set) var commentCount = -1
-    private(set) var didLoad = false
-    private(set) var isLoading = false
-    /// The initial fetch failed — distinct from "loaded and empty", so the UI
-    /// can offer a retry instead of a permanent "No comments yet".
-    private(set) var loadFailed = false
-    /// Bumped on every completed page fetch, so pagination `.task(id:)` re-keys
-    /// even when a page adds no new comments but carries a fresh token.
-    private(set) var pageFetchCount = 0
-
-    init(client: PipedClient, videoID: String) {
-        self.client = client
-        self.videoID = videoID
-    }
-
-    /// Fetches the first page; a no-op once it has succeeded.
-    func loadInitial() async {
-        guard !didLoad, !isLoading else { return }
-        isLoading = true
-        defer { isLoading = false }
-        if let page = try? await client.comments(videoID: videoID) {
-            comments = (page.comments ?? []).map(CommentDisplay.init)
-            nextpage = page.nextpage
-            disabled = page.disabled ?? false
-            commentCount = page.commentCount ?? -1
-            didLoad = true
-            loadFailed = false
-        } else {
-            loadFailed = true
-        }
-        pageFetchCount += 1
-    }
-
-    /// Appends the next page when one exists. On failure it stops paginating
-    /// rather than dropping the comments already shown.
-    func loadMore() async {
-        guard let token = nextpage, !isLoading else { return }
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            let page = try await client.commentsNextPage(videoID: videoID, nextpage: token)
-            comments.append(contentsOf: (page.comments ?? []).map(CommentDisplay.init))
-            nextpage = page.nextpage
-        } catch {
-            nextpage = nil
-        }
-        pageFetchCount += 1
-    }
-}
-
-/// UI-facing comment data with HTML stripping and timestamp extraction done once
-/// when comments are loaded, not on every SwiftUI render or playback-time tick.
-struct CommentDisplay: Identifiable {
-    let comment: Comment
-    let plainText: String
-    let timestamps: [CommentTimestamp]
-
-    init(_ comment: Comment) {
-        self.comment = comment
-        plainText = HTMLText.plain(comment.commentText ?? "")
-        timestamps = CommentTimestamp.extract(from: plainText)
-    }
-
-    var id: String { comment.id }
-    var thumbnail: String? { comment.thumbnail }
-    var author: String? { comment.author }
-    var commentedTime: String? { comment.commentedTime }
-    var repliesPage: String? { comment.repliesPage }
-    var hearted: Bool? { comment.hearted }
-    var likeCount: Int? { comment.likeCount }
-    var pinned: Bool? { comment.pinned }
-    var verified: Bool? { comment.verified }
-    var replyCount: Int? { comment.replyCount }
-    var hasReplies: Bool { comment.hasReplies }
-}
 
 /// The full, scrollable comment list, pushed from the info sheet's "View all
 /// comments" row. Reuses the loader the sheet already populated.
@@ -112,6 +22,10 @@ struct CommentsView: View {
                     .frame(maxWidth: .infinity)
                 } else if loader.comments.isEmpty && loader.didLoad {
                     unavailable("No comments yet", "bubble.left")
+                } else if !loader.didLoad {
+                    ProgressView("Loading comments…")
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
                 } else {
                     ForEach(loader.comments) { comment in
                         CommentRow(
@@ -121,8 +35,21 @@ struct CommentsView: View {
                             onTimestampTap: onTimestampTap)
                         Divider()
                     }
-                    if loader.nextpage != nil {
-                        ProgressView()
+                    if let paginationError = loader.paginationError {
+                        VStack(spacing: 8) {
+                            Label("Couldn’t load more comments", systemImage: "wifi.exclamationmark")
+                                .font(.callout.weight(.semibold))
+                            Text(paginationError)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("Retry") { Task { await loader.retryLoadMore() } }
+                                .buttonStyle(.bordered)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    } else if loader.nextPageToken != nil {
+                        ProgressView("Loading more comments…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             // Keyed on the fetch counter (not the comment
@@ -143,129 +70,5 @@ struct CommentsView: View {
         ContentUnavailableView(title, systemImage: symbol)
             .frame(maxWidth: .infinity)
             .padding(.top, 60)
-    }
-}
-
-/// A single comment: avatar, author + metadata, body, like count, and an
-/// expandable replies thread (top-level comments only).
-struct CommentRow: View {
-    let comment: CommentDisplay
-    let client: PipedClient
-    let videoID: String
-    var isReply = false
-    var onTimestampTap: (Int) -> Void = { _ in }
-
-    @State private var replies: [CommentDisplay] = []
-    @State private var showReplies = false
-    @State private var loadingReplies = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                Avatar(url: comment.thumbnail, size: isReply ? 28 : 36)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    metaLine
-
-                    TimestampedText(
-                        text: comment.plainText,
-                        timestamps: comment.timestamps,
-                        onTimestampTap: onTimestampTap)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-
-                    footer
-                }
-                Spacer(minLength: 0)
-            }
-
-            if showReplies {
-                ForEach(replies) { reply in
-                    CommentRow(
-                        comment: reply,
-                        client: client,
-                        videoID: videoID,
-                        isReply: true,
-                        onTimestampTap: onTimestampTap)
-                    .padding(.leading, 30)
-                }
-            }
-        }
-    }
-
-    private var metaLine: some View {
-        HStack(spacing: 4) {
-            if comment.pinned == true {
-                Image(systemName: "pin.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Text(comment.author ?? "Unknown")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            if comment.verified == true {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if let time = comment.commentedTime, !time.isEmpty {
-                Text("· \(time)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder private var footer: some View {
-        HStack(spacing: 16) {
-            if let likes = Format.compact(comment.likeCount), (comment.likeCount ?? 0) > 0 {
-                Label(likes, systemImage: "hand.thumbsup")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if comment.hearted == true {
-                Image(systemName: "heart.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.pink)
-            }
-
-            if !isReply, comment.hasReplies {
-                Button {
-                    Task { await toggleReplies() }
-                } label: {
-                    HStack(spacing: 4) {
-                        if loadingReplies {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: showReplies ? "chevron.up" : "chevron.down")
-                        }
-                        Text(repliesLabel)
-                    }
-                    .font(.caption2.weight(.semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-            }
-        }
-        .padding(.top, 1)
-    }
-
-    private var repliesLabel: String {
-        if showReplies { return "Hide replies" }
-        let n = comment.replyCount ?? 0
-        return "\(n) repl\(n == 1 ? "y" : "ies")"
-    }
-
-    private func toggleReplies() async {
-        if showReplies { showReplies = false; return }
-        if replies.isEmpty, let token = comment.repliesPage {
-            loadingReplies = true
-            let page = try? await client.commentsNextPage(videoID: videoID, nextpage: token)
-            replies = (page?.comments ?? []).map(CommentDisplay.init)
-            loadingReplies = false
-        }
-        showReplies = true
     }
 }

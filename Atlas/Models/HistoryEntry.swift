@@ -15,9 +15,11 @@ final class HistoryEntry {
     /// Total video length (seconds), when known.
     var durationSeconds: Double = 0
 
-    init(videoID: String, title: String, uploader: String? = nil,
-         thumbnailURL: String? = nil, watchedAt: Date = .now,
-         positionSeconds: Double = 0, durationSeconds: Double = 0) {
+    init(
+        videoID: String, title: String, uploader: String? = nil,
+        thumbnailURL: String? = nil, watchedAt: Date = .now,
+        positionSeconds: Double = 0, durationSeconds: Double = 0
+    ) {
         self.videoID = videoID
         self.title = title
         self.uploader = uploader
@@ -39,29 +41,34 @@ final class HistoryEntry {
 }
 
 /// Memoizes the watched-ID set derived from the full history table. Playback
-/// bumps `positionSeconds`/`watchedAt` every second, invalidating any history
+/// bumps `positionSeconds`/`watchedAt` periodically, invalidating any history
 /// `@Query` — so views hold one of these in `@State` and read through it instead
 /// of re-filtering the whole table on every body evaluation. The set is rebuilt
-/// only when the table meaningfully changes: row count or the newest `watchedAt`
-/// (every write bumps `watchedAt`, so that pair tracks all mutations).
+/// only when the row count changes or a row crosses the watched threshold.
 @MainActor
 final class WatchedIDsMemo {
+    private static var membershipRevision = 0
+
     private var key: Key?
     private var cached: Set<String> = []
+    private(set) var rebuildCount = 0
 
     private struct Key: Equatable {
         var count: Int
-        var latestWatchedAt: Date?
+        var membershipRevision: Int
     }
 
-    /// `history` must be sorted by `watchedAt` descending (newest first), so the
-    /// first element carries the change signal.
     func ids(for history: [HistoryEntry]) -> Set<String> {
-        let key = Key(count: history.count, latestWatchedAt: history.first?.watchedAt)
+        let key = Key(count: history.count, membershipRevision: Self.membershipRevision)
         if key != self.key {
             self.key = key
             cached = Set(history.filter(\.isWatched).map(\.videoID))
+            rebuildCount += 1
         }
         return cached
+    }
+
+    static func noteMembershipChange() {
+        membershipRevision &+= 1
     }
 }

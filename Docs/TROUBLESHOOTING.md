@@ -129,13 +129,17 @@ If a download was in progress during a crash, it may be removed and should be re
 
 If Atlas cannot open the persistent SwiftData store, it launches with temporary storage and leaves existing on-disk data untouched.
 
-Use Backup & Data if the old store can be recovered later. Do not assume the data was deleted.
+Do not export from that temporary session as a recovery backup: it starts with
+an empty in-memory store and does not contain the inaccessible library. Preserve
+the app container, then recover from a backup created while the persistent store
+was healthy or diagnose the original store. Do not assume the data was deleted.
 
 ## Spotlight result plays the wrong path
 
 Atlas prefers a downloaded copy when present. If a video exists in both downloads and history, the Spotlight download entry should win so playback can work offline.
 
-If a stale Spotlight item remains, relaunching Atlas triggers a full reindex.
+If a stale Spotlight item remains, relaunching Atlas deletes its current and
+known legacy domains before rebuilding them from the local stores.
 
 ## Shortcut cannot resolve a video
 

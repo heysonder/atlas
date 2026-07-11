@@ -8,9 +8,26 @@
 PipedKit/
   Package.swift
   Sources/PipedKit/
-    PipedClient.swift
-    Models.swift
+    ChannelModels.swift
+    CommentModels.swift
     HTMLText.swift
+    HostAddressResolver.swift
+    InstanceNetworkContext.swift
+    LossyDecoding.swift
+    NetworkDestinationPolicy.swift
+    NetworkPolicyTypes.swift
+    NetworkRedirectPolicy.swift
+    PipedClient.swift
+    PipedError.swift
+    PipedID.swift
+    PipedInstance.swift
+    PolicyHTTPClient.swift
+    PolicySessionTransport.swift
+    SearchModels.swift
+    SponsorModels.swift
+    StreamModels.swift
+    VideoDetail+MediaSelection.swift
+    VideoModels.swift
 ```
 
 ## Client
@@ -29,6 +46,12 @@ The client uses an ephemeral bounded `URLSession`:
 - Resource timeout: 45 seconds.
 
 These limits are intentionally generous because `/streams` extraction can take several seconds on self-hosted instances.
+
+The network-policy types, destination policy, redirect policy, and policy HTTP
+client validate configured instances, requests, and redirects. Hosted instances
+require HTTPS. A local/private instance may use HTTP and may request local
+destinations; a public instance cannot redirect Atlas into local or otherwise
+forbidden address space.
 
 ## Endpoints
 
@@ -77,7 +100,7 @@ Important response models:
 
 - `StreamItem` - shared item shape for search, feed, channel uploads, and related videos.
 - `VideoDetail` - `/streams` detail payload.
-- `Stream` - video/audio stream metadata.
+- `MediaStream` - video/audio stream metadata.
 - `Subtitle`.
 - `VideoChapter`.
 - `SponsorSegment`.
@@ -107,7 +130,7 @@ The app relies on these helpers rather than duplicating string parsing in featur
 - `bestComposedSource`.
 - `preferredSubtitle`.
 
-`Stream` includes codec/container helpers:
+`MediaStream` includes codec/container helpers:
 
 - H.264 detection.
 - AV1 detection.

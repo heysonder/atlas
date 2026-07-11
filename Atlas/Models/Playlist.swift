@@ -34,8 +34,10 @@ final class PlaylistVideo {
     var addedAt: Date
     var playlist: Playlist?
 
-    init(videoID: String, title: String, uploader: String? = nil,
-         thumbnailURL: String? = nil, duration: Int = 0, addedAt: Date = .now) {
+    init(
+        videoID: String, title: String, uploader: String? = nil,
+        thumbnailURL: String? = nil, duration: Int = 0, addedAt: Date = .now
+    ) {
         self.videoID = videoID
         self.title = title
         self.uploader = uploader

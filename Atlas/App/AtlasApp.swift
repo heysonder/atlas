@@ -1,7 +1,7 @@
-import SwiftUI
-import SwiftData
 import AVFoundation
 import AppIntents
+import SwiftData
+import SwiftUI
 
 @main
 struct AtlasApp: App {
@@ -14,7 +14,9 @@ struct AtlasApp: App {
         let containerResult = Self.makeModelContainer()
         modelContainer = containerResult.container
         let appModel = AppModel(persistenceRecoveryMessage: containerResult.recoveryMessage)
-        let downloadManager = DownloadManager(modelContext: modelContainer.mainContext)
+        let downloadManager = DownloadManager(
+            modelContext: modelContainer.mainContext,
+            storageMode: containerResult.downloadStorageMode)
         _app = State(initialValue: appModel)
         _downloads = State(initialValue: downloadManager)
         configureAudioSession()
@@ -32,12 +34,13 @@ struct AtlasApp: App {
         }
     }
 
-    /// Give the shared cache (used by `AsyncImage` and the thumbnail prefetcher)
+    /// Give the shared cache (used by the policy-aware image pipeline and prefetcher)
     /// enough room to hold a deep scroll's worth of thumbnails, so prefetched
     /// images survive until their rows scroll into view instead of being evicted.
     private static func configureURLCache() {
-        URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024,
-                                   diskCapacity: 256 * 1024 * 1024)
+        URLCache.shared = URLCache(
+            memoryCapacity: 64 * 1024 * 1024,
+            diskCapacity: 256 * 1024 * 1024)
     }
 
     var body: some Scene {
@@ -52,6 +55,7 @@ struct AtlasApp: App {
     private struct ModelContainerResult {
         let container: ModelContainer
         let recoveryMessage: String?
+        let downloadStorageMode: DownloadStorageMode
     }
 
     /// Builds the SwiftData container without deleting the user's persistent
@@ -64,13 +68,16 @@ struct AtlasApp: App {
         do {
             return ModelContainerResult(
                 container: try ModelContainer(for: schema, configurations: [config]),
-                recoveryMessage: nil)
+                recoveryMessage: nil,
+                downloadStorageMode: .persistent)
         } catch {
             let memoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             if let fallback = try? ModelContainer(for: schema, configurations: [memoryConfig]) {
                 return ModelContainerResult(
                     container: fallback,
-                    recoveryMessage: "Atlas could not open its saved library, so it started with temporary storage. Your existing on-device data was left untouched.")
+                    recoveryMessage:
+                        "Atlas could not open its saved library, so it started with temporary storage. Your existing on-device data was left untouched.",
+                    downloadStorageMode: .recoveryReadOnly)
             }
             fatalError("Unrecoverable SwiftData error: \(error)")
         }

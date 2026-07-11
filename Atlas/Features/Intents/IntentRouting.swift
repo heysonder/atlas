@@ -1,6 +1,6 @@
 import Foundation
-import SwiftData
 import PipedKit
+import SwiftData
 
 /// A deferred action requested by Siri or an App Shortcut. The intent sets one of
 /// these on `AppModel`; `RootView` consumes it once the UI is alive and clears it.
@@ -120,23 +120,21 @@ enum IntentDataStore {
     /// such playlist exists yet).
     static func addVideo(_ video: VideoEntity, to entity: PlaylistEntity) -> AddResult {
         guard let context else { return .missing }
-        let playlist: Playlist
+        let snapshot = PlaylistVideoSnapshot(video: video)
+        let result: PlaylistStore.AddResult
         if entity.isNew {
-            // Reuse a same-named playlist if one was made in the meantime.
-            if let existing = PlaylistStore.playlist(named: entity.name, in: context) {
-                playlist = existing
-            } else {
-                playlist = Playlist(name: entity.name)
-                context.insert(playlist)
-            }
+            result = PlaylistStore.add(
+                snapshot,
+                toPlaylistNamed: entity.name,
+                in: context,
+                save: true)
         } else if let id = UUID(uuidString: entity.id), let existing = self.playlist(id: id) {
-            playlist = existing
+            result = PlaylistStore.add(snapshot, to: existing, in: context, save: true)
         } else {
             return .missing
         }
 
-        switch PlaylistStore.add(PlaylistVideoSnapshot(video: video), to: playlist,
-                                 in: context, save: true) {
+        switch result {
         case .added:
             return .added
         case .duplicate:

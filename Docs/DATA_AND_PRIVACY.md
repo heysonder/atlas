@@ -4,7 +4,17 @@ Atlas is local-first. Piped provides online video metadata and streams, but user
 
 ## Runtime settings
 
-Settings are stored in UserDefaults, except the Piped instance URL is also mirrored into Keychain.
+Settings are stored in UserDefaults. The Piped instance URL is mirrored into
+Keychain as well as UserDefaults so app and headless App Intent paths share the
+same selected instance. The Keychain item uses
+`AfterFirstUnlockThisDeviceOnly`: it becomes available after the device's first
+unlock and does not migrate to a different device from a backup. The UserDefaults
+copy is not secret storage.
+
+The app's bundled privacy manifest declares app-only UserDefaults access under
+Apple's `CA92.1` required reason. It also declares disk-space access under
+`E174.1`, which Atlas uses to avoid starting downloads that cannot fit. Atlas
+declares no tracking domains and no data collection in that manifest.
 
 Important keys:
 
@@ -54,7 +64,9 @@ Downloaded media lives in:
 Application Support/Downloads
 ```
 
-The directory and completed files are excluded from backups because media is large and re-downloadable.
+Atlas requests backup exclusion for the directory and completed files because
+media is large and re-downloadable. That resource-value update is best-effort;
+failure does not make a completed download unusable.
 
 `DownloadedVideo` stores file names instead of absolute URLs, because the app container path can change between launches.
 
@@ -64,11 +76,18 @@ Completed download files may include:
 - `{videoID}.thumb` - cached poster.
 - `{videoID}.captions.vtt` or `{videoID}.captions.ttml` - caption sidecar.
 
-At launch, `DownloadManager` removes orphaned `.mp4`, `.video.mp4`, and `.audio.m4a` files that are not claimed by completed `DownloadedVideo` rows.
+At launch, `DownloadManager` best-effort removes recognized orphaned download
+artifacts that are not claimed by completed `DownloadedVideo` rows. A file-system
+error can leave an orphan in place for a later cleanup attempt.
 
 ## Backups
 
 Library -> Settings -> Backup & Data exports a JSON file.
+
+The export is an ordinary, unencrypted JSON file written to Atlas's temporary
+directory and passed to the system share sheet. Its final destination and
+protection depend on the share target the user chooses. Treat it as sensitive:
+it contains viewing and interest data, and Atlas does not add backup encryption.
 
 The backup includes:
 
@@ -93,11 +112,39 @@ Downloads win when a video exists in both downloads and history because the down
 
 Spotlight entries are derived from local store data. They are rebuilt on launch and updated when downloads are added or removed.
 
-## Direct network calls
+## System surfaces and transient caches
 
-Most online traffic goes to the selected Piped instance.
+Atlas exposes selected local or derived data outside its own screens:
 
-Direct youtube.com collaborator lookup is the exception. It is off by default and only runs when the user enables:
+- Spotlight indexes recent history and completed downloads, including titles,
+  uploader names, and poster references.
+- App Intents and Shortcuts can query downloads, recent history, playlists, and
+  videos recently placed in the in-memory visible-video registry.
+- Now Playing surfaces can show the active video's title, creator, artwork, and
+  playback state on the Lock Screen, Control Center, CarPlay, and connected media
+  controls managed by the system.
+
+Atlas also keeps transient performance data: the session playback queue,
+stream-detail and recommendation working caches, in-flight request state, an
+in-memory decoded-image cache, and a shared URL cache that may use memory and disk.
+These are not library sync services, but cached network responses may persist
+until normal system or app cache eviction.
+
+## Network destinations
+
+Atlas sends API requests to the selected Piped instance. This includes search
+terms and video or channel identifiers used to fetch feeds, recommendations,
+stream metadata, comments, and SponsorBlock segments. Recommendation ranking and
+the library database remain local, but identifiers and queries derived from local
+signals are sent when Atlas asks Piped for candidates.
+
+Piped responses contain media, HLS, thumbnail/avatar, and caption URLs. Atlas
+contacts those referenced hosts directly for playback, images, prefetching, Now
+Playing artwork, and downloads. A self-hosted Piped instance therefore does not
+proxy all runtime traffic.
+
+Direct youtube.com collaborator lookup is another optional destination. It is
+off by default and only runs when the user enables:
 
 ```text
 Library -> Settings -> Privacy -> Resolve Collaborators via YouTube
@@ -111,6 +158,14 @@ SponsorBlock data is requested through the selected Piped instance. Atlas sends 
 
 Atlas does not auto-skip. It only shows a user-controlled skip button.
 
+## Diagnostics
+
+Playback and download diagnostics use Apple's unified `Logger`. Video IDs are
+marked private and hash-masked. Bounded event/source labels, numeric playback or
+byte measurements, and error domains/codes are logged as public to keep failure
+reports actionable. Atlas does not intentionally log full media URLs, search
+queries, titles, or backup contents.
+
 ## Persistence recovery
 
 If Atlas cannot open the on-disk SwiftData store, it launches with temporary in-memory storage and shows:
@@ -120,3 +175,8 @@ Atlas could not open its saved library, so it started with temporary storage. Yo
 ```
 
 This protects existing data from being overwritten or silently deleted.
+
+The temporary store starts empty; it is not a recovered copy of the inaccessible
+store. Do not export from that recovery session expecting the old library. Keep
+the app container intact and recover from a JSON backup made while the persistent
+store was healthy, or diagnose the original store before attempting migration.

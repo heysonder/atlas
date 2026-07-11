@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// A YouTube-style video row: thumbnail with duration pill, title, and meta line.
 /// Tapping the thumbnail/title plays; tapping the avatar/channel name opens the
@@ -26,19 +26,20 @@ struct VideoRow: View {
 
     private var channelID: String? { item.uploaderChannelID ?? channelIDFallback }
     private var creator: CreatorSummary {
-        CreatorSummary(primaryName: item.uploaderName,
-                       avatarURL: item.uploaderAvatar ?? avatarFallback,
-                       channelID: channelID,
-                       isVerified: item.uploaderVerified ?? false,
-                       collaborators: collaborators)
+        CreatorSummary(
+            primaryName: item.uploaderName,
+            avatarURL: item.uploaderAvatar ?? avatarFallback,
+            channelID: channelID,
+            isVerified: item.uploaderVerified ?? false,
+            collaborators: collaborators)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: onPlay) {
                 ZStack(alignment: .bottomTrailing) {
-                    Thumbnail(url: item.thumbnail)
-                        .aspectRatio(16/9, contentMode: .fill)
+                    Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
+                        .aspectRatio(16 / 9, contentMode: .fill)
                         .frame(maxWidth: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .opacity(watched ? 0.55 : 1)
@@ -51,13 +52,15 @@ struct VideoRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(item.displayTitle)
+            .accessibilityValue(playbackAccessibilityValue)
 
             HStack(alignment: .top, spacing: 10) {
                 CreatorChannelControl(summary: creator) {
-                    CreatorAvatarCluster(avatarURL: creator.avatarURL,
-                                         collaboratorAvatarURLs: creator.collaborators.map(\.avatarURL),
-                                         additionalCount: creator.additionalCount,
-                                         size: 34)
+                    CreatorAvatarCluster(
+                        avatarURL: creator.avatarURL,
+                        collaboratorAvatarURLs: creator.collaborators.map(\.avatarURL),
+                        additionalCount: creator.additionalCount,
+                        size: 34)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     title
@@ -81,6 +84,7 @@ struct VideoRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder private var playbackStatePill: some View {
@@ -92,7 +96,7 @@ struct VideoRow: View {
             ThumbnailChip {
                 Text(d)
             }
-                .padding(8)
+            .padding(8)
         }
     }
 
@@ -112,6 +116,7 @@ struct VideoRow: View {
                 CreatorChannelControl(summary: rowCreator) {
                     Text(name)
                 }
+                .accessibilityHidden(rowCreator.hasMultipleCreators || rowCreator.channelID != nil)
                 if !meta.isEmpty {
                     Text("·")
                     Text(meta)
@@ -125,11 +130,25 @@ struct VideoRow: View {
         .lineLimit(1)
     }
 
+    private var playbackAccessibilityValue: String {
+        var values: [String] = []
+        if watched { values.append("Watched") }
+        if item.isLive || resolvedIsLive == true {
+            values.append("Live")
+        } else {
+            let duration = Format.duration(item.duration)
+            if !duration.isEmpty { values.append("Duration \(duration)") }
+        }
+        if item.isShort == true { values.append("Short") }
+        return values.joined(separator: ", ")
+    }
+
     private func loadResolvedMetadataIfNeeded() async {
         let shouldLoadCollaborators = collaborators.isEmpty && creator.hasMultipleCreators
         let shouldResolveLiveStatus = item.needsLiveStatusResolution
         guard shouldLoadCollaborators || shouldResolveLiveStatus,
-              let videoID = item.videoID else { return }
+            let videoID = item.videoID
+        else { return }
         guard let detail = try? await app.resolveStreamThrottled(videoID) else { return }
 
         if shouldResolveLiveStatus {
@@ -137,13 +156,16 @@ struct VideoRow: View {
         }
 
         if shouldLoadCollaborators {
-            var loaded = detail.creators?.creatorChannels(verifiedChannelID: detail.channelID,
-                                                          uploaderVerified: detail.uploaderVerified ?? false) ?? []
+            var loaded =
+                detail.creators?.creatorChannels(
+                    verifiedChannelID: detail.channelID,
+                    uploaderVerified: detail.uploaderVerified ?? false) ?? []
 
             // The direct-to-YouTube scrape is opt-in; the Piped-side creators
             // above are always fine to use.
             if resolveCollaboratorsViaYouTube,
-               loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount) {
+                loaded.needsCreatorFallback(expectedAdditionalCount: creator.additionalCount)
+            {
                 loaded = loaded.enriched(with: await YouTubeCollaborators.channels(for: videoID))
             }
 

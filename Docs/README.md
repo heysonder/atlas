@@ -11,7 +11,7 @@ Atlas is a native iOS YouTube client built on Piped. This docs folder explains w
 | [PLAYBACK.md](PLAYBACK.md) | Stream resolution, AVPlayer setup, fallback behavior, queueing, SponsorBlock, captions, and player surfaces. |
 | [RECOMMENDATIONS.md](RECOMMENDATIONS.md) | Home feed modes and the on-device For You ranking system. |
 | [DATA_AND_PRIVACY.md](DATA_AND_PRIVACY.md) | Persisted data, downloads, backups, instance storage, privacy-sensitive network calls, and recovery behavior. |
-| [SHORTCUTS_AND_SPOTLIGHT.md](SHORTCUTS_AND_SPOTLIGHT.md) | Siri, App Shortcuts, App Entities, on-screen videos, and Spotlight indexing. |
+| [SHORTCUTS_AND_SPOTLIGHT.md](SHORTCUTS_AND_SPOTLIGHT.md) | Siri, App Shortcuts, App Entities, visible-result resolution, and Spotlight indexing. |
 | [PIPEDKIT.md](PIPEDKIT.md) | Piped API client, models, stream-selection helpers, comments, SponsorBlock, and error handling. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Setup, build/test commands, generated project rules, and development workflow. |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common runtime, playback, download, data, and build failures. |
@@ -33,7 +33,7 @@ Atlas is a native iOS YouTube client built on Piped. This docs folder explains w
 - `Atlas/Components/` - shared SwiftUI UI components.
 - `Atlas/Models/` - SwiftData models, stores, backup, feed settings, and local app data types.
 - `Atlas/Support/` - non-UI helpers such as formatting, loading state, thumbnail prefetching, and collaborator lookup.
-- `PipedKit/` - Piped API client, Codable response models, stream helpers, ID parsing, and HTML text cleanup.
+- `PipedKit/` - Piped API client, network destination policy, Codable response models, stream helpers, ID parsing, and HTML text cleanup.
 - `AtlasTests/` - app-level behavior tests.
 - `Docs/Screenshots/` - screenshots used by README/docs.
 

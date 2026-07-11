@@ -1,5 +1,5 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct ProfileView: View {
     @Environment(AppModel.self) private var app
@@ -39,6 +39,11 @@ struct ProfileView: View {
                             Image(systemName: "person.2")
                         }
                     }
+                    .accessibilityLabel("Channels")
+                    .accessibilityValue(
+                        subscriptions.isEmpty
+                            ? "No subscribed channels"
+                            : "\(subscriptions.count) subscribed channels")
                     NavigationLink(value: Route.history) {
                         Label("History", systemImage: "clock.arrow.circlepath")
                     }
@@ -58,6 +63,11 @@ struct ProfileView: View {
                             Image(systemName: "arrow.down.circle")
                         }
                     }
+                    .accessibilityLabel("Downloads")
+                    .accessibilityValue(
+                        downloads.isEmpty
+                            ? "No downloaded videos"
+                            : "\(downloads.count) downloaded videos")
                 }
                 Section {
                     NavigationLink(value: Route.settings) {

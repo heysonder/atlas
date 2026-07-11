@@ -3,9 +3,9 @@ import Foundation
 /// What the Feed tab shows. Persisted as a raw string via `@AppStorage("feedMode")`;
 /// the player coordinator (plain UIKit) reads it through `FeedMode.current`.
 enum FeedMode: String, CaseIterable, Identifiable {
-    case subscriptions   // newest uploads from your subs (Piped /feed) — default
-    case forYouRelated   // For You: basic Piped "related"
-    case forYouCustom    // For You: our on-device topic match (personalized)
+    case subscriptions  // newest uploads from your subs (Piped /feed) — default
+    case forYouRelated  // For You: basic Piped "related"
+    case forYouCustom  // For You: our on-device topic match (personalized)
 
     var id: String { rawValue }
 

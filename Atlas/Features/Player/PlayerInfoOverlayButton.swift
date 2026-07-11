@@ -35,6 +35,8 @@ struct InfoOverlayButton: View {
             .foregroundStyle(.white)
             .padding(.horizontal, model.isPaused ? 14 : 10)
             .padding(.vertical, 9)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())

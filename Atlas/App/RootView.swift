@@ -1,9 +1,10 @@
-import SwiftUI
-import SwiftData
 import CoreSpotlight
+import SwiftData
+import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(DownloadManager.self) private var downloads
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
@@ -23,8 +24,13 @@ struct RootView: View {
             // The default full-screen player handles playback unless the user
             // has switched to the embedded player in Settings.
             if app.playerStyle == .fullscreen {
-                VideoPlayerPresenter(request: $app.nowPlaying, app: app, modelContext: modelContext)
-                    .frame(width: 0, height: 0)
+                VideoPlayerPresenter(
+                    request: $app.nowPlaying,
+                    app: app,
+                    downloads: downloads,
+                    modelContext: modelContext
+                )
+                .frame(width: 0, height: 0)
             }
         }
         .fullScreenCover(item: embeddedRequest) { request in
@@ -37,12 +43,14 @@ struct RootView: View {
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
             playFromSpotlight(activity)
         }
-        .alert("Local Library Temporarily Unavailable",
-               isPresented: Binding {
-                   app.persistenceRecoveryMessage != nil
-               } set: { isPresented in
-                   if !isPresented { app.persistenceRecoveryMessage = nil }
-               }) {
+        .alert(
+            "Local Library Temporarily Unavailable",
+            isPresented: Binding {
+                app.persistenceRecoveryMessage != nil
+            } set: { isPresented in
+                if !isPresented { app.persistenceRecoveryMessage = nil }
+            }
+        ) {
             Button("OK") { app.persistenceRecoveryMessage = nil }
         } message: {
             Text(app.persistenceRecoveryMessage ?? "")
@@ -74,8 +82,9 @@ struct RootView: View {
             sortBy: [SortDescriptor(\.watchedAt, order: .reverse)])
         descriptor.fetchLimit = 1
         guard let entry = try? modelContext.fetch(descriptor).first else { return }
-        play(videoID: entry.videoID, title: entry.title,
-             uploader: entry.uploader, thumbnail: entry.thumbnailURL)
+        play(
+            videoID: entry.videoID, title: entry.title,
+            uploader: entry.uploader, thumbnail: entry.thumbnailURL)
     }
 
     /// A tapped Spotlight result hands us the namespaced item id; play it.
@@ -83,22 +92,28 @@ struct RootView: View {
         guard let itemID = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
         else { return }
         let videoID = SpotlightIndexer.videoID(fromItemID: itemID)
-        let entry = try? modelContext.fetch(FetchDescriptor<HistoryEntry>(
-            predicate: #Predicate { $0.videoID == videoID })).first
-        play(videoID: videoID, title: entry?.title ?? "Video",
-             uploader: entry?.uploader, thumbnail: entry?.thumbnailURL)
+        let entry = try? modelContext.fetch(
+            FetchDescriptor<HistoryEntry>(
+                predicate: #Predicate { $0.videoID == videoID })
+        ).first
+        play(
+            videoID: videoID, title: entry?.title ?? "Video",
+            uploader: entry?.uploader, thumbnail: entry?.thumbnailURL)
     }
 
     /// Plays a video by id, swapping in the downloaded file when present so the
     /// player skips stream resolution and works offline.
     private func play(videoID: String, title: String, uploader: String?, thumbnail: String?) {
-        let download = try? modelContext.fetch(FetchDescriptor<DownloadedVideo>(
-            predicate: #Predicate { $0.videoID == videoID })).first
+        let download = try? modelContext.fetch(
+            FetchDescriptor<DownloadedVideo>(
+                predicate: #Predicate { $0.videoID == videoID })
+        ).first
         if let download {
             app.playDownloaded(download)
         } else {
-            app.nowPlaying = PlayRequest(videoID: videoID, title: title,
-                                         uploader: uploader, thumbnail: thumbnail)
+            app.nowPlaying = PlayRequest(
+                videoID: videoID, title: title,
+                uploader: uploader, thumbnail: thumbnail)
         }
     }
 

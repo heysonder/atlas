@@ -7,7 +7,8 @@ enum PlayerAudioSelection {
         preferredLanguages: [String] = Locale.preferredLanguages
     ) async {
         guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible),
-              let option = preferredOption(in: group.options, preferredLanguages: preferredLanguages) else {
+            let option = preferredOption(in: group.options, preferredLanguages: preferredLanguages)
+        else {
             return
         }
         item.select(option, in: group)
@@ -17,7 +18,8 @@ enum PlayerAudioSelection {
         in options: [AVMediaSelectionOption],
         preferredLanguages: [String]
     ) -> AVMediaSelectionOption? {
-        let scored = options
+        let scored =
+            options
             .map { option in (option, score(option, preferredLanguages: preferredLanguages)) }
             .filter { $0.1 > 0 }
         return scored.max { $0.1 < $1.1 }?.0
@@ -57,7 +59,7 @@ enum PlayerAudioSelection {
         [
             option.extendedLanguageTag,
             option.locale?.identifier,
-            option.displayName
+            option.displayName,
         ]
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }

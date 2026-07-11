@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// The player's "Info" sheet: wraps the shared `PlayerInfoContent` in a sheet
 /// chrome (navigation bar + Done). Presented over the still-playing video, so it
@@ -19,11 +19,11 @@ struct PlayerInfoSheet: View {
     let chapters: [VideoChapter]
     let canSubscribe: Bool
     let isSubscribed: Bool
-    let onToggleSubscribe: (Bool) -> Void
+    let onToggleSubscribe: (Bool) -> Bool
     /// Only shown when the personalized For You feed is on.
     let showFeedback: Bool
     let feedback: Int
-    let onFeedback: (Int) -> Void
+    let onFeedback: (Int) -> Bool
     let onQueuedVideoPlay: (QueuedVideo) -> Void
     /// Used to fetch comments lazily once the sheet appears.
     let client: PipedClient
@@ -50,8 +50,9 @@ struct PlayerInfoSheet: View {
                     onQueuedVideoPlay: onQueuedVideoPlay,
                     client: client, videoID: videoID,
                     currentPlaybackSeconds: playbackTime?.seconds,
-                    onTimestampTap: onTimestampTap)
-                    .padding()
+                    onTimestampTap: onTimestampTap
+                )
+                .padding()
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)

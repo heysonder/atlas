@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Lint Swift sources
+        run: >-
+          xcrun swift-format lint --recursive --parallel --strict
+          --configuration .swift-format
+          Atlas AtlasTests PipedKit/Sources PipedKit/Tests PipedKit/Package.swift
+
+      - name: Test PipedKit
+        run: swift test --package-path PipedKit
+
+      - name: Build Atlas
+        run: >-
+          xcodebuild clean build -quiet
+          -project Atlas.xcodeproj
+          -scheme Atlas
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Select iOS Simulator
+        id: simulator
+        shell: bash
+        run: |
+          simulator_id="$({ xcrun simctl list devices available -j; } | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime in sorted(devices, reverse=True):
+              if ".iOS-" not in runtime:
+                  continue
+              for device in devices[runtime]:
+                  if device.get("isAvailable") and device["name"].startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone Simulator")
+          ' )"
+          echo "id=$simulator_id" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$simulator_id" || true
+          xcrun simctl bootstatus "$simulator_id" -b
+
+      - name: Test Atlas
+        run: >-
+          xcodebuild test -quiet
+          -project Atlas.xcodeproj
+          -scheme Atlas
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}'
+          CODE_SIGNING_ALLOWED=NO

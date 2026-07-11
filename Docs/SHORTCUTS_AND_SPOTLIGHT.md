@@ -1,6 +1,7 @@
 # Shortcuts and Spotlight
 
-Atlas integrates with App Intents, App Shortcuts, App Entities, on-screen video registration, and Core Spotlight.
+Atlas integrates with App Intents, App Shortcuts, App Entities, a transient
+visible-video registry, and Core Spotlight.
 
 ## Launch wiring
 
@@ -67,7 +68,10 @@ When a video is downloaded, Play Video prefers the local file if it still exists
 
 Feed, Search, and Channel lists call `.onScreenVideos(videos)`.
 
-That records visible stream items into `VisibleVideoRegistry`, capped at 250 IDs. This lets Siri resolve actions such as "Play this" or "Download this" against the video currently on screen without another network fetch.
+That records visible stream items into the in-memory `VisibleVideoRegistry`,
+capped at 250 IDs. The registry helps App Intent entity queries resolve video
+identifiers already surfaced by Atlas without another network fetch. It is not
+an iOS semantic-index or on-screen-awareness integration.
 
 ## PlaylistEntity
 
@@ -118,8 +122,11 @@ When the user taps a Spotlight result, RootView receives the searchable item use
 
 On launch, Atlas:
 
-- Removes legacy Spotlight domains.
+- Deletes Atlas's current and known legacy Spotlight domains.
 - Indexes completed downloads.
 - Indexes recent history rows not already covered by downloads.
+
+The delete completes before indexing begins, so the local stores are
+authoritative and stale entries do not survive a rebuild.
 
 Completed downloads are indexed with local poster URLs when available so results can show artwork offline.

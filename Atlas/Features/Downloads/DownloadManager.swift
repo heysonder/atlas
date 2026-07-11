@@ -1,8 +1,15 @@
-import SwiftUI
-import SwiftData
-import UIKit
+import Foundation
+import Observation
 import PipedKit
+import SwiftData
 import os
+
+typealias DownloadReconciler = @Sendable (Set<String>) async -> Void
+
+enum DownloadStorageMode: Sendable {
+    case persistent
+    case recoveryReadOnly
+}
 
 /// Owns offline downloads: resolves a video's streams, fetches the media to disk,
 /// tracks in-flight progress, and records a `DownloadedVideo` on success.
@@ -17,29 +24,68 @@ final class DownloadManager {
     private(set) var active: [String: ActiveDownload] = [:]
 
     @ObservationIgnored private let modelContext: ModelContext
+    @ObservationIgnored private let storageMode: DownloadStorageMode
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var reconciliationTask: Task<Void, Never>?
 
     private static let log = Logger(subsystem: "sh.cmf.atlas", category: "downloads")
 
-    init(modelContext: ModelContext) {
+    init(
+        modelContext: ModelContext,
+        storageMode: DownloadStorageMode,
+        reconcileOnInit: Bool = true,
+        reconciler: @escaping DownloadReconciler = { claimedFileNames in
+            await Task.detached(priority: .utility) {
+                DownloadStore.removeOrphanedFiles(claimedFileNames: claimedFileNames)
+            }.value
+        }
+    ) {
         self.modelContext = modelContext
-        reconcileOrphanedFiles()
+        self.storageMode = storageMode
+        if storageMode == .persistent, reconcileOnInit {
+            reconciliationTask = makeReconciliationTask(using: reconciler)
+        }
     }
 
-    /// Launch-time sweep: no download can be in flight yet (the download session
-    /// is in-process), so leftover merge temps and final `.mp4`s without a
-    /// completed row are orphans from a crash or kill — delete them.
-    private func reconcileOrphanedFiles() {
-        let completed = Set(
-            ((try? modelContext.fetch(FetchDescriptor<DownloadedVideo>())) ?? []).map(\.fileName))
-        Task.detached(priority: .utility) {
-            DownloadStore.removeOrphanedFiles(completedFileNames: completed)
+    /// Launch-time sweep for crash leftovers. New downloads wait for this task,
+    /// so files created by live work can never be mistaken for startup orphans.
+    private func makeReconciliationTask(
+        using reconciler: @escaping DownloadReconciler
+    ) -> Task<Void, Never>? {
+        guard
+            let claimedFileNames = Self.reconciliationFileNames(
+                canReconcilePersistentDownloads: true,
+                fetch: {
+                    try modelContext.fetch(FetchDescriptor<DownloadedVideo>()).flatMap { download in
+                        [
+                            download.fileName,
+                            download.thumbnailFileName,
+                            download.captionFileName,
+                        ].compactMap { $0 }
+                    }
+                })
+        else { return nil }
+        return Task {
+            await reconciler(claimedFileNames)
         }
+    }
+
+    /// Returns nil unless destructive reconciliation has positive evidence from
+    /// persistent storage. Kept as a small seam so recovery and fetch failures
+    /// can be regression-tested without touching the user's real download folder.
+    static func reconciliationFileNames(
+        canReconcilePersistentDownloads: Bool,
+        fetch: () throws -> [String]
+    ) -> Set<String>? {
+        guard canReconcilePersistentDownloads,
+            let names = try? fetch()
+        else { return nil }
+        return Set(names.filter(DownloadStore.isValidStoredFileName))
     }
 
     /// A download in progress (or one that failed and is awaiting retry/dismiss).
     struct ActiveDownload: Identifiable, Equatable {
-        let id: String          // videoID
+        let id: String  // videoID
         let title: String
         let uploader: String?
         let thumbnail: String?  // remote URL, shown until the file lands
@@ -47,13 +93,18 @@ final class DownloadManager {
         var fraction: Double
 
         enum State: Equatable {
-            case preparing      // resolving streams
+            case preparing  // resolving streams
             case downloading
-            case processing     // merging video + audio
+            case processing  // merging video + audio
             case failed(String)
         }
 
-        var isFailed: Bool { if case .failed = state { return true }; return false }
+        var isFailed: Bool {
+            if case .failed = state {
+                return true
+            }
+            return false
+        }
     }
 
     // MARK: Queries
@@ -75,22 +126,56 @@ final class DownloadManager {
 
     func download(_ item: StreamItem, using app: AppModel) {
         guard let videoID = item.videoID else { return }
-        download(videoID: videoID, title: item.displayTitle, uploader: item.uploaderName,
-                 thumbnail: item.thumbnail, using: app)
+        download(
+            videoID: videoID, title: item.displayTitle, uploader: item.uploaderName,
+            thumbnail: item.thumbnail, using: app)
     }
 
     /// Core entry point used by the UI (via the `StreamItem` overload) and by the
     /// "Download this" App Intent, which only has the bare video fields to hand.
-    func download(videoID: String, title: String, uploader: String?,
-                  thumbnail: String?, using app: AppModel) {
-        guard !isDownloaded(videoID), tasks[videoID] == nil else { return }
+    func download(
+        videoID: String, title: String, uploader: String?,
+        thumbnail: String?, using app: AppModel
+    ) {
+        guard DownloadStore.isValidVideoID(videoID),
+            storageMode == .persistent,
+            canStartDownload(videoID),
+            tasks[videoID] == nil
+        else { return }
         active[videoID] = ActiveDownload(
             id: videoID, title: title, uploader: uploader,
             thumbnail: thumbnail, state: .preparing, fraction: 0)
+        let startupReconciliation = reconciliationTask
         tasks[videoID] = Task { [weak self] in
-            await self?.perform(videoID: videoID, title: title, uploader: uploader,
-                                thumbnail: thumbnail, app: app)
+            await startupReconciliation?.value
+            guard !Task.isCancelled else {
+                self?.finishCancelledBeforeStart(videoID)
+                return
+            }
+            await self?.performDownload(
+                videoID: videoID,
+                title: title,
+                uploader: uploader,
+                thumbnail: thumbnail,
+                app: app
+            )
         }
+    }
+
+    private func finishCancelledBeforeStart(_ videoID: String) {
+        active[videoID] = nil
+        tasks[videoID] = nil
+    }
+
+    private func canStartDownload(_ videoID: String) -> Bool {
+        let descriptor = FetchDescriptor<DownloadedVideo>(
+            predicate: #Predicate { $0.videoID == videoID })
+        guard let count = try? modelContext.fetchCount(descriptor) else {
+            // A query failure leaves the on-disk inventory unknown. Refuse to
+            // create/truncate a potentially existing file until it is readable.
+            return false
+        }
+        return count == 0
     }
 
     /// Cancels an in-flight download and clears its temporary files, including
@@ -100,11 +185,12 @@ final class DownloadManager {
     func cancel(_ videoID: String) {
         let wasInFlight = tasks[videoID] != nil
         tasks[videoID]?.cancel()
-        tasks[videoID] = nil
         active[videoID] = nil
-        cleanupTemp(videoID)
-        if wasInFlight {
-            try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
+        removeTemporaryFiles(videoID)
+        if wasInFlight,
+            let output = try? DownloadStore.fileURL(videoID: videoID, artifact: .media)
+        {
+            try? FileManager.default.removeItem(at: output)
         }
     }
 
@@ -114,7 +200,7 @@ final class DownloadManager {
         let descriptor = FetchDescriptor<DownloadedVideo>(
             predicate: #Predicate { $0.videoID == videoID })
         guard let row = try? modelContext.fetch(descriptor).first else { return }
-        try? FileManager.default.removeItem(at: row.fileURL)
+        if let fileURL = row.fileURL { try? FileManager.default.removeItem(at: fileURL) }
         if let thumb = row.thumbnailURL { try? FileManager.default.removeItem(at: thumb) }
         if let caption = row.captionURL { try? FileManager.default.removeItem(at: caption) }
         modelContext.delete(row)
@@ -130,42 +216,59 @@ final class DownloadManager {
 
     // MARK: Worker
 
-    private func perform(videoID: String, title: String, uploader: String?,
-                         thumbnail: String?, app: AppModel) async {
+    private func performDownload(
+        videoID: String,
+        title: String,
+        uploader: String?,
+        thumbnail: String?,
+        app: AppModel
+    ) async {
         do {
-            Self.log.info("start \(videoID, privacy: .public)")
+            Self.log.info("start video=\(videoID, privacy: .private(mask: .hash))")
             let detail = try await app.resolveStream(videoID)
+            let httpClient = try app.httpClient
             try Task.checkCancellation()
 
             // Fail up front, with a clear message, if downloads storage
             // couldn't be created — never fall back to a transient location.
             _ = try DownloadStore.preparedDirectory()
-            let fileName = videoID + ".mp4"
-            let output = DownloadStore.fileURL(fileName)
-            var quality: String?
+            let fileName = try DownloadStore.fileName(videoID: videoID, artifact: .media)
+            let output = try DownloadStore.fileURL(videoID: videoID, artifact: .media)
+            var qualityLabel: String?
 
             if let source = detail.bestComposedSource(allowAV1: false) {
                 // Best path: high-quality H.264 video-only + AAC audio, merged locally.
-                quality = "\(source.height)p"
+                qualityLabel = "\(source.height)p"
                 Self.log.info("composing \(source.height)p (video-only + audio)")
                 // Keep mp4-family extensions: AVFoundation infers a file's
                 // container from its path extension, and a `.tmp` extension makes
                 // the merge fail to open the asset ("Cannot Open").
-                let videoTmp = DownloadStore.fileURL(videoID + ".video.mp4")
-                let audioTmp = DownloadStore.fileURL(videoID + ".audio.m4a")
-                try await downloadPair(source.video, source.audio,
-                                       videoDest: videoTmp, audioDest: audioTmp, videoID: videoID)
+                let videoTmp = try DownloadStore.fileURL(
+                    videoID: videoID, artifact: .videoTemporary)
+                let audioTmp = try DownloadStore.fileURL(
+                    videoID: videoID, artifact: .audioTemporary)
+                try await downloadPair(
+                    video: source.video,
+                    audio: source.audio,
+                    videoDestination: videoTmp,
+                    audioDestination: audioTmp,
+                    videoID: videoID,
+                    client: httpClient)
                 try Task.checkCancellation()
                 setState(videoID, .processing)
                 Self.log.info("merging to mp4")
                 try await DownloadStore.mergeToMP4(video: videoTmp, audio: audioTmp, output: output)
-                cleanupTemp(videoID)
+                removeTemporaryFiles(videoID)
             } else if let progressive = detail.bestProgressiveDownload {
                 // Fallback: a single muxed file needs no merge.
-                quality = progressive.height > 0 ? "\(progressive.height)p" : nil
-                Self.log.info("progressive \(quality ?? "?", privacy: .public) single-file")
+                qualityLabel = progressive.height > 0 ? "\(progressive.height)p" : nil
+                Self.log.info(
+                    "progressive \(qualityLabel ?? "?", privacy: .public) single-file"
+                )
                 setState(videoID, .downloading)
-                try await DownloadStore.download(progressive.url, to: output) { [weak self] fraction in
+                try await DownloadStore.download(
+                    progressive.url, to: output, client: httpClient
+                ) { [weak self] fraction in
                     Task { @MainActor in self?.setFraction(videoID, fraction) }
                 }
             } else {
@@ -174,34 +277,47 @@ final class DownloadManager {
             try Task.checkCancellation()
 
             DownloadStore.excludeFromBackup(output)
-            let thumbName = await saveThumbnail(thumbnail, videoID: videoID)
-            let caption = await saveCaption(detail.preferredSubtitle(), videoID: videoID)
+            let thumbnailFileName = await downloadThumbnailSidecar(
+                thumbnail, videoID: videoID, client: httpClient)
+            let caption = await downloadCaptionSidecar(
+                detail.preferredSubtitle(), videoID: videoID, client: httpClient)
             // A cancel during the (best-effort) sidecar saves above deletes the
             // media file, so don't record a row pointing at nothing.
             try Task.checkCancellation()
             let row = DownloadedVideo(
                 videoID: videoID, title: title, uploader: uploader,
-                fileName: fileName, thumbnailFileName: thumbName,
+                fileName: fileName, thumbnailFileName: thumbnailFileName,
                 captionFileName: caption?.fileName,
                 captionMimeType: caption?.mimeType,
                 captionLanguageCode: caption?.languageCode,
                 captionName: caption?.name,
-                durationSeconds: detail.duration ?? 0, qualityLabel: quality,
+                durationSeconds: detail.duration ?? 0, qualityLabel: qualityLabel,
                 byteCount: DownloadStore.byteCount(of: output))
             modelContext.insert(row)
             SpotlightIndexer.index(download: row)
-            Self.log.info("done \(videoID, privacy: .public) — \(DownloadStore.byteCount(of: output)) bytes")
+            Self.log.info(
+                "done video=\(videoID, privacy: .private(mask: .hash)) bytes=\(DownloadStore.byteCount(of: output), privacy: .public)"
+            )
 
             active[videoID] = nil
             tasks[videoID] = nil
         } catch is CancellationError {
-            Self.log.info("cancelled \(videoID, privacy: .public)")
-            cleanupTemp(videoID)
-            try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
+            Self.log.info("cancelled video=\(videoID, privacy: .private(mask: .hash))")
+            removeTemporaryFiles(videoID)
+            if let output = try? DownloadStore.fileURL(videoID: videoID, artifact: .media) {
+                try? FileManager.default.removeItem(at: output)
+            }
+            active[videoID] = nil
+            tasks[videoID] = nil
         } catch {
-            Self.log.error("failed \(videoID, privacy: .public) — \(error.localizedDescription, privacy: .public)")
-            cleanupTemp(videoID)
-            try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".mp4"))
+            let failure = error as NSError
+            Self.log.error(
+                "failed video=\(videoID, privacy: .private(mask: .hash)) domain=\(PlaybackDiagnostics.safeToken(failure.domain), privacy: .public) code=\(failure.code, privacy: .public)"
+            )
+            removeTemporaryFiles(videoID)
+            if let output = try? DownloadStore.fileURL(videoID: videoID, artifact: .media) {
+                try? FileManager.default.removeItem(at: output)
+            }
             active[videoID]?.state = .failed(error.localizedDescription)
             tasks[videoID] = nil
         }
@@ -209,44 +325,79 @@ final class DownloadManager {
 
     /// Downloads the video-only then audio file, mapping each onto the overall
     /// progress bar (video is the bulk of the bytes, so it gets most of the bar).
-    private func downloadPair(_ video: URL, _ audio: URL,
-                              videoDest: URL, audioDest: URL, videoID: String) async throws {
+    private func downloadPair(
+        video: URL,
+        audio: URL,
+        videoDestination: URL,
+        audioDestination: URL,
+        videoID: String,
+        client: PolicyHTTPClient
+    ) async throws {
         setState(videoID, .downloading)
-        try await DownloadStore.download(video, to: videoDest) { [weak self] fraction in
+        try await DownloadStore.download(
+            video,
+            to: videoDestination,
+            client: client
+        ) { [weak self] fraction in
             Task { @MainActor in self?.setFraction(videoID, fraction * 0.9) }
         }
         try Task.checkCancellation()
-        try await DownloadStore.download(audio, to: audioDest) { [weak self] fraction in
+        try await DownloadStore.download(
+            audio,
+            to: audioDestination,
+            client: client
+        ) { [weak self] fraction in
             Task { @MainActor in self?.setFraction(videoID, 0.9 + fraction * 0.1) }
         }
     }
 
     /// Caches the poster locally so the Downloads list shows it offline. Best-effort.
-    private func saveThumbnail(_ urlString: String?, videoID: String) async -> String? {
-        let candidate = Thumbnail.upgraded(urlString) ?? urlString
+    private func downloadThumbnailSidecar(
+        _ urlString: String?,
+        videoID: String,
+        client: PolicyHTTPClient
+    ) async -> String? {
+        let candidate = ThumbnailURL.upgraded(urlString) ?? urlString
         guard let candidate, let url = URL(string: candidate),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              UIImage(data: data) != nil else { return nil }
-        let name = videoID + ".thumb"
-        let dest = DownloadStore.fileURL(name)
-        guard (try? data.write(to: dest)) != nil else { return nil }
-        DownloadStore.excludeFromBackup(dest)
+            let (data, _) = try? await client.data(from: url)
+        else { return nil }
+        guard let name = try? DownloadStore.fileName(videoID: videoID, artifact: .thumbnail),
+            let destination = try? DownloadStore.fileURL(
+                videoID: videoID,
+                artifact: .thumbnail
+            )
+        else { return nil }
+        let written = await Task.detached(priority: .utility) {
+            guard DownloadSidecarWriter.writeThumbnail(data, to: destination) else { return false }
+            DownloadStore.excludeFromBackup(destination)
+            return true
+        }.value
+        guard written else { return nil }
         return name
     }
 
-    private func saveCaption(
+    private func downloadCaptionSidecar(
         _ subtitle: Subtitle?,
-        videoID: String
+        videoID: String,
+        client: PolicyHTTPClient
     ) async -> (fileName: String, mimeType: String?, languageCode: String?, name: String?)? {
         guard let subtitle, let url = subtitle.usableURL,
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              !data.isEmpty else { return nil }
+            let (data, _) = try? await client.data(from: url),
+            !data.isEmpty
+        else { return nil }
 
-        let ext = subtitle.mimeType?.lowercased().contains("vtt") == true ? "vtt" : "ttml"
-        let name = videoID + ".captions." + ext
-        let dest = DownloadStore.fileURL(name)
-        guard (try? data.write(to: dest, options: .atomic)) != nil else { return nil }
-        DownloadStore.excludeFromBackup(dest)
+        let artifact: DownloadStore.Artifact =
+            subtitle.mimeType?.lowercased().contains("vtt") == true
+            ? .captionVTT : .captionTTML
+        guard let name = try? DownloadStore.fileName(videoID: videoID, artifact: artifact),
+            let destination = try? DownloadStore.fileURL(videoID: videoID, artifact: artifact)
+        else { return nil }
+        let written = await Task.detached(priority: .utility) {
+            guard DownloadSidecarWriter.write(data, to: destination) else { return false }
+            DownloadStore.excludeFromBackup(destination)
+            return true
+        }.value
+        guard written else { return nil }
         return (name, subtitle.mimeType, subtitle.code, subtitle.name)
     }
 
@@ -260,8 +411,12 @@ final class DownloadManager {
         active[videoID]?.fraction = fraction
     }
 
-    private func cleanupTemp(_ videoID: String) {
-        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".video.mp4"))
-        try? FileManager.default.removeItem(at: DownloadStore.fileURL(videoID + ".audio.m4a"))
+    private func removeTemporaryFiles(_ videoID: String) {
+        if let video = try? DownloadStore.fileURL(videoID: videoID, artifact: .videoTemporary) {
+            try? FileManager.default.removeItem(at: video)
+        }
+        if let audio = try? DownloadStore.fileURL(videoID: videoID, artifact: .audioTemporary) {
+            try? FileManager.default.removeItem(at: audio)
+        }
     }
 }

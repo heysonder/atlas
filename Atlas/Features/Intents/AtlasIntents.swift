@@ -110,7 +110,7 @@ struct PlayVideoIntent: AppIntent {
         // Prefer the offline file, but only when it actually exists — a stale
         // entity reference must fall back to network stream resolution.
         let localURL = target.localFileName
-            .map(DownloadStore.fileURL)
+            .flatMap { DownloadStore.fileURL($0, expected: [.media]) }
             .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         let request = PlayRequest(
             videoID: target.id, title: target.title, uploader: target.uploader,
@@ -134,8 +134,9 @@ struct DownloadVideoIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let target = self.target
         await MainActor.run {
-            downloads.download(videoID: target.id, title: target.title,
-                               uploader: target.uploader, thumbnail: target.thumbnail, using: app)
+            downloads.download(
+                videoID: target.id, title: target.title,
+                uploader: target.uploader, thumbnail: target.thumbnail, using: app)
         }
         return .result(dialog: "Downloading \(target.title).")
     }

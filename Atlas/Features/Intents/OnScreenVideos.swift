@@ -1,6 +1,6 @@
-import SwiftUI
 import AppIntents
 import PipedKit
+import SwiftUI
 
 extension View {
     /// Records the videos currently on screen so Siri / App Intents can resolve

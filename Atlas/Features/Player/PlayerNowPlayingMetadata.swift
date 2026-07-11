@@ -7,26 +7,34 @@ enum PlayerNowPlayingMetadata {
         [
             item(.commonIdentifierTitle, detail.title ?? request.title),
             item(.iTunesMetadataTrackSubTitle, detail.uploader ?? request.uploader),
-            item(.commonIdentifierDescription, HTMLText.plain(detail.description ?? ""))
+            item(.commonIdentifierDescription, HTMLText.plain(detail.description ?? "")),
         ].compactMap { $0 }
     }
 
     static func local(_ request: PlayRequest) -> [AVMetadataItem] {
         [
             item(.commonIdentifierTitle, request.title),
-            item(.iTunesMetadataTrackSubTitle, request.uploader)
+            item(.iTunesMetadataTrackSubTitle, request.uploader),
         ].compactMap { $0 }
     }
 
-    static func attachArtwork(to item: AVPlayerItem, urlString: String?, base: [AVMetadataItem]) {
+    static func attachArtwork(
+        to item: AVPlayerItem,
+        urlString: String?,
+        base: [AVMetadataItem],
+        client: PolicyHTTPClient
+    ) {
         guard let urlString, let url = URL(string: urlString) else { return }
         Task { [weak item] in
             // Fetch, decode, and re-encode off the main actor — artwork can
             // be hundreds of KB and this runs at every playback start.
             let jpeg = await Task.detached { () async -> Data? in
-                let data: Data? = url.isFileURL
-                    ? try? Data(contentsOf: url)
-                    : (try? await URLSession.shared.data(from: url))?.0
+                let data: Data?
+                if url.isFileURL {
+                    data = DownloadStore.contains(url) ? try? Data(contentsOf: url) : nil
+                } else {
+                    data = (try? await client.data(from: url))?.0
+                }
                 guard let data, let image = UIImage(data: data) else { return nil }
                 return image.jpegData(compressionQuality: 0.9)
             }.value

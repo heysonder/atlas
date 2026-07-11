@@ -62,12 +62,14 @@ nonisolated enum YouTubeCollaborators {
         )
         request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
 
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let html = String(data: data, encoding: .utf8),
-              let jsonString = initialDataJSON(in: html),
-              let jsonData = jsonString.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: jsonData),
-              let items = collaboratorItems(in: root) else {
+        let client = PolicyHTTPClient(context: .publicInternet(), maximumResponseBytes: 8 * 1_024 * 1_024)
+        guard let (data, _) = try? await client.data(for: request),
+            let html = String(data: data, encoding: .utf8),
+            let jsonString = initialDataJSON(in: html),
+            let jsonData = jsonString.data(using: .utf8),
+            let root = try? JSONSerialization.jsonObject(with: jsonData),
+            let items = collaboratorItems(in: root)
+        else {
             return []
         }
 
@@ -78,7 +80,8 @@ nonisolated enum YouTubeCollaborators {
     private static func initialDataJSON(in html: String) -> String? {
         for marker in ["var ytInitialData = ", "ytInitialData = "] {
             guard let markerRange = html.range(of: marker),
-                  let start = html[markerRange.upperBound...].firstIndex(of: "{") else {
+                let start = html[markerRange.upperBound...].firstIndex(of: "{")
+            else {
                 continue
             }
 
@@ -116,7 +119,8 @@ nonisolated enum YouTubeCollaborators {
     private static func collaboratorItems(in value: Any) -> [[String: Any]]? {
         if let dictionary = value as? [String: Any] {
             if isCollaboratorsDialog(dictionary),
-               let items = dictionary.value(at: ["customContent", "listViewModel", "listItems"]) as? [[String: Any]] {
+                let items = dictionary.value(at: ["customContent", "listViewModel", "listItems"]) as? [[String: Any]]
+            {
                 return items
             }
 
@@ -132,7 +136,8 @@ nonisolated enum YouTubeCollaborators {
     }
 
     private static func isCollaboratorsDialog(_ dictionary: [String: Any]) -> Bool {
-        let headline = dictionary.string(at: ["header", "dialogHeaderViewModel", "headline", "content"])
+        let headline =
+            dictionary.string(at: ["header", "dialogHeaderViewModel", "headline", "content"])
             ?? dictionary.string(at: ["header", "dialogHeaderViewModel", "headline", "simpleText"])
         return headline == "Collaborators"
     }
@@ -140,16 +145,18 @@ nonisolated enum YouTubeCollaborators {
     private static func parseChannel(_ item: [String: Any]) -> CreatorChannel? {
         let model = item["listItemViewModel"] as? [String: Any] ?? item
         guard let name = text(in: model["title"])?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !name.isEmpty else {
+            !name.isEmpty
+        else {
             return nil
         }
 
         let channelID = findChannelID(in: model)
-        return CreatorChannel(name: name,
-                              channelID: channelID,
-                              avatarURL: normalizeURL(findSourceURL(in: model)),
-                              subtitle: subtitle(in: model, name: name),
-                              isVerified: false)
+        return CreatorChannel(
+            name: name,
+            channelID: channelID,
+            avatarURL: normalizeURL(findSourceURL(in: model)),
+            subtitle: subtitle(in: model, name: name),
+            isVerified: false)
     }
 
     private static func text(in value: Any?) -> String? {
@@ -170,7 +177,8 @@ nonisolated enum YouTubeCollaborators {
         guard let value else { return nil }
         if let dictionary = value as? [String: Any] {
             if let sources = dictionary["sources"] as? [[String: Any]] {
-                let sourceURL = sources
+                let sourceURL =
+                    sources
                     .compactMap { source -> (url: String, width: Int)? in
                         guard let url = source["url"] as? String else { return nil }
                         return (url, source["width"] as? Int ?? 0)
@@ -196,12 +204,14 @@ nonisolated enum YouTubeCollaborators {
         guard let value else { return nil }
         if let dictionary = value as? [String: Any] {
             if let endpoint = dictionary["browseEndpoint"] as? [String: Any],
-               let id = endpoint["browseId"] as? String,
-               id.hasPrefix("UC") {
+                let id = endpoint["browseId"] as? String,
+                id.hasPrefix("UC")
+            {
                 return id
             }
             if let metadata = dictionary["webCommandMetadata"] as? [String: Any],
-               let id = PipedID.channel(fromURL: metadata["url"] as? String) {
+                let id = PipedID.channel(fromURL: metadata["url"] as? String)
+            {
                 return id
             }
             for nested in dictionary.values {
@@ -230,7 +240,8 @@ nonisolated enum YouTubeCollaborators {
         guard let value else { return nil }
         if let dictionary = value as? [String: Any] {
             if let context = dictionary["accessibilityContext"] as? [String: Any],
-               let label = context["label"] as? String {
+                let label = context["label"] as? String
+            {
                 return label
             }
             for nested in dictionary.values {
@@ -262,12 +273,13 @@ nonisolated enum YouTubeCollaborators {
     }
 }
 
-private extension Dictionary where Key == String, Value == Any {
-    nonisolated func value(at path: [String]) -> Any? {
+extension Dictionary where Key == String, Value == Any {
+    fileprivate nonisolated func value(at path: [String]) -> Any? {
         var current: Any = self
         for segment in path {
             guard let dictionary = current as? [String: Any],
-                  let next = dictionary[segment] else {
+                let next = dictionary[segment]
+            else {
                 return nil
             }
             current = next
@@ -275,7 +287,7 @@ private extension Dictionary where Key == String, Value == Any {
         return current
     }
 
-    nonisolated func string(at path: [String]) -> String? {
+    fileprivate nonisolated func string(at path: [String]) -> String? {
         value(at: path) as? String
     }
 }

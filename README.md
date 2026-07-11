@@ -16,7 +16,7 @@ SwiftUI + Liquid Glass, targeting iOS 26.
 - **Playlists** — local playlists from card menus, the Info sheet, and App
   Shortcuts.
 - **Downloads** — offline video and caption downloads.
-- **Profile** — history, playlists, downloads, Topic Cloud, backup/restore,
+- **Profile** — history, playlists, downloads, backup/restore,
   SponsorBlock settings, instance setup, and privacy policy.
 - **App Shortcuts** — search, resume, open feed/downloads, play, download, find
   videos, and add to playlist.
@@ -44,7 +44,7 @@ xcodegen generate
 # 2. open it
 open Atlas.xcodeproj
 
-# 3. select your iPhone, set the signing team if needed, ⌘R
+# 3. select your iPhone, choose your own signing team if needed, ⌘R
 ```
 
 Or from the CLI for the simulator:
@@ -54,7 +54,12 @@ xcodebuild -project Atlas.xcodeproj -scheme Atlas \
   -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
 ```
 
-Signing team and bundle id live in `project.yml` (`DEVELOPMENT_TEAM`, `PRODUCT_BUNDLE_IDENTIFIER`).
+Product bundle identifiers live in `project.yml`. The repository intentionally
+does not set a development team. For device builds, choose your own team and use
+bundle identifiers registered to that team; the canonical `sh.cmf.atlas` IDs are
+maintainer-owned. Simulator builds do not require either change.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow.
 
 ## Configuration
 
@@ -64,7 +69,6 @@ Atlas does not ship with a default Piped instance. Set one at runtime in
 ## Roadmap
 
 - Audio-only mode
-- Related video discovery
 - Piped account sync
 - Playlist sync/import improvements
 - Push notifications for new uploads

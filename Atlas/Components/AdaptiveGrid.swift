@@ -24,8 +24,10 @@ struct AdaptiveGrid<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: LibraryGrid.columns(minCardWidth: minCardWidth),
-                      spacing: LibraryGrid.spacing) {
+            LazyVGrid(
+                columns: LibraryGrid.columns(minCardWidth: minCardWidth),
+                spacing: LibraryGrid.spacing
+            ) {
                 content()
             }
             .padding()
@@ -42,8 +44,10 @@ extension View {
         self
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(
+                Color(.secondarySystemBackground),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

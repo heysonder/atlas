@@ -21,16 +21,22 @@ struct InstancesSettingsView: View {
             }
 
             Section {
-                TextField("https://your-instance.example", text: $customURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
+                TextField(
+                    "Instance URL",
+                    text: $customURL,
+                    prompt: Text("https://your-instance.example")
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
                 Button("Use this instance") { useCustom() }
                     .disabled(!isCustomURLValid)
             } header: {
                 Text("Custom instance")
             } footer: {
-                Text("Use HTTPS for hosted instances. Local and private-network HTTP URLs are allowed for self-hosted Piped APIs.")
+                Text(
+                    "Use HTTPS for hosted instances. Local and private-network HTTP URLs are allowed for self-hosted Piped APIs."
+                )
             }
         }
         .navigationTitle("Instance")

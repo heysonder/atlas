@@ -1,13 +1,12 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 /// Offline library: in-flight downloads (with progress) on top, finished ones
 /// below. Tapping a finished download plays it from disk; swipe to delete.
 struct DownloadsView: View {
     @Environment(AppModel.self) private var app
     @Environment(DownloadManager.self) private var downloads
-    @Environment(\.modelContext) private var context
-    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \DownloadedVideo.createdAt, order: .reverse) private var saved: [DownloadedVideo]
 
     private var inFlight: [DownloadManager.ActiveDownload] {
@@ -17,19 +16,21 @@ struct DownloadsView: View {
     var body: some View {
         Group {
             if saved.isEmpty && inFlight.isEmpty {
-                ContentUnavailableView("No downloads",
+                ContentUnavailableView(
+                    "No downloads",
                     systemImage: "arrow.down.circle",
                     description: Text("Long-press any video and choose Download to save it for offline."))
-            } else if hSize == .regular {
+            } else if horizontalSizeClass == .regular {
                 gridLayout
             } else {
                 List {
                     if !inFlight.isEmpty {
                         Section("Downloading") {
                             ForEach(inFlight) { item in
-                                ActiveRow(item: item,
-                                          onCancel: { downloads.cancel(item.id) },
-                                          onDismiss: { downloads.dismissFailed(item.id) })
+                                ActiveDownloadRow(
+                                    item: item,
+                                    onCancel: { downloads.cancel(item.id) },
+                                    onDismiss: { downloads.dismissFailed(item.id) })
                             }
                         }
                     }
@@ -57,23 +58,29 @@ struct DownloadsView: View {
                 if !inFlight.isEmpty {
                     sectionHeader("Downloading")
                     ForEach(inFlight) { item in
-                        ActiveRow(item: item,
-                                  onCancel: { downloads.cancel(item.id) },
-                                  onDismiss: { downloads.dismissFailed(item.id) })
-                            .libraryCard()
+                        ActiveDownloadRow(
+                            item: item,
+                            onCancel: { downloads.cancel(item.id) },
+                            onDismiss: { downloads.dismissFailed(item.id) }
+                        )
+                        .libraryCard()
                     }
                 }
                 if !saved.isEmpty {
                     if !inFlight.isEmpty { sectionHeader("Saved") }
                     LazyVGrid(columns: LibraryGrid.columns(), spacing: LibraryGrid.spacing) {
                         ForEach(saved) { video in
-                            Button { app.playDownloaded(video) } label: {
-                                SavedRow(video: video).libraryCard()
+                            Button {
+                                app.playDownloaded(video)
+                            } label: {
+                                DownloadedVideoRow(video: video).libraryCard()
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
                                 QueueMenuItems(request: playRequest(for: video))
-                                Button(role: .destructive) { downloads.remove(video.videoID) } label: {
+                                Button(role: .destructive) {
+                                    downloads.remove(video.videoID)
+                                } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
@@ -87,8 +94,10 @@ struct DownloadsView: View {
 
     @ViewBuilder private var savedRows: some View {
         ForEach(saved) { video in
-            Button { app.playDownloaded(video) } label: {
-                SavedRow(video: video)
+            Button {
+                app.playDownloaded(video)
+            } label: {
+                DownloadedVideoRow(video: video)
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -115,66 +124,95 @@ struct DownloadsView: View {
 }
 
 /// A finished download: poster, title, uploader, and quality · size meta.
-private struct SavedRow: View {
+private struct DownloadedVideoRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let video: DownloadedVideo
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 12) {
-            posterThumb
-            VStack(alignment: .leading, spacing: 4) {
-                Text(video.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                if let uploader = video.uploader {
-                    Text(uploader).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Text(metaLine).font(.caption2).foregroundStyle(.secondary)
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 10) {
+                posterThumbnail
+                details
             }
+        } else {
+            HStack(spacing: 12) {
+                posterThumbnail
+                details
+            }
+        }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(video.title)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+            if let uploader = video.uploader {
+                Text(uploader)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            }
+            Text(metaLine).font(.caption2).foregroundStyle(.secondary)
         }
     }
 
     private var metaLine: String {
-        Format.metaLine(video.qualityLabel,
-                        video.byteCount > 0 ? ByteCountFormatter.string(
-                            fromByteCount: video.byteCount, countStyle: .file) : nil)
+        Format.metaLine(
+            video.qualityLabel,
+            video.byteCount > 0
+                ? ByteCountFormatter.string(
+                    fromByteCount: video.byteCount, countStyle: .file) : nil)
     }
 
-    private var posterThumb: some View {
-        ZStack(alignment: .bottomTrailing) {
-            // thumbnailURL is a local file:// URL, so this resolves offline.
-            Thumbnail(url: video.thumbnailURL?.absoluteString)
-                .aspectRatio(16/9, contentMode: .fill)
-                .frame(width: 120, height: 68)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            let d = Format.duration(video.durationSeconds)
-            if !d.isEmpty {
-                Text(d).font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(.black.opacity(0.75), in: Capsule())
-                    .foregroundStyle(.white).padding(5)
-            }
-        }
+    private var posterThumbnail: some View {
+        // thumbnailURL is a local file URL, so this resolves offline.
+        LibraryVideoThumbnail(
+            url: video.thumbnailURL?.absoluteString,
+            durationSeconds: video.durationSeconds)
     }
 }
 
 /// A download in progress (or failed), with a progress bar and a trailing
 /// cancel / dismiss control.
-private struct ActiveRow: View {
+private struct ActiveDownloadRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let item: DownloadManager.ActiveDownload
     let onCancel: () -> Void
     let onDismiss: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 12) {
-            Thumbnail(url: item.thumbnail)
-                .aspectRatio(16/9, contentMode: .fill)
-                .frame(width: 120, height: 68)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        if dynamicTypeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                HStack {
+                    thumbnail
+                    Spacer(minLength: 0)
+                    trailingControl
+                }
+                Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
                 statusLine
             }
-            Spacer(minLength: 0)
-            trailingControl
+        } else {
+            HStack(spacing: 12) {
+                thumbnail
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                    statusLine
+                }
+                Spacer(minLength: 0)
+                trailingControl
+            }
         }
+    }
+
+    private var thumbnail: some View {
+        LibraryVideoThumbnail(
+            url: item.thumbnail,
+            networkScope: .selectedInstance)
     }
 
     @ViewBuilder private var statusLine: some View {
@@ -184,7 +222,12 @@ private struct ActiveRow: View {
         case .downloading:
             VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: item.fraction)
-                Text("\(Int(item.fraction * 100))%").font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityLabel("Download progress")
+                    .accessibilityValue("\(Int(item.fraction * 100)) percent")
+                Text("\(Int(item.fraction * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
         case .processing:
             HStack(spacing: 6) {
@@ -192,17 +235,31 @@ private struct ActiveRow: View {
                 Text("Finishing…").font(.caption).foregroundStyle(.secondary)
             }
         case .failed(let message):
-            Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
+            Label {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+            }
         }
     }
 
     @ViewBuilder private var trailingControl: some View {
         if item.isFailed {
             Button("Dismiss", systemImage: "xmark.circle.fill", action: onDismiss)
-                .labelStyle(.iconOnly).foregroundStyle(.secondary)
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         } else {
             Button("Cancel", systemImage: "stop.circle.fill", action: onCancel)
-                .labelStyle(.iconOnly).foregroundStyle(.secondary)
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
     }
 }

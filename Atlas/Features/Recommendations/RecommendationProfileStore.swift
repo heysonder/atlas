@@ -5,12 +5,14 @@ import SwiftData
 enum RecommendationProfileStore {
     private static let snapshotID = "default"
 
-    static func loadOrBuild(in context: ModelContext,
-                            history: [HistoryEntry],
-                            feedback: [FeedbackSignal],
-                            saved: [PlaylistVideo],
-                            searches: [SearchSignal],
-                            subscribedIDs: Set<String>) -> InterestProfile {
+    static func loadOrBuild(
+        in context: ModelContext,
+        history: [HistoryEntry],
+        feedback: [FeedbackSignal],
+        saved: [PlaylistVideo],
+        searches: [SearchSignal],
+        subscribedIDs: Set<String>
+    ) -> InterestProfile {
         let signature = RecommendationEngine.profileSignature(
             history: history, feedback: feedback, saved: saved,
             searches: searches, subscribedIDs: subscribedIDs)
@@ -31,22 +33,29 @@ enum RecommendationProfileStore {
         return try? context.fetch(descriptor).first
     }
 
-    private static func upsert(_ profile: InterestProfile, signature: String,
-                               existing: RecommendationProfileSnapshot?,
-                               in context: ModelContext) {
+    private static func upsert(
+        _ profile: InterestProfile, signature: String,
+        existing: RecommendationProfileSnapshot?,
+        in context: ModelContext
+    ) {
+        guard
+            RecommendationProfileSnapshot.isPersistable(
+                signature: signature, profile: profile)
+        else { return }
         if let existing {
             existing.update(signature: signature, from: profile)
         } else {
             let affinity = profile.channelAffinity.sorted { $0.key < $1.key }
-            context.insert(RecommendationProfileSnapshot(
-                id: snapshotID,
-                signature: signature,
-                relatedSeedIDs: profile.relatedSeeds.map(\.videoID),
-                explorationSeedIDs: profile.explorationSeeds.map(\.videoID),
-                candidateSearchQueries: profile.candidateSearchQueries,
-                savedSeedIDs: profile.savedSeedIDs,
-                channelAffinityKeys: affinity.map(\.key),
-                channelAffinityValues: affinity.map(\.value)))
+            context.insert(
+                RecommendationProfileSnapshot(
+                    id: snapshotID,
+                    signature: signature,
+                    relatedSeedIDs: profile.relatedSeeds.map(\.videoID),
+                    explorationSeedIDs: profile.explorationSeeds.map(\.videoID),
+                    candidateSearchQueries: profile.candidateSearchQueries,
+                    savedSeedIDs: profile.savedSeedIDs,
+                    channelAffinityKeys: affinity.map(\.key),
+                    channelAffinityValues: affinity.map(\.value)))
         }
     }
 }

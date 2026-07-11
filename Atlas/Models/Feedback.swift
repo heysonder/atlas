@@ -1,6 +1,6 @@
 import Foundation
-import SwiftData
 import PipedKit
+import SwiftData
 
 /// Explicit taste feedback for a video: "Suggest more" (+1) or "Suggest less"
 /// (−1). Stores enough of the video's signature (uploader, YouTube category,
@@ -18,8 +18,10 @@ final class Feedback {
     var tags: [String]?
     var createdAt: Date
 
-    init(videoID: String, signal: Int, title: String, uploader: String? = nil,
-         category: String? = nil, tags: [String]? = nil, createdAt: Date = .now) {
+    init(
+        videoID: String, signal: Int, title: String, uploader: String? = nil,
+        category: String? = nil, tags: [String]? = nil, createdAt: Date = .now
+    ) {
         self.videoID = videoID
         self.signal = signal
         self.title = title
@@ -41,31 +43,59 @@ enum FeedbackStore {
     }
 
     /// Set the feedback for a list item (category/tags unknown from a card).
-    static func set(_ signal: Int, for item: StreamItem, in context: ModelContext) {
-        guard let id = item.videoID else { return }
-        set(signal, videoID: id, title: item.displayTitle,
+    @discardableResult
+    static func set(_ signal: Int, for item: StreamItem, in context: ModelContext) -> Bool {
+        guard let id = item.videoID else { return false }
+        return set(
+            signal, videoID: id, title: item.displayTitle,
             uploader: item.uploaderName, category: nil, tags: nil, in: context)
     }
 
     /// Set the feedback for a fully-resolved video (category/tags known).
-    static func set(_ signal: Int, videoID: String, title: String, uploader: String?,
-                    category: String?, tags: [String]?, in context: ModelContext) {
+    @discardableResult
+    static func set(
+        _ signal: Int, videoID: String, title: String, uploader: String?,
+        category: String?, tags: [String]?, in context: ModelContext
+    ) -> Bool {
         let descriptor = FetchDescriptor<Feedback>(predicate: #Predicate { $0.videoID == videoID })
-        let existing = try? context.fetch(descriptor).first
-        guard signal != 0 else {                       // toggle-off → clear
-            if let existing { context.delete(existing) }
-            return
+        if signal == 0 {
+            guard let matches = try? context.fetch(descriptor) else { return false }
+            if let existing = matches.first { context.delete(existing) }
+            return true
         }
+        do {
+            try PersistedMetadataPolicy.requireIdentifier(videoID, field: "feedback.videoID")
+            guard signal == -1 || signal == 1 else { return false }
+            try PersistedMetadataPolicy.requireText(title, field: "feedback.title")
+            try PersistedMetadataPolicy.requireOptionalText(
+                uploader, field: "feedback.uploader")
+            try PersistedMetadataPolicy.requireOptionalText(
+                category, field: "feedback.category")
+            try PersistedMetadataPolicy.requireTags(tags, field: "feedback.tags")
+        } catch {
+            return false
+        }
+        guard let matches = try? context.fetch(descriptor) else { return false }
+        let existing = matches.first
         if let existing {
             existing.signal = signal
             existing.title = title
             existing.uploader = uploader
-            if let category { existing.category = category }   // keep richer data once known
+            if let category { existing.category = category }  // keep richer data once known
             if let tags { existing.tags = tags }
             existing.createdAt = .now
         } else {
-            context.insert(Feedback(videoID: videoID, signal: signal, title: title,
-                                    uploader: uploader, category: category, tags: tags))
+            guard let count = try? context.fetchCount(FetchDescriptor<Feedback>()),
+                count < PersistedMetadataPolicy.maximumFeedback,
+                PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context)
+            else {
+                return false
+            }
+            context.insert(
+                Feedback(
+                    videoID: videoID, signal: signal, title: title,
+                    uploader: uploader, category: category, tags: tags))
         }
+        return true
     }
 }

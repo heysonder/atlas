@@ -1,5 +1,5 @@
-import SwiftUI
 import PipedKit
+import SwiftUI
 
 /// Renders player-adjacent text with tappable video timestamps such as `0:42`
 /// and `1:02:03`.
@@ -22,17 +22,20 @@ struct TimestampedText: View {
 
     var body: some View {
         Text(attributedText)
-            .environment(\.openURL, OpenURLAction { url in
-                guard url.scheme == Self.urlScheme,
-                      let secondsText = URLComponents(
-                        url: url,
-                        resolvingAgainstBaseURL: false)?.host,
-                      let seconds = Int(secondsText) else {
-                    return .systemAction
-                }
-                onTimestampTap(seconds)
-                return .handled
-            })
+            .environment(
+                \.openURL,
+                OpenURLAction { url in
+                    guard url.scheme == Self.urlScheme,
+                        let secondsText = URLComponents(
+                            url: url,
+                            resolvingAgainstBaseURL: false)?.host,
+                        let seconds = Int(secondsText)
+                    else {
+                        return .systemAction
+                    }
+                    onTimestampTap(seconds)
+                    return .handled
+                })
     }
 
     private var attributedText: AttributedString {
@@ -42,10 +45,12 @@ struct TimestampedText: View {
         var cursor = text.startIndex
 
         for timestamp in timestamps {
-            guard let range = text.range(
-                of: timestamp.label,
-                range: cursor..<text.endIndex
-            ) else { continue }
+            guard
+                let range = text.range(
+                    of: timestamp.label,
+                    range: cursor..<text.endIndex
+                )
+            else { continue }
 
             if cursor < range.lowerBound {
                 output += AttributedString(String(text[cursor..<range.lowerBound]))
