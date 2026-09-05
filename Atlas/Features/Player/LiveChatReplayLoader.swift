@@ -43,37 +43,57 @@ final class LiveChatReplayLoader {
     private var requestedTokens = Set<String>()
     private var seenIDs = Set<String>()
     @ObservationIgnored private let pageLoader: LiveChatReplayPageLoader
+    @ObservationIgnored private let sleeper: LiveChatSleeper
 
     init(
         client: PipedClient,
         videoID: String,
         pageLoader: @escaping LiveChatReplayPageLoader = { client, videoID, token in
             try await client.liveChatReplay(videoID: videoID, pageToken: token)
+        },
+        sleeper: @escaping LiveChatSleeper = { milliseconds in
+            try await Task.sleep(for: .milliseconds(milliseconds))
         }
     ) {
         self.client = client
         self.videoID = videoID
         self.pageLoader = pageLoader
+        self.sleeper = sleeper
     }
 
     /// Fetches the first page; a no-op once it has succeeded.
     func loadInitial() async {
-        guard !didLoad, !isLoading, !unavailable else { return }
+        guard !Task.isCancelled, !didLoad, !isLoading, !unavailable else { return }
         isLoading = true
         defer { isLoading = false }
         do {
             let page = try await pageLoader(client, videoID, nil)
+            try Task.checkCancellation()
             append(page.messages ?? [])
             advance(to: page.nextPageToken)
             didLoad = true
             loadFailed = false
             paginationFailed = false
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
         } catch {
             if LiveChatLoader.isPermanentFailure(error) {
                 unavailable = true
             } else {
                 loadFailed = true
             }
+        }
+    }
+
+    /// Follows the latest playhead while the chat pane is visible. Playback
+    /// updates do not cancel a page that is already being fetched.
+    func run(playbackSeconds: () -> Double?) async {
+        while !Task.isCancelled, !reachedEnd {
+            await follow(playbackSeconds: playbackSeconds())
+            guard !Task.isCancelled, !reachedEnd else { return }
+            guard (try? await sleeper(1_000)) != nil else { return }
         }
     }
 
@@ -89,7 +109,7 @@ final class LiveChatReplayLoader {
     /// Appends the next page when one exists. On failure it keeps the token
     /// and flags for a retry rather than dropping the transcript.
     func loadMore() async {
-        guard didLoad, !isLoading, !reachedEnd else { return }
+        guard !Task.isCancelled, didLoad, !isLoading, !reachedEnd else { return }
         guard let token = nextPageToken, requestedTokens.insert(token).inserted else {
             reachedEnd = true
             return
@@ -98,6 +118,7 @@ final class LiveChatReplayLoader {
         defer { isLoading = false }
         do {
             let page = try await pageLoader(client, videoID, token)
+            try Task.checkCancellation()
             let addedCount = append(page.messages ?? [])
             if addedCount == 0, page.nextPageToken == nil || page.nextPageToken == token {
                 reachedEnd = true
@@ -107,7 +128,9 @@ final class LiveChatReplayLoader {
             paginationFailed = false
         } catch {
             requestedTokens.remove(token)
-            paginationFailed = true
+            if !(error is CancellationError), (error as? URLError)?.code != .cancelled {
+                paginationFailed = true
+            }
         }
     }
 
