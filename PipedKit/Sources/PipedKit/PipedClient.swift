@@ -173,6 +173,26 @@ public struct PipedClient: Sendable {
         try await commentsNextPage(videoID: videoID, nextPage: nextpage)
     }
 
+    /// The latest window of live chat messages for a currently-live stream.
+    /// Not part of upstream Piped — only some instances serve it (a plain 404
+    /// elsewhere), and observed servers ignore the continuation token, so poll
+    /// this and de-duplicate by message id rather than chaining `nextPageToken`.
+    public func liveChat(videoID: String) async throws -> LiveChatPage {
+        try await get("livechat/\(videoID)")
+    }
+
+    /// Chat replay for an ended live stream, paged from the start of the
+    /// stream. Unlike the live variant, `pageToken` chaining works here —
+    /// each page is a consecutive window with `videoOffsetMs` per message.
+    /// The server cannot seek: pages only walk forward from the beginning.
+    public func liveChatReplay(videoID: String, pageToken: String? = nil) async throws -> LiveChatPage {
+        var query = ["replay": "true"]
+        if let pageToken {
+            query["pageToken"] = pageToken
+        }
+        return try await get("livechat/\(videoID)", query: query)
+    }
+
     /// Crowdsourced SponsorBlock skip segments for a video, proxied by the
     /// instance. `categories` are SponsorBlock category ids (see `SponsorCategory`).
     /// Returns an empty array when none are requested or the video has no data.
