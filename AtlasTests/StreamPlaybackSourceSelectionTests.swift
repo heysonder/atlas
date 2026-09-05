@@ -201,10 +201,10 @@ import Testing
     #expect(source == .direct(hls))
 }
 
-@Test func directHLSFallbackSelectsPreferredAudio() throws {
+@Test func directHLSFallbackSelectsPreferredAudio() async throws {
     let detail = streamPlaybackDetail(hls: "https://example.com/master.m3u8")
 
-    let playback = try #require(StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail))
+    let playback = try #require(await StreamPlaybackBuilder.makeDirectFailureFallbackItem(for: detail))
 
     #expect(!playback.composed)
     #expect(playback.sourceName == "fallback-hls")
