@@ -15,6 +15,11 @@ final class ForYouCandidateCollector {
     var didPresentPersonalized = false
     var didStartDiscovery = false
     var renderRevision = 0
+    /// First-screen video IDs already counted as impressions for this load.
+    var recordedImpressionIDs: Set<String> = []
+    /// Scoring features from the latest semantic rank pass, for outcome logging
+    /// (refine-pass features overwrite the coarse ones for the head).
+    var outcomeFeatures: [String: RecommendationOutcomeFeatures] = [:]
 
     private var searchCandidates: [StreamItem] = []
     private var savedCandidates: [StreamItem] = []

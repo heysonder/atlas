@@ -67,11 +67,14 @@ extension RecommendationEngine {
 
     /// How strongly a watch counts, from how much of it you actually saw.
     /// Reaching the end is a strong "I really like this — suggest more"; bailing
-    /// early is weak. Anchored so ~50% watched returns 1.0 — the original flat
-    /// weight, so half-watches behave exactly as before. It then ramps up hard,
-    /// hitting the 4× ceiling by 80%: you don't have to reach 100%, because end
-    /// cards, outros and ads mean people routinely stop within the last 10–20%, so
-    /// "near the end" already counts as finished. Unknown duration stays neutral.
+    /// early is not interest at all: below 25% the weight is 0, so an abandoned
+    /// open adds nothing to taste or channel affinity (abandons are the most
+    /// common implicit signal, and they used to count as mild positives).
+    /// Anchored so ~50% watched returns 1.0 — the original flat weight, so
+    /// half-watches behave exactly as before. It then ramps up hard, hitting the
+    /// 4× ceiling by 80%: you don't have to reach 100%, because end cards, outros
+    /// and ads mean people routinely stop within the last 10–20%, so "near the
+    /// end" already counts as finished. Unknown duration stays neutral.
     nonisolated static func watchWeight(position: Double, duration: Double) -> Double {
         guard position.isFinite,
             duration.isFinite,
@@ -81,21 +84,45 @@ extension RecommendationEngine {
         let unboundedRatio = position / duration
         guard unboundedRatio.isFinite else { return 1 }
         let ratio = min(unboundedRatio, 1)
-        if ratio <= 0.5 { return 0.5 + ratio }  // 0 → 0.5, 0.5 → 1.0
+        if ratio < 0.25 { return 0 }  // early bail — no signal
+        if ratio <= 0.5 { return (ratio - 0.25) * 4 }  // 0.25 → 0, 0.5 → 1.0
         return min(4, 1 + (ratio - 0.5) * 10)  // 0.5 → 1.0, ≥0.8 → 4.0
+    }
+
+    /// Linear recency decay for an upload timestamp (Piped millisecond epoch),
+    /// hitting 0 at `horizonDays`.
+    nonisolated static func uploadFreshness(
+        _ uploaded: Int64?, now: TimeInterval, horizonDays: Double
+    ) -> Double {
+        guard let uploaded, uploaded > 0, horizonDays > 0 else { return 0 }
+        let ageDays = (now - Double(uploaded) / 1000) / 86_400
+        return max(0, 1 - ageDays / horizonDays)
+    }
+
+    /// Corroboration: how many seed videos' related-streams pointed at this
+    /// candidate. Log-damped so a viral video every seed links to can't dominate
+    /// on popularity alone, capped so the boost stays comparable to a topic hit.
+    nonisolated static func frequencyBoost(_ count: Int) -> Double {
+        min(0.45, 0.15 * log2(1 + Double(max(0, count))))
+    }
+
+    /// Multiplier for a candidate the feed has already shown without a tap:
+    /// each unclicked first-screen impression compounds a 15% haircut, so a
+    /// stale recommendation sinks instead of greeting you every open. Capped —
+    /// a good match should resurface eventually, not vanish forever.
+    nonisolated static func impressionPenalty(_ impressions: Int) -> Double {
+        pow(0.85, Double(min(max(0, impressions), 8)))
     }
 
     // MARK: Strategy A — heuristic
 
-    nonisolated static func rankRelated(_ pool: CandidatePool, profile: InterestProfile) -> [StreamItem] {
+    nonisolated static func rankRelated(
+        _ pool: CandidatePool, profile: InterestProfile,
+        impressions: [String: Int] = [:]
+    ) -> [StreamItem] {
         let maxAff = max(profile.channelAffinity.values.max() ?? 1, 1)
         let now = Date().timeIntervalSince1970
 
-        func freshness(_ uploaded: Int64?) -> Double {
-            guard let uploaded, uploaded > 0 else { return 0 }
-            let ageDays = (now - Double(uploaded) / 1000) / 86_400
-            return max(0, 1 - ageDays / 60)  // decays over ~2 months
-        }
         func score(_ item: StreamItem) -> Double {
             let id = item.videoID ?? ""
             let sources = pool.sourcesByID[id] ?? []
@@ -107,7 +134,10 @@ extension RecommendationEngine {
             let sourceBoost =
                 (sources.contains(.saved) ? 1.0 : 0) + (sources.contains(.search) ? 0.8 : 0)
                 + (sources.contains(.subscription) ? 0.6 : 0) + (sources.contains(.exploration) ? 0.25 : 0)
-            return freq * 2.0 + aff * 1.5 + sub + sourceBoost + freshness(item.uploaded) * 0.5
+            let base =
+                freq * 2.0 + aff * 1.5 + sub + sourceBoost
+                + uploadFreshness(item.uploaded, now: now, horizonDays: 60) * 0.5
+            return base * impressionPenalty(impressions[id] ?? 0)
         }
         // Score once per item, then sort — not once per comparison.
         return diversify(
@@ -180,6 +210,52 @@ extension RecommendationEngine {
             }
         }
         return front + remainder
+    }
+
+    // MARK: Novelty slots
+
+    /// Guarantee the first screen carries a taste of the unfamiliar. The
+    /// exploration source alone is still your own related-streams graph, so left
+    /// to the ranker the feed slowly narrows toward channels you already know.
+    /// This promotes the best-ranked candidates from channels you've never
+    /// watched, subscribed to, or saved into fixed early positions — novelty
+    /// drawn from the related graph, not a trending feed.
+    nonisolated static func injectNoveltySlots(
+        _ ranked: [StreamItem], profile: InterestProfile,
+        window: Int = 15, slots: Int = 2, positions: [Int] = [4, 9]
+    ) -> [StreamItem] {
+        guard ranked.count > window, slots > 0 else { return ranked }
+
+        func isNovel(_ item: StreamItem) -> Bool {
+            if let channelID = item.uploaderChannelID,
+                profile.subscribedIDs.contains(channelID)
+            {
+                return false
+            }
+            let name = item.uploaderName ?? ""
+            return (profile.channelAffinity[name] ?? 0) <= 0
+        }
+
+        // Novel items the ranker already put on the first screen count toward
+        // the quota — don't force extras past picks that earned their spot.
+        let alreadyNovel = ranked.prefix(window).filter(isNovel).count
+        var needed = max(0, slots - alreadyNovel)
+        guard needed > 0 else { return ranked }
+
+        var promotedIndices: [Int] = []
+        for index in window..<ranked.count where isNovel(ranked[index]) {
+            promotedIndices.append(index)
+            needed -= 1
+            if needed == 0 { break }
+        }
+        guard !promotedIndices.isEmpty else { return ranked }
+
+        let promotedSet = Set(promotedIndices)
+        var rest = ranked.enumerated().filter { !promotedSet.contains($0.offset) }.map(\.element)
+        for (slot, index) in zip(positions, promotedIndices) {
+            rest.insert(ranked[index], at: min(max(0, slot), rest.count))
+        }
+        return rest
     }
 
     /// Pull-to-refresh should not feel like a no-op. When the top of the previous

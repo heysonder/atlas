@@ -11,6 +11,8 @@ enum AtlasModelSchema {
         SearchEntry.self,
         VideoSignalCacheEntry.self,
         RecommendationProfileSnapshot.self,
+        FeedImpressionEntry.self,
+        RecommendationOutcomeEntry.self,
     ]
 
     static var schema: Schema {

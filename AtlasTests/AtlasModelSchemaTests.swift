@@ -15,6 +15,8 @@ import Testing
     #expect(modelNames.contains("SearchEntry"))
     #expect(modelNames.contains("VideoSignalCacheEntry"))
     #expect(modelNames.contains("RecommendationProfileSnapshot"))
+    #expect(modelNames.contains("FeedImpressionEntry"))
+    #expect(modelNames.contains("RecommendationOutcomeEntry"))
 
     _ = try makeTestContainer()
 }
