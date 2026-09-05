@@ -20,6 +20,7 @@ struct PlaylistsView: View {
                 } actions: {
                     Button("New Playlist") { creating = true }
                         .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
                 }
             } else if horizontalSizeClass == .regular {
                 AdaptiveGrid(minCardWidth: 300) {

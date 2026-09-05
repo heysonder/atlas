@@ -38,8 +38,7 @@ struct PlayerInfoDescriptionSection: View {
                         }
                     } label: {
                         Text(isExpanded ? "Show less" : "Show more")
-                            .frame(minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
+                            .inlineTapTarget()
                     }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.plain)
