@@ -43,10 +43,22 @@ import Testing
         {"error":"This video is age restricted and unavailable without signing in."}
         """.data(using: .utf8)!
     let error = PipedError.fromHTTPStatus(403, data: data)
-    guard case .upstream(let message) = error else {
+    guard case .upstream(let message, let statusCode) = error else {
         Issue.record("expected .upstream, got \(error)")
         return
     }
     #expect(message == "This video is age restricted and unavailable without signing in.")
     #expect(error.errorDescription == message)
+    #expect(statusCode == 403)
+}
+
+@Test(arguments: [404, 408, 425, 429, 500, 503])
+func jsonServerErrorsPreserveTheirHTTPStatus(status: Int) {
+    let error = PipedError.fromHTTPStatus(status, data: Data(#"{"error":"Upstream unavailable"}"#.utf8))
+    guard case .upstream(let message, let statusCode) = error else {
+        Issue.record("Expected an upstream error with its original HTTP status")
+        return
+    }
+    #expect(statusCode == status)
+    #expect(message == "Upstream unavailable")
 }

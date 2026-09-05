@@ -99,7 +99,7 @@ private func page(
 @MainActor
 @Test func serverRejectionBeforeAnyMessagesHidesChat() async throws {
     let loader = try makeLoader(pages: [
-        .failure(PipedError.upstream("This video does not have live chat"))
+        .failure(PipedError.upstream("This video does not have live chat", statusCode: 404))
     ])
     await loader.refresh()
     #expect(loader.availability == .unavailable)
@@ -160,9 +160,28 @@ private func page(
 }
 
 @Test func permanentFailureClassification() {
-    #expect(LiveChatLoader.isPermanentFailure(PipedError.upstream("no chat")))
+    #expect(LiveChatLoader.isPermanentFailure(PipedError.upstream("no chat", statusCode: 404)))
     #expect(LiveChatLoader.isPermanentFailure(PipedError.http(404)))
     #expect(!LiveChatLoader.isPermanentFailure(PipedError.http(503)))
     #expect(!LiveChatLoader.isPermanentFailure(URLError(.timedOut)))
     #expect(!LiveChatLoader.isPermanentFailure(PipedError.decoding("x")))
+}
+
+@MainActor
+@Test(arguments: [408, 425, 429, 500, 503])
+func liveChatRecoversAfterTransientHTTPFailures(status: Int) async throws {
+    let loader = try makeLoader(pages: [
+        .success(page([textMessage(id: "first", usec: 1)])),
+        .failure(PipedError.upstream("Temporarily unavailable", statusCode: status)),
+        .failure(PipedError.http(status)),
+        .success(page([textMessage(id: "recovered", usec: 2)])),
+    ])
+    await loader.refresh()
+    await loader.refresh()
+    #expect(loader.availability == .active)
+    await loader.refresh()
+    #expect(loader.availability == .active)
+    await loader.refresh()
+    #expect(loader.messages.map(\.id) == ["first", "recovered"])
+    #expect(!LiveChatLoader.isPermanentFailure(PipedError.upstream("Unknown upstream failure")))
 }
