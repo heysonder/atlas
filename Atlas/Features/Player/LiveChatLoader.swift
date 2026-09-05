@@ -155,8 +155,8 @@ final class LiveChatLoader {
     /// else (network hiccups, 5xx, decode noise) is worth another poll.
     static func isPermanentFailure(_ error: Error) -> Bool {
         switch error {
-        case PipedError.upstream: true
-        case PipedError.http(let code): (400..<500).contains(code)
+        case PipedError.http(let code), PipedError.upstream(_, .some(let code)):
+            (400..<500).contains(code) && ![408, 425, 429].contains(code)
         default: false
         }
     }
