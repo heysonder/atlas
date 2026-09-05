@@ -20,6 +20,7 @@ struct AtlasApp: App {
         _app = State(initialValue: appModel)
         _downloads = State(initialValue: downloadManager)
         configureAudioSession()
+        AppDiagnostics.start()
 
         // Wire Siri / App Intents: give intents access to the store and the live
         // app + download manager, then publish downloads & history to Spotlight.
@@ -43,6 +44,8 @@ struct AtlasApp: App {
             diskCapacity: 256 * 1024 * 1024)
     }
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -50,6 +53,9 @@ struct AtlasApp: App {
                 .environment(downloads)
         }
         .modelContainer(modelContainer)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            AppDiagnostics.sceneDidChange(active: phase == .active)
+        }
     }
 
     private struct ModelContainerResult {

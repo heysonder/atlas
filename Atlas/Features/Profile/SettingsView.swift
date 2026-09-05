@@ -9,6 +9,7 @@ enum SettingsRoute: Hashable {
     case instances
     case sponsorBlock
     case backup
+    case diagnostics
 }
 
 /// Root settings screen: the lightweight, frequently-touched controls stay
@@ -123,6 +124,9 @@ struct SettingsView: View {
                         : "Off")
                 NavigationLink(value: SettingsRoute.backup) {
                     Label("Backup & Data", systemImage: "externaldrive")
+                }
+                NavigationLink(value: SettingsRoute.diagnostics) {
+                    Label("Diagnostics", systemImage: "waveform.path.ecg")
                 }
             }
 

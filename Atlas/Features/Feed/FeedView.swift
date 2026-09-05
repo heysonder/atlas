@@ -124,7 +124,10 @@ struct FeedView: View {
                 ChannelDetailView(channelID: id)
             }
         }
-        .task(id: loadKey) { await loadIfNeeded() }
+        .task(id: loadKey) {
+            AppDiagnostics.reportFeed(mode: feedMode)
+            await loadIfNeeded()
+        }
     }
 
     private var canLoadMore: Bool {
