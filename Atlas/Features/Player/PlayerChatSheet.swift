@@ -7,10 +7,6 @@ struct PlayerChatContent: View {
     let replayLoader: LiveChatReplayLoader?
     let playbackTime: PlayerPlaybackTime?
 
-    private var playbackTick: Int? {
-        playbackTime?.seconds.map { Int($0.rounded(.down)) }
-    }
-
     var body: some View {
         Group {
             if let liveLoader {
@@ -70,8 +66,8 @@ struct PlayerChatContent: View {
                     fillsContainer: true)
             }
         }
-        .task(id: playbackTick) {
-            await loader.follow(playbackSeconds: playbackTime?.seconds)
+        .task(id: loader.videoID) {
+            await loader.run { playbackTime?.seconds }
         }
     }
 
