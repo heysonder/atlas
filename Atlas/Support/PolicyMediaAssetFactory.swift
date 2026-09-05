@@ -29,8 +29,8 @@ nonisolated enum PolicyMediaAssetFactory {
         for url: URL,
         client: PolicyHTTPClient,
         noCache: Bool = false
-    ) throws -> AVURLAsset {
-        try client.context.validate(url)
+    ) async throws -> AVURLAsset {
+        try await client.context.validateAsynchronously(url)
         guard noCache else { return AVURLAsset(url: url) }
         return AVURLAsset(
             url: url,
@@ -46,8 +46,8 @@ nonisolated enum PolicyMediaAssetFactory {
         for url: URL,
         client: PolicyHTTPClient,
         noCache: Bool = false
-    ) throws -> AVURLAsset {
-        try client.context.validate(url)
+    ) async throws -> AVURLAsset {
+        try await client.context.validateAsynchronously(url)
         let encoded = try policyURL(for: url)
         let delegate = PolicyMediaResourceLoader(client: client, noCache: noCache)
         let asset = AVURLAsset(url: encoded)

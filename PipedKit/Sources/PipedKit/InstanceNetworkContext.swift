@@ -29,6 +29,15 @@ public struct InstanceNetworkContext: Sendable {
             policy: policy)
     }
 
+    /// Resolve and validate a destination away from a UI actor. The system
+    /// resolver performs blocking DNS work, even when its caller is async.
+    @concurrent
+    public func validateAsynchronously(_ url: URL) async throws {
+        try Task.checkCancellation()
+        try validate(url)
+        try Task.checkCancellation()
+    }
+
     public func validate(_ url: URL) throws {
         try policy.validate(url, scope: scope)
     }

@@ -82,7 +82,7 @@ extension EmbeddedPlayerModel {
         case .none:
             fallbackPlayback = nil
         case .direct:
-            fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(
+            fallbackPlayback = await StreamPlaybackBuilder.makeDirectFailureFallbackItem(
                 for: detail,
                 client: client)
         case .composedOrDirect:
