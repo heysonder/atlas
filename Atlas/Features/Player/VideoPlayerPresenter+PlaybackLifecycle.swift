@@ -231,6 +231,7 @@ extension VideoPlayerPresenter.Coordinator {
     }
 
     func hardStop() {
+        AppDiagnostics.reportPlayback(source: nil)
         loadTask?.cancel()
         loadTask = nil
         fallbackCheckTask?.cancel()

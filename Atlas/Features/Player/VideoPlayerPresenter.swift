@@ -198,6 +198,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     source: playback.sourceName)
                 debugModel.configure(detail: detail, composed: playback.composed, allowAV1: Self.supportsAV1)
                 PlaybackDiagnostics.start(videoID: request.videoID, source: playback.sourceName)
+                AppDiagnostics.reportPlayback(source: playback.sourceName)
                 if playback.failureFallback != .none {
                     observeForFailure(
                         initialItem,
@@ -278,6 +279,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             installItemDiagnostics(for: item, videoID: request.videoID, source: "local")
             debugModel.configureLocal()
             PlaybackDiagnostics.start(videoID: request.videoID, source: "local")
+            AppDiagnostics.reportPlayback(source: "local")
             installDebugOverlay(on: controller)
             PlayerNowPlayingMetadata.attachArtwork(
                 to: item,
