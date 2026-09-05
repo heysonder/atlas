@@ -145,6 +145,7 @@ extension VideoPlayerPresenter.Coordinator {
     }
 
     func resetForItemReplacement(on player: AVPlayer) {
+        resetChat()
         loadTask?.cancel()
         loadTask = nil
         fallbackCheckTask?.cancel()
@@ -230,14 +231,19 @@ extension VideoPlayerPresenter.Coordinator {
         hardStop()
     }
 
-    func hardStop() {
-        AppDiagnostics.reportPlayback(source: nil)
+    func resetChat() {
         chatProbeTask?.cancel()
         chatProbeTask = nil
         liveChatLoader = nil
         chatReplayLoader = nil
         chatButtonModel.isVisible = false
         chatButtonModel.isLive = false
+        chatButtonModel.isPaused = false
+    }
+
+    func hardStop() {
+        AppDiagnostics.reportPlayback(source: nil)
+        resetChat()
         loadTask?.cancel()
         loadTask = nil
         fallbackCheckTask?.cancel()

@@ -18,6 +18,7 @@ extension VideoPlayerPresenter.Coordinator {
         controller.addChild(host)
         overlay.addSubview(host.view)
         host.didMove(toParent: controller)
+        debugOverlayHost = host
         let guide = overlay.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
             host.view.topAnchor.constraint(equalTo: guide.topAnchor),
@@ -84,7 +85,7 @@ extension VideoPlayerPresenter.Coordinator {
     /// or after a one-page replay probe for anything else (most videos are
     /// plain uploads and the probe comes back empty).
     func installChatAvailability(detail: VideoDetail, client: PipedClient, videoID: String) {
-        chatProbeTask?.cancel()
+        resetChat()
         chatButtonModel.isLive = detail.isCurrentlyLive
         if detail.isCurrentlyLive {
             liveChatLoader = LiveChatLoader(client: client, videoID: videoID)
