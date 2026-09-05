@@ -42,7 +42,8 @@ struct ChannelEntity: AppEntity, Identifiable {
         attrs.displayName = name
         attrs.contentDescription = "Channel"
         attrs.keywords = [name, "channel", "creator", "subscription"]
-        attrs.thumbnailURL = ChannelAvatarFileCache.existingFile(for: id)
+        attrs.thumbnailURL =
+            ChannelAvatarFileCache.existingFile(for: id)
             ?? avatarURL.flatMap(URL.init(string:))
         attrs.rankingHint = 1
         let item = CSSearchableItem(
@@ -131,12 +132,14 @@ nonisolated enum ChannelAvatarFileCache {
             let (body, response) = try await client.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !body.isEmpty else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                Logger(subsystem: "sh.cmf.atlas", category: "spotlight").error("avatar fetch bad response (\(status)) for \(channelID) from \(url.host() ?? "?")")
+                Logger(subsystem: "sh.cmf.atlas", category: "spotlight").error(
+                    "avatar fetch bad response (\(status)) for \(channelID) from \(url.host() ?? "?")")
                 return
             }
             data = body
         } catch {
-            Logger(subsystem: "sh.cmf.atlas", category: "spotlight").error("avatar fetch failed for \(channelID): \(error)")
+            Logger(subsystem: "sh.cmf.atlas", category: "spotlight").error(
+                "avatar fetch failed for \(channelID): \(error)")
             return
         }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

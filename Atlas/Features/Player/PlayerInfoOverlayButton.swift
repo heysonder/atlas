@@ -78,8 +78,10 @@ struct PlayerOverlayButtons: View {
         // Reserve the expanded width for the cluster so neither button slides
         // when the labels appear on pause; the buttons themselves stay snug.
         .frame(
-            minWidth: chat.isVisible ? InfoOverlayButton.expandedFootprintWidth * 2 + 8 : InfoOverlayButton.expandedFootprintWidth,
-            alignment: .trailing)
+            minWidth: chat.isVisible
+                ? InfoOverlayButton.expandedFootprintWidth * 2 + 8 : InfoOverlayButton.expandedFootprintWidth,
+            alignment: .trailing
+        )
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: chat.isVisible)
     }
 }

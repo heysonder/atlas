@@ -33,7 +33,8 @@ struct VideoEntity: AppEntity, Identifiable {
         let attrs = CSSearchableItemAttributeSet(contentType: .movie)
         attrs.title = title
         attrs.displayName = title
-        attrs.contentDescription = localFileName == nil
+        attrs.contentDescription =
+            localFileName == nil
             ? uploader
             : [uploader, "Downloaded"].compactMap { $0 }.joined(separator: " · ")
         // Uploader is searchable via contentDescription but not a keyword, so

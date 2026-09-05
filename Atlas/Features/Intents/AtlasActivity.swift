@@ -65,7 +65,8 @@ enum AtlasURL {
         case "feed": return .forYou
         case "playlists": return .openPlaylists
         case "search":
-            let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            let q =
+                URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "q" }?.value ?? ""
             return .search(q)
         case "channel":
