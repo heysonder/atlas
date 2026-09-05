@@ -31,7 +31,9 @@ enum SpotlightIndexer {
     nonisolated static func itemID(playlist id: String) -> String { "playlist:\(id)" }
 
     enum Target: Equatable {
-        case video(String), channel(String), playlist(String)
+        case video(String)
+        case channel(String)
+        case playlist(String)
     }
 
     /// Decodes a tapped Spotlight item id. Un-namespaced ids are treated as

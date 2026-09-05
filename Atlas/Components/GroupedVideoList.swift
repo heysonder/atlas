@@ -62,7 +62,11 @@ struct GroupedVideoList: View {
                 stackLayout
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
+        .onGeometryChange(for: CGFloat.self) {
+            $0.size.width
+        } action: {
+            containerWidth = $0
+        }
     }
 
     /// Single-column feed (iPhone): full-width videos with Shorts paired 2-up or
