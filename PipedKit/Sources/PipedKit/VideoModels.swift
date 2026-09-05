@@ -199,4 +199,15 @@ public struct VideoDetail: Codable, Sendable {
     public var thumbnailUrl: String? { thumbnailURL }
 
     public var channelID: String? { PipedID.channel(fromURL: uploaderURL) }
+
+    /// True while the stream is live right now. Piped's `livestream` flag
+    /// means "live at extraction time" — an ended stream comes back as an
+    /// ordinary video (`livestream: false`, real duration), so there is no
+    /// way to tell a past broadcast from a regular upload here.
+    public var isCurrentlyLive: Bool {
+        guard livestream == true else { return false }
+        let hasHLS = hls?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasLiveDuration = duration.map { $0 <= 0 } == true
+        return hasHLS || hasLiveDuration
+    }
 }
