@@ -11,6 +11,8 @@ enum AtlasIntentAction: Equatable, Sendable {
     case resumeWatching
     case forYou
     case openDownloads
+    case openChannel(String)
+    case openPlaylists
 }
 
 /// A Library sub-screen to deep-link into. `ProfileView` owns its own navigation
@@ -19,6 +21,10 @@ enum LibraryTarget: Equatable, Sendable {
     case downloads
     case history
     case playlists
+    /// A channel detail page, pushed on top of the Channels list.
+    case channel(String)
+    /// Settings → Instance, used by `MissingInstanceView`'s "Open settings".
+    case instanceSettings
 }
 
 /// Main-actor access to the app's SwiftData store from App Intents / Spotlight,
@@ -73,6 +79,15 @@ enum IntentDataStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Specific history rows by video id (Spotlight tap → entity resolution).
+    static func history(ids: [String]) -> [HistoryEntry] {
+        guard let context else { return [] }
+        let set = Set(ids)
+        let descriptor = FetchDescriptor<HistoryEntry>(
+            predicate: #Predicate { set.contains($0.videoID) })
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
     /// The single most recent watch — what "Resume watching" plays.
     static func mostRecentWatch() -> HistoryEntry? {
         recentHistory(limit: 1).first
@@ -94,6 +109,25 @@ enum IntentDataStore {
         let items = Array(videos)
         VisibleVideoRegistry.shared.record(items)
         return items.map(VideoEntity.init)
+    }
+
+    // MARK: Channels
+
+    /// Subscribed channels, alphabetical (matches the Channels list).
+    static func subscribedChannels() -> [SubscribedChannel] {
+        guard let context else { return [] }
+        let descriptor = FetchDescriptor<SubscribedChannel>(sortBy: [SortDescriptor(\.name)])
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Newest regular upload from a channel (skips shorts/live), for
+    /// "play the latest from <channel>".
+    static func latestVideo(fromChannel channelID: String) async -> VideoEntity? {
+        guard let client else { return nil }
+        guard let channel = try? await client.channel(id: channelID) else { return nil }
+        let items = (channel.relatedStreams ?? []).filter(\.isVideo)
+        VisibleVideoRegistry.shared.record(items)
+        return items.first.map(VideoEntity.init)
     }
 
     // MARK: Playlists

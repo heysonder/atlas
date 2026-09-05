@@ -57,6 +57,28 @@ struct AtlasShortcuts: AppShortcutsProvider {
 
         // The playlist is an AppEntity, so — unlike the search String — it CAN be
         // spoken inside the phrase, and the query matches it by name.
+        // Spoken creator name resolves through ChannelEntityQuery against the
+        // user's subscriptions; Siri offers the list when it can't match.
+        AppShortcut(
+            intent: OpenChannelIntent(),
+            phrases: [
+                "Open \(\.$target) in \(.applicationName)",
+                "Show \(\.$target) in \(.applicationName)",
+                "Open a channel in \(.applicationName)",
+            ],
+            shortTitle: "Open Channel",
+            systemImageName: "person.crop.circle")
+
+        AppShortcut(
+            intent: PlayLatestFromChannelIntent(),
+            phrases: [
+                "Play the latest from \(\.$channel) in \(.applicationName)",
+                "Play the newest \(\.$channel) video in \(.applicationName)",
+                "Play something new from \(\.$channel) in \(.applicationName)",
+            ],
+            shortTitle: "Play Latest",
+            systemImageName: "play.circle")
+
         // A phrase can interpolate only ONE parameter, so we speak the playlist
         // and let Siri ask "which video?" (via the parameter's requestValueDialog),
         // which the searchable VideoEntity can resolve from a description.
