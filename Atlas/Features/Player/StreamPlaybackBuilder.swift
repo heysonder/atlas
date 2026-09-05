@@ -38,7 +38,10 @@ enum StreamPlaybackBuilder {
     }
 
     static let defaultStallFallbackDelay: TimeInterval = 15
-    static let av1HLSStallFallbackDelay: TimeInterval = 45
+    /// The master is pre-warmed alongside /streams and not-ready variants are
+    /// retried in the loader, so a rendition that still hasn't produced a frame
+    /// after this long is treated as dead rather than slow.
+    static let av1HLSStallFallbackDelay: TimeInterval = 20
     /// Remote composition assembly (track + duration loads through the proxy)
     /// is cancelled after this long, so a hung proxy degrades to the direct
     /// fallback instead of a spinner that never resolves.
@@ -260,8 +263,11 @@ enum StreamPlaybackBuilder {
         // No bitrate/resolution/buffer caps: hand quality selection entirely to
         // AVPlayer's adaptive logic so it starts low and ramps up on its own.
         // AV1 HLS still uses a no-cache asset to avoid chasing stale signed URLs.
+        // Direct/HLS playback goes through AVFoundation's native loader (the
+        // resource-loader proxy broke HLS on device); the URL is still policy
+        // validated.
         guard
-            let asset = try? PolicyMediaAssetFactory.asset(
+            let asset = try? PolicyMediaAssetFactory.nativeAsset(
                 for: url, client: client, noCache: usesAV1HLS)
         else { return nil }
         return AVPlayerItem(asset: asset)

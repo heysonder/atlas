@@ -83,6 +83,12 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         var sponsorObserver: Any?
         let sponsorModel = SponsorSkipModel()
         var skipButtonHost: UIHostingController<SkipSponsorButton>?
+        /// Background-audio continuity for the full-screen player: AVKit pauses
+        /// video when the app leaves the foreground unless the player is
+        /// detached from the view controller, so detach on background and
+        /// reattach on return. PiP manages its own lifecycle and is skipped.
+        nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
+        private var detachedForBackground = false
 
         init(
             app: AppModel,
@@ -95,6 +101,43 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             self.modelContext = modelContext
             self.clearRequest = clearRequest
             super.init()
+            let center = NotificationCenter.default
+            lifecycleObservers = [
+                center.addObserver(
+                    forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.detachPlayerForBackground() }
+                },
+                center.addObserver(
+                    forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.reattachPlayerAfterBackground() }
+                },
+            ]
+        }
+
+        deinit {
+            for observer in lifecycleObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        /// Keeps audio going with the screen locked: with the player detached,
+        /// AVPlayer continues (the audio session is `.playback`) while AVKit
+        /// has no video surface to pause on.
+        func detachPlayerForBackground() {
+            guard !pipActive, let playerVC, let player, playerVC.player === player,
+                player.timeControlStatus != .paused
+            else { return }
+            playerVC.player = nil
+            detachedForBackground = true
+        }
+
+        func reattachPlayerAfterBackground() {
+            guard detachedForBackground else { return }
+            detachedForBackground = false
+            guard let playerVC, let player, playerVC.player == nil else { return }
+            playerVC.player = player
         }
 
         func sync(request: PlayRequest?) {
