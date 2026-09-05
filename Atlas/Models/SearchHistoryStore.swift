@@ -3,6 +3,19 @@ import SwiftData
 
 @MainActor
 enum SearchHistoryStore {
+    /// Recent searches kept; adding beyond this evicts the least recent.
+    static let limit = 15
+
+    /// Trims the history down to `limit`, least-recent first.
+    static func prune(in context: ModelContext) {
+        let descriptor = FetchDescriptor<SearchEntry>(
+            sortBy: [SortDescriptor(\.lastSearchedAt, order: .reverse)])
+        guard let entries = try? context.fetch(descriptor), entries.count > limit else { return }
+        for entry in entries.dropFirst(limit) {
+            context.delete(entry)
+        }
+    }
+
     @discardableResult
     static func record(_ raw: String, in context: ModelContext, now: Date = .now) -> SearchEntry? {
         guard let display = SearchEntry.displayText(raw) else { return nil }
@@ -31,12 +44,10 @@ enum SearchHistoryStore {
             return nil
         }
 
-        guard let count = try? context.fetchCount(FetchDescriptor<SearchEntry>()),
-            count < PersistedMetadataPolicy.maximumSearches,
-            PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context)
-        else { return nil }
+        guard PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context) else { return nil }
         let entry = SearchEntry(query: key, displayQuery: display, lastSearchedAt: now)
         context.insert(entry)
+        prune(in: context)
         return entry
     }
 

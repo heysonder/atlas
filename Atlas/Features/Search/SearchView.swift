@@ -55,6 +55,7 @@ struct SearchView: View {
                 }
         }
         .searchable(text: $query, placement: .automatic, prompt: "Search YouTube")
+        .onAppear { SearchHistoryStore.prune(in: modelContext) }
         .searchFocused($searchFocused)
         .searchSuggestions {
             // Only while the field is focused. The system keeps the suggestion
@@ -135,11 +136,7 @@ struct SearchView: View {
     }
 
     @ViewBuilder private var idleContent: some View {
-        if searchHistory.isEmpty {
-            ContentUnavailableView(
-                "Search", systemImage: "magnifyingglass",
-                description: Text("Find videos and channels."))
-        } else {
+        if !searchHistory.isEmpty {
             searchHistoryList
         }
     }
