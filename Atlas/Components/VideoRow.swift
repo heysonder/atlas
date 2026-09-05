@@ -19,16 +19,24 @@ struct VideoRow: View {
     /// so cards keep a uniform height when tiled in a grid — otherwise short
     /// titles leave ragged gaps and the columns drift into a masonry look.
     var reservesTitleSpace: Bool = false
+    /// Lets a parent that already verified a current livestream avoid repeating
+    /// the metadata request and present the live state immediately.
+    var liveStatusOverride: Bool? = nil
     var onPlay: () -> Void
     @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
     @State private var collaborators: [CreatorChannel] = []
     @State private var resolvedIsLive: Bool?
+    /// Avatar looked up by channel id when the item carries none.
+    @State private var resolvedAvatar: String?
 
     private var channelID: String? { item.uploaderChannelID ?? channelIDFallback }
+    private var isLive: Bool {
+        liveStatusOverride ?? (item.isLive || resolvedIsLive == true)
+    }
     private var creator: CreatorSummary {
         CreatorSummary(
             primaryName: item.uploaderName,
-            avatarURL: item.uploaderAvatar ?? avatarFallback,
+            avatarURL: item.uploaderAvatar ?? avatarFallback ?? resolvedAvatar,
             channelID: channelID,
             isVerified: item.uploaderVerified ?? false,
             collaborators: collaborators)
@@ -73,6 +81,8 @@ struct VideoRow: View {
         }
         .task(id: item.videoID) {
             resolvedIsLive = nil
+            resolvedAvatar = nil
+            await resolveAvatarIfMissing()
             await loadResolvedMetadataIfNeeded()
         }
     }
@@ -91,7 +101,7 @@ struct VideoRow: View {
 
     @ViewBuilder private var playbackStatePill: some View {
         let d = Format.duration(item.duration)
-        if item.isLive || resolvedIsLive == true {
+        if isLive {
             LiveBadge()
                 .padding(8)
         } else if !d.isEmpty {
@@ -135,7 +145,7 @@ struct VideoRow: View {
     private var playbackAccessibilityValue: String {
         var values: [String] = []
         if watched { values.append("Watched") }
-        if item.isLive || resolvedIsLive == true {
+        if isLive {
             values.append("Live")
         } else {
             let duration = Format.duration(item.duration)
@@ -147,7 +157,7 @@ struct VideoRow: View {
 
     private func loadResolvedMetadataIfNeeded() async {
         let shouldLoadCollaborators = collaborators.isEmpty && creator.hasMultipleCreators
-        let shouldResolveLiveStatus = item.needsLiveStatusResolution
+        let shouldResolveLiveStatus = liveStatusOverride == nil && item.needsLiveStatusResolution
         guard shouldLoadCollaborators || shouldResolveLiveStatus,
             let videoID = item.videoID
         else { return }
@@ -175,5 +185,26 @@ struct VideoRow: View {
                 collaborators = loaded
             }
         }
+    }
+}
+
+extension VideoRow {
+    /// Rows without an avatar URL resolve one by channel id (cached across
+    /// launches); rows that have one seed that cache for everyone else.
+    fileprivate func resolveAvatarIfMissing() async {
+        guard let channelID else { return }
+        let resolver = ChannelAvatarResolver.shared
+        if let avatar = item.uploaderAvatar ?? avatarFallback {
+            await resolver.record(channelID: channelID, avatarURL: avatar)
+            return
+        }
+        if let cached = await resolver.cached(channelID) {
+            resolvedAvatar = cached
+            return
+        }
+        guard let client = try? app.client else { return }
+        let avatar = await resolver.avatar(for: channelID, client: client)
+        guard !Task.isCancelled else { return }
+        resolvedAvatar = avatar
     }
 }
