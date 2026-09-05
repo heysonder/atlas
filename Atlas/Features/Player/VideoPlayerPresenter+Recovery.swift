@@ -87,7 +87,7 @@ extension VideoPlayerPresenter.Coordinator {
         case .none:
             fallbackPlayback = nil
         case .direct:
-            fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(
+            fallbackPlayback = await StreamPlaybackBuilder.makeDirectFailureFallbackItem(
                 for: detail,
                 client: client)
         case .composedOrDirect:
@@ -112,7 +112,8 @@ extension VideoPlayerPresenter.Coordinator {
         let wasPlaying = player.timeControlStatus != .paused
         // After a media-services reset the old AVPlayer never plays again
         // (its next item reports "missing"); swap in a fresh one first.
-        let player = PlayerRuntimeFallbackPolicy.isMediaServicesReset(item)
+        let player =
+            PlayerRuntimeFallbackPolicy.isMediaServicesReset(item)
             ? replacePlayerAfterMediaServicesReset(player)
             : player
         let recreated = player.currentItem == nil
@@ -159,8 +160,14 @@ extension VideoPlayerPresenter.Coordinator {
         let fresh = AVPlayer()
         fresh.appliesMediaSelectionCriteriaAutomatically = false
         fresh.defaultRate = old.defaultRate
-        if let timeObserver { old.removeTimeObserver(timeObserver); self.timeObserver = nil }
-        if let sponsorObserver { old.removeTimeObserver(sponsorObserver); self.sponsorObserver = nil }
+        if let timeObserver {
+            old.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        if let sponsorObserver {
+            old.removeTimeObserver(sponsorObserver)
+            self.sponsorObserver = nil
+        }
         if let infoCommentTimeObserver {
             old.removeTimeObserver(infoCommentTimeObserver)
             self.infoCommentTimeObserver = nil
