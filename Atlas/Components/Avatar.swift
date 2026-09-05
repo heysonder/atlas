@@ -36,6 +36,7 @@ struct Avatar: View {
 
     private func load() async {
         image = nil
+        guard let url, !url.isEmpty else { return }
         let client: PolicyHTTPClient?
         let namespace: String
         switch networkScope {
@@ -46,14 +47,29 @@ struct Avatar: View {
             client = AppModel.publicHTTPClient
             namespace = "public"
         }
-        let loaded = await ThumbnailImagePipeline.shared.image(
-            original: url,
-            upgraded: nil,
-            displaySize: CGSize(width: size, height: size),
-            scale: displayScale,
-            client: client,
-            namespace: namespace)
-        guard !Task.isCancelled else { return }
-        image = loaded
+        let policy = AvatarRetryPolicy.shared
+        var retry = 0
+        while !Task.isCancelled {
+            guard await policy.shouldAttempt(url) else { return }
+            let loaded = await ThumbnailImagePipeline.shared.image(
+                original: url,
+                upgraded: nil,
+                displaySize: CGSize(width: size, height: size),
+                scale: displayScale,
+                client: client,
+                namespace: namespace)
+            guard !Task.isCancelled else { return }
+            if let loaded {
+                await policy.recordSuccess(url)
+                image = loaded
+                return
+            }
+            await policy.recordFailure(url)
+            // Retry a couple of times while still on screen; the task is
+            // cancelled (and the loop ends) as soon as the row scrolls away.
+            guard let delay = policy.inViewDelay(forRetry: retry) else { return }
+            retry += 1
+            guard (try? await Task.sleep(for: delay)) != nil else { return }
+        }
     }
 }
