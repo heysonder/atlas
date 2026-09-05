@@ -18,6 +18,17 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>sh.cmf.atlas</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>atlas</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -31,6 +42,11 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Atlas connects to self-hosted Piped instances on your local network.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>sh.cmf.atlas.watch</string>
+		<string>sh.cmf.atlas.channel</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
