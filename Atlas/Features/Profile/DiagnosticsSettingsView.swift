@@ -62,7 +62,9 @@ struct DiagnosticsSettingsView: View {
         .navigationTitle("Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
         .task { await reload() }
-        .confirmationDialog("Delete all diagnostics reports?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+        .confirmationDialog(
+            "Delete all diagnostics reports?", isPresented: $confirmingDelete, titleVisibility: .visible
+        ) {
             Button("Delete", role: .destructive) {
                 Task {
                     await DiagnosticsReportStore.shared.deleteAll()

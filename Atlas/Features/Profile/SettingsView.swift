@@ -105,20 +105,20 @@ struct SettingsView: View {
             }
 
             if SocialFeaturesGate.isEnforced {
-              Section {
-                LabeledContent("Comments & Chat", value: socialSummary)
-                Button("Check Age Range") {
-                    Task { await socialGate.resolve(using: requestAgeRange, force: true) }
+                Section {
+                    LabeledContent("Comments & Chat", value: socialSummary)
+                    Button("Check Age Range") {
+                        Task { await socialGate.resolve(using: requestAgeRange, force: true) }
+                    }
+                    .disabled(socialGate.isChecking)
+                } header: {
+                    Text("Social Features")
+                } footer: {
+                    Text(
+                        "Comments, live chat, and chat replay are user-generated content and are only shown to users 13 or older, "
+                            + "based on the age range declared for your Apple Account. Only the result (on or off) is stored on this device."
+                    )
                 }
-                .disabled(socialGate.isChecking)
-            } header: {
-                Text("Social Features")
-            } footer: {
-                Text(
-                    "Comments, live chat, and chat replay are user-generated content and are only shown to users 13 or older, "
-                        + "based on the age range declared for your Apple Account. Only the result (on or off) is stored on this device."
-                )
-              }
             }
 
             if Self.showsPlayerOptions {
