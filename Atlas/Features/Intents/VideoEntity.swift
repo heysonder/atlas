@@ -1,4 +1,5 @@
 import AppIntents
+import CoreSpotlight
 import Foundation
 import PipedKit
 
@@ -19,7 +20,35 @@ struct VideoEntity: AppEntity, Identifiable {
     let localFileName: String?
 
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", subtitle: uploader.map { "\($0)" })
+        // Downloads carry a local poster (file URL) which Spotlight can render
+        // offline; history rows only have the remote thumbnail.
+        let image = thumbnail.flatMap(URL.init(string:)).map { DisplayRepresentation.Image(url: $0) }
+        return DisplayRepresentation(
+            title: "\(title)", subtitle: uploader.map { "\($0)" },
+            image: image ?? .init(systemName: "play.rectangle"))
+    }
+
+    /// The Spotlight row for this video (see `ChannelEntity.searchableItem`).
+    func searchableItem(domain: String) -> CSSearchableItem {
+        let attrs = CSSearchableItemAttributeSet(contentType: .movie)
+        attrs.title = title
+        attrs.displayName = title
+        attrs.contentDescription = localFileName == nil
+            ? uploader
+            : [uploader, "Downloaded"].compactMap { $0 }.joined(separator: " · ")
+        // Uploader is searchable via contentDescription but not a keyword, so
+        // a creator-name search ranks their channel above their videos.
+        attrs.keywords = localFileName == nil ? [] : ["download"]
+        attrs.thumbnailURL = thumbnail.flatMap(URL.init(string:))
+        let item = CSSearchableItem(
+            uniqueIdentifier: SpotlightIndexer.itemID(video: id),
+            domainIdentifier: domain,
+            attributeSet: attrs)
+        // Deliberately NOT associateAppEntity: that routes the row through the
+        // semantic-store donation, which fails outright (nothing indexed) when
+        // that service is unavailable (simulator, Apple Intelligence off).
+        // Taps are routed via CSSearchableItemActionType instead.
+        return item
     }
 
     init(
@@ -37,6 +66,12 @@ struct VideoEntity: AppEntity, Identifiable {
         self.init(
             id: item.videoID ?? item.url, title: item.displayTitle,
             uploader: item.uploaderName, thumbnail: item.thumbnail)
+    }
+
+    init(_ entry: HistoryEntry) {
+        self.init(
+            id: entry.videoID, title: entry.title, uploader: entry.uploader,
+            thumbnail: entry.thumbnailURL)
     }
 
     init(_ download: DownloadedVideo) {
@@ -159,7 +194,9 @@ struct VideoEntityQuery: EntityStringQuery {
     func entities(for identifiers: [VideoEntity.ID]) async throws -> [VideoEntity] {
         identifiers.compactMap { id in
             if let visible = VisibleVideoRegistry.shared.entity(for: id) { return visible }
-            return IntentDataStore.downloads(ids: [id]).first.map(VideoEntity.init)
+            if let download = IntentDataStore.downloads(ids: [id]).first { return VideoEntity(download) }
+            // Spotlight history rows resolve here after the app was relaunched.
+            return IntentDataStore.history(ids: [id]).first.map(VideoEntity.init)
         }
     }
 

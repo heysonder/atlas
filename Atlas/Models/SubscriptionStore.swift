@@ -20,7 +20,10 @@ enum SubscriptionStore {
             predicate: #Predicate { $0.channelID == channelID })
         if !subscribed {
             guard let matches = try? context.fetch(descriptor) else { return false }
-            if let existing = matches.first { context.delete(existing) }
+            if let existing = matches.first {
+                context.delete(existing)
+                SpotlightIndexer.remove(channelID: channelID)
+            }
             return true
         }
         do {
@@ -47,6 +50,8 @@ enum SubscriptionStore {
                     channelID: channelID,
                     name: name ?? "Channel",
                     avatarURL: avatarURL))
+            SpotlightIndexer.index(
+                channelID: channelID, name: name ?? "Channel", avatarURL: avatarURL)
         }
         return true
     }

@@ -1,4 +1,5 @@
 import AppIntents
+import CoreSpotlight
 import Foundation
 
 /// A playlist exposed to Siri / App Intents. Because it's an `AppEntity`, it can
@@ -12,7 +13,28 @@ struct PlaylistEntity: AppEntity, Identifiable {
     let id: String
     let name: String
 
-    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(name)", subtitle: "Playlist", image: .init(systemName: "music.note.list"))
+    }
+
+    /// The Spotlight row for this playlist (see `ChannelEntity.searchableItem`).
+    func searchableItem() -> CSSearchableItem {
+        let attrs = CSSearchableItemAttributeSet(contentType: .content)
+        attrs.title = name
+        attrs.displayName = name
+        attrs.contentDescription = "Playlist"
+        attrs.keywords = [name, "playlist"]
+        let item = CSSearchableItem(
+            uniqueIdentifier: SpotlightIndexer.itemID(playlist: id),
+            domainIdentifier: SpotlightIndexer.playlistDomain,
+            attributeSet: attrs)
+        // Deliberately NOT associateAppEntity: that routes the row through the
+        // semantic-store donation, which fails outright (nothing indexed) when
+        // that service is unavailable (simulator, Apple Intelligence off).
+        // Taps are routed via CSSearchableItemActionType instead.
+        return item
+    }
 
     init(id: String, name: String) {
         self.id = id
