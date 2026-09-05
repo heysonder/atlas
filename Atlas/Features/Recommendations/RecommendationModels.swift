@@ -7,6 +7,10 @@ nonisolated enum RecommendationWorkBudget {
     static let maximumTags = 64
     static let maximumTokensPerDocument = 96
     static let maximumRankingItems = 120
+    /// History rows the profile reads. Deep enough that the 30-day taste tier
+    /// exists even for heavy watchers (the old 200 cap was ~10 days at 20
+    /// videos/day); the signature still hashes only the recent prefix.
+    static let maximumProfileHistory = 1_000
     static let maximumSubscriptionRequests = 24
     static let maximumChannelIDBytes = 256
     static let maximumCursorBytes = 8 * 1_024
@@ -207,7 +211,7 @@ nonisolated struct InterestProfile: Sendable {
         candidateSearchQueriesOverride: [String]? = nil,
         savedSeedIDsOverride: [String]? = nil
     ) {
-        self.history = Array(history.prefix(200))
+        self.history = Array(history.prefix(RecommendationWorkBudget.maximumProfileHistory))
         self.feedback = Array(feedback.prefix(200))
         self.saved = Array(saved.prefix(120))
         self.searches = Array(searches.prefix(60))
@@ -225,6 +229,34 @@ nonisolated struct InterestProfile: Sendable {
             $0.prefix(16).map { RecommendationWorkBudget.field($0) }
         }
     }
+}
+
+/// The per-candidate signals the semantic ranker scored with, captured so an
+/// impression can be logged as (features, outcome) — the training data for
+/// later fitting the ranking weights to the user's actual taps.
+nonisolated struct RecommendationOutcomeFeatures: Sendable {
+    let topicSimilarity: Double
+    let longTermSimilarity: Double
+    let categoryFit: Double
+    let corroboration: Int
+    let freshness: Double
+    let channelAffinity: Double
+    let isSubscribed: Bool
+    let dislikeSimilarity: Double
+    let priorImpressions: Int
+    let fromRelated: Bool
+    let fromSearch: Bool
+    let fromSaved: Bool
+    let fromSubscription: Bool
+    let fromExploration: Bool
+    let usedContextualEmbedding: Bool
+}
+
+/// A semantic ranking pass's output: the ordered items plus the features each
+/// scored candidate was judged on, keyed by video ID.
+nonisolated struct RankedTopicResult: Sendable {
+    let items: [StreamItem]
+    let features: [String: RecommendationOutcomeFeatures]
 }
 
 nonisolated enum CandidateSource: Hashable, Sendable {

@@ -65,8 +65,11 @@ import Testing
 
 @MainActor
 @Test func watchWeightMatchesDocumentedAnchors() {
-    // 0% → 0.5, 50% → 1.0 (the original flat weight), ≥80% → the 4× ceiling.
-    #expect(RecommendationEngine.watchWeight(position: 0, duration: 100) == 0.5)
+    // <25% → 0 (an early bail is no signal, not weak interest), 50% → 1.0
+    // (the original flat weight), ≥80% → the 4× ceiling.
+    #expect(RecommendationEngine.watchWeight(position: 0, duration: 100) == 0)
+    #expect(RecommendationEngine.watchWeight(position: 24, duration: 100) == 0)
+    #expect(RecommendationEngine.watchWeight(position: 37.5, duration: 100) == 0.5)
     #expect(RecommendationEngine.watchWeight(position: 50, duration: 100) == 1.0)
     #expect(RecommendationEngine.watchWeight(position: 80, duration: 100) == 4.0)
     #expect(RecommendationEngine.watchWeight(position: 100, duration: 100) == 4.0)

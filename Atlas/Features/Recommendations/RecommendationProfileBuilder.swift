@@ -29,7 +29,7 @@ extension RecommendationEngine {
         snapshot: RecommendationProfileSnapshot? = nil,
         signature: String? = nil
     ) -> InterestProfile {
-        let history = Array(history.prefix(200))
+        let history = Array(history.prefix(RecommendationWorkBudget.maximumProfileHistory))
         let feedback = Array(feedback.prefix(200))
         let saved = Array(saved.prefix(120))
         let searches = Array(searches.prefix(60))

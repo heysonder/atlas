@@ -13,15 +13,24 @@ extension RecommendationEngine {
     /// pass so the user sees results immediately, then an upgrade once it returns.
     func refineWithSignals(
         _ shortlist: [StreamItem], profile: InterestProfile,
-        sourcesByID: [String: Set<CandidateSource>] = [:]
-    ) async -> [StreamItem] {
+        sourcesByID: [String: Set<CandidateSource>] = [:],
+        frequency: [String: Int] = [:],
+        impressions: [String: Int] = [:]
+    ) async -> RankedTopicResult {
         let signals = await fetchSignals(shortlist)
         // A mode switch / new load cancels the surrounding task — skip the
         // (pointless) re-rank; the caller discards stale results anyway.
-        guard !Task.isCancelled else { return shortlist }
-        let ranked = await Self.rankByTopicInBackground(
-            shortlist, profile: profile, sourcesByID: sourcesByID, enrichment: signals)
-        return Self.diversify(ranked, enrichment: signals)
+        guard !Task.isCancelled else {
+            return RankedTopicResult(items: shortlist, features: [:])
+        }
+        // The refine pass is the off-screen upgrade, so it can afford the
+        // contextual (transformer) embedding when its model has loaded.
+        let ranked = await Self.rankByTopicScoredInBackground(
+            shortlist, profile: profile, sourcesByID: sourcesByID, enrichment: signals,
+            frequency: frequency, impressions: impressions, useContextualEmbedding: true)
+        return RankedTopicResult(
+            items: Self.diversify(ranked.items, enrichment: signals),
+            features: ranked.features)
     }
 
     /// Fetch `/streams` for the shortlist with bounded concurrency. Cached and
