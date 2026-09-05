@@ -71,7 +71,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// When `currentDetail`'s URLs were resolved — runtime fallback uses
         /// this to decide whether they may have expired.
         var currentDetailLoadedAt: Date?
-        var infoButtonHost: UIHostingController<InfoOverlayButton>?
+        var infoButtonHost: UIHostingController<PlayerOverlayButtons>?
+        let chatButtonModel = ChatButtonModel()
+        /// Chat loaders for the current video, created on demand and shared by
+        /// the Chat page and the replay probe; reset with the player.
+        var liveChatLoader: LiveChatLoader?
+        var chatReplayLoader: LiveChatReplayLoader?
+        var chatProbeTask: Task<Void, Never>?
         var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
         let infoButtonModel = InfoButtonModel()
         let debugModel = PlayerDebugModel()
@@ -262,6 +268,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 currentDetailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
                 installDebugOverlay(on: controller)
                 installInfoButton(on: controller)
+                installChatAvailability(detail: detail, client: client, videoID: request.videoID)
                 // Resume from a saved position (ignore if we're at/near the end).
                 if let resume = savedPosition(for: request.videoID),
                     resume >= PlaybackHistoryStore.minWatchSeconds

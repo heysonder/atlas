@@ -232,6 +232,12 @@ extension VideoPlayerPresenter.Coordinator {
 
     func hardStop() {
         AppDiagnostics.reportPlayback(source: nil)
+        chatProbeTask?.cancel()
+        chatProbeTask = nil
+        liveChatLoader = nil
+        chatReplayLoader = nil
+        chatButtonModel.isVisible = false
+        chatButtonModel.isLive = false
         loadTask?.cancel()
         loadTask = nil
         fallbackCheckTask?.cancel()

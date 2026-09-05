@@ -32,9 +32,41 @@ struct PlayerInfoSheet: View {
     var onTimestampTap: (Int) -> Void = { _ in }
     var onDisappear: () -> Void = {}
 
+    /// Wide viewports dock the sheet as a trailing side panel over the
+    /// still-playing video instead of a bottom sheet (see `PlayerInfoSidePanel`).
+    var asSidePanel = false
+
     @Environment(\.dismiss) private var dismiss
+    @State private var panelShown = false
+
+    private static let panelWidth: CGFloat = 420
 
     var body: some View {
+        if asSidePanel {
+            HStack(spacing: 0) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismiss() }
+                    .accessibilityLabel("Close info")
+                if panelShown {
+                    stack
+                        .frame(width: Self.panelWidth)
+                        .frame(maxHeight: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .padding(.vertical, 12)
+                        .padding(.trailing, 12)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .onAppear { withAnimation(.snappy(duration: 0.3)) { panelShown = true } }
+            .onDisappear(perform: onDisappear)
+        } else {
+            stack.onDisappear(perform: onDisappear)
+        }
+    }
+
+    private var stack: some View {
         NavigationStack {
             ScrollView {
                 PlayerInfoContent(
@@ -56,6 +88,9 @@ struct PlayerInfoSheet: View {
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
+            // Keep the hosted content transparent so the sheet's Liquid Glass
+            // background (medium detent) shows through, like Maps.
+            .containerBackground(.clear, for: .navigation)
             .navigationDestination(for: String.self) { id in
                 ChannelDetailView(channelID: id)
             }
@@ -65,6 +100,5 @@ struct PlayerInfoSheet: View {
                 }
             }
         }
-        .onDisappear(perform: onDisappear)
     }
 }
