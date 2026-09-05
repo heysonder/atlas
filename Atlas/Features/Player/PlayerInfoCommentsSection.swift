@@ -121,8 +121,7 @@ struct PlayerInfoCommentsSection: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(.tint)
             .padding(.top, 2)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+            .inlineTapTarget()
         }
         .buttonStyle(.plain)
     }
@@ -140,8 +139,7 @@ struct PlayerInfoCommentsSection: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(.tint)
             .padding(.top, 2)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+            .inlineTapTarget()
         }
         .buttonStyle(.plain)
     }
