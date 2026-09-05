@@ -90,7 +90,9 @@ actor DiagnosticsReportStore {
         var parts: [String] = []
         for entry in entries {
             if let data = try? Data(contentsOf: entry.url), let text = String(data: data, encoding: .utf8) {
-                parts.append("{\"kind\":\"\(entry.kind.rawValue)\",\"file\":\"\(entry.url.lastPathComponent)\",\"report\":\(text)}")
+                parts.append(
+                    "{\"kind\":\"\(entry.kind.rawValue)\",\"file\":\"\(entry.url.lastPathComponent)\",\"report\":\(text)}"
+                )
             }
         }
         let body = "[\n" + parts.joined(separator: ",\n") + "\n]\n"

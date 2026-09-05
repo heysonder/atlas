@@ -32,13 +32,13 @@ private func makeLoader(server: ReplayPageServer) throws -> LiveChatReplayLoader
         pageLoader: { _, _, token in try await server.page(for: token) })
 }
 
-private func replayMessage(id: String, offsetMs: Int) -> LiveChatMessage {
+nonisolated private func replayMessage(id: String, offsetMs: Int) -> LiveChatMessage {
     LiveChatMessage(
         id: id, type: "liveChatTextMessageRenderer", text: "msg \(id)", author: "@a",
         videoOffsetMs: offsetMs, timestampText: "0:\(offsetMs / 1_000)")
 }
 
-private func page(_ messages: [LiveChatMessage], next: String?) -> LiveChatPage {
+nonisolated private func page(_ messages: [LiveChatMessage], next: String?) -> LiveChatPage {
     LiveChatPage(videoId: "video01", messages: messages, nextPageToken: next, pollAfterMs: 0)
 }
 
@@ -213,4 +213,54 @@ private func page(_ messages: [LiveChatMessage], next: String?) -> LiveChatPage 
     await loader.loadInitial()
     await loader.loadMore()
     #expect(loader.messages.map(\.id) == ["a", "b"])
+}
+
+@MainActor
+@Test func replayPollingLetsSlowPagesFinishWhilePlaybackAdvances() async throws {
+    let client = PipedClient(baseURL: try #require(URL(string: "https://example.com")))
+    let clock = PlayerPlaybackTime()
+    clock.seconds = 0
+    let loader = LiveChatReplayLoader(
+        client: client, videoID: "slow-replay",
+        pageLoader: { _, _, token in
+            if token == nil { return page([replayMessage(id: "first", offsetMs: 0)], next: "p2") }
+            // Slower than the old one-second cancellation cycle.
+            try await Task.sleep(for: .milliseconds(1_100))
+            return page([replayMessage(id: "next", offsetMs: 2_000)], next: nil)
+        })
+    await loader.loadInitial()
+    let polling = Task { await loader.run { clock.seconds } }
+    defer { polling.cancel() }
+    for tick in 1...3 {
+        try await Task.sleep(for: .milliseconds(100))
+        clock.seconds = Double(tick)
+    }
+    await polling.value
+    #expect(loader.reachedEnd)
+    #expect(!loader.paginationFailed)
+    #expect(loader.messages.map(\.id) == ["first", "next"])
+}
+
+@MainActor
+@Test func closingReplayCancelsItsPendingPageAndKeepsTheCursor() async throws {
+    let client = PipedClient(baseURL: try #require(URL(string: "https://example.com")))
+    let (started, continuation) = AsyncStream<Void>.makeStream()
+    let loader = LiveChatReplayLoader(
+        client: client, videoID: "cancelled-replay",
+        pageLoader: { _, _, token in
+            if token == nil { return page([replayMessage(id: "first", offsetMs: 0)], next: "p2") }
+            continuation.yield(())
+            try await Task.sleep(for: .seconds(30))
+            return page([], next: nil)
+        })
+    await loader.loadInitial()
+    let polling = Task { await loader.run { 0 } }
+    var iterator = started.makeAsyncIterator()
+    _ = await iterator.next()
+    polling.cancel()
+    await polling.value
+    continuation.finish()
+    #expect(!loader.isLoading)
+    #expect(!loader.reachedEnd)
+    #expect(loader.messages.map(\.id) == ["first"])
 }

@@ -22,8 +22,7 @@ struct ChannelDetailView: View {
     @State private var videoNextPage: String?
     @State private var shortsTabData: String?
     @State private var shortsNextPage: String?
-    @State private var isLoadingNextPage = false
-    @State private var paginationError: String?
+    @State private var requests = ChannelRequestState()
 
     @State private var watchedMemo = WatchedIDsMemo()
 
@@ -110,8 +109,8 @@ struct ChannelDetailView: View {
             isSubscribed: subscription != nil,
             reduceMotion: reduceMotion,
             hasNextPage: hasNextPage,
-            isLoadingNextPage: isLoadingNextPage,
-            paginationError: paginationError,
+            isLoadingNextPage: requests.isLoadingPage,
+            paginationError: requests.paginationError,
             loadMoreToken: loadMoreToken,
             onToggleSubscription: { toggleSubscription(channel) },
             onAppearItem: { handleAppear($0, paginationTriggerIDs: paginationTriggerIDs) },
@@ -137,7 +136,7 @@ struct ChannelDetailView: View {
 
     private func handleAppear(_ item: StreamItem, paginationTriggerIDs: Set<String>) {
         app.prefetchStream(item.videoID)
-        guard paginationError == nil, paginationTriggerIDs.contains(item.id) else { return }
+        guard requests.paginationError == nil, paginationTriggerIDs.contains(item.id) else { return }
         Task { await loadNextPage() }
     }
 
@@ -149,15 +148,17 @@ struct ChannelDetailView: View {
         let alreadyLoaded: Bool
         if case .loaded = phase { alreadyLoaded = true } else { alreadyLoaded = false }
         if alreadyLoaded && !force { return }
+        let loadID = requests.beginLoad()
+        defer { requests.finishLoad(loadID) }
         if !alreadyLoaded { phase = .loading }
         do {
             let client = try app.client
             let channel = try await client.channel(id: channelID)
-            guard instanceGeneration == app.instanceGeneration else { return }
+            guard canApply(load: loadID, instanceGeneration: instanceGeneration) else { return }
             var loaded = channel.relatedStreams ?? []
             if loaded.isEmpty {
                 loaded = (try? await client.feed(channelIDs: [channelID])) ?? []
-                guard instanceGeneration == app.instanceGeneration else { return }
+                guard canApply(load: loadID, instanceGeneration: instanceGeneration) else { return }
             }
             let split = splitUploads(StreamItemIdentity.firstOccurrences(in: loaded))
             let tabData = channel.shortsTabData
@@ -168,7 +169,7 @@ struct ChannelDetailView: View {
                 data: shouldLoadShorts ? tabData : nil)
             async let livePage = Self.loadChannelTab(client: client, data: liveTabData)
             let (loadedShortsPage, loadedLivePage) = await (shortsPage, livePage)
-            guard instanceGeneration == app.instanceGeneration else { return }
+            guard canApply(load: loadID, instanceGeneration: instanceGeneration) else { return }
 
             var loadedShorts = split.shorts
             var loadedShortsNextPage: String?
@@ -184,7 +185,7 @@ struct ChannelDetailView: View {
 
             let loadedLiveStream = await resolveCurrentLiveStream(
                 from: (loadedLivePage?.content ?? []) + loaded)
-            guard instanceGeneration == app.instanceGeneration else { return }
+            guard canApply(load: loadID, instanceGeneration: instanceGeneration) else { return }
             Self.log.info(
                 "channel \(channelID, privacy: .public) liveTab=\(liveTabData == nil ? "none" : "present", privacy: .public) liveItems=\(loadedLivePage?.content?.count ?? -1, privacy: .public) live=\(loadedLiveStream?.videoID ?? "none", privacy: .public)"
             )
@@ -196,28 +197,34 @@ struct ChannelDetailView: View {
             videoNextPage = normalizedNextPage(channel.nextPage)
             shortsTabData = tabData
             shortsNextPage = loadedShortsNextPage
-            paginationError = nil
             await prefetchThumbnails(app.filteringShorts(displayItems))
         } catch is CancellationError {
             return
+        } catch let error as URLError where error.code == .cancelled {
+            return
         } catch {
+            guard canApply(load: loadID, instanceGeneration: instanceGeneration) else { return }
             // On a refresh failure keep the content we're already showing.
             if !alreadyLoaded { phase = .failed(error.localizedDescription) }
         }
     }
 
     private func loadNextPage() async {
-        guard hasNextPage, !isLoadingNextPage, paginationError == nil else { return }
+        guard hasNextPage, let pageID = requests.beginPage() else { return }
+        let loadID = requests.loadID
         let instanceGeneration = app.instanceGeneration
-        isLoadingNextPage = true
-        defer { isLoadingNextPage = false }
+        defer {
+            if instanceGeneration == app.instanceGeneration {
+                requests.finishPage(pageID)
+            }
+        }
 
         var appended: [StreamItem] = []
         do {
             let client = try app.client
             if let token = videoNextPage {
                 let page = try await client.channelNextPage(id: channelID, nextPage: token)
-                guard instanceGeneration == app.instanceGeneration else { return }
+                guard canApply(load: loadID, page: pageID, instanceGeneration: instanceGeneration) else { return }
                 let split = splitUploads(page.relatedStreams ?? [])
                 let newRegular = appendUniqueRegular(split.regular)
                 let newShorts = appendUniqueShorts(split.shorts)
@@ -228,25 +235,27 @@ struct ChannelDetailView: View {
 
             if !app.hideShorts, let data = shortsTabData, let token = shortsNextPage {
                 let page = try await client.channelTab(data: data, nextPage: token)
-                guard instanceGeneration == app.instanceGeneration else { return }
+                guard canApply(load: loadID, page: pageID, instanceGeneration: instanceGeneration) else { return }
                 let newShorts = appendUniqueShorts(splitUploads(page.content ?? []).shorts)
                 appended.append(contentsOf: newShorts)
                 let newToken = normalizedNextPage(page.nextPage)
                 shortsNextPage = newShorts.isEmpty && newToken == token ? nil : newToken
             }
-            paginationError = nil
             await prefetchThumbnails(appended)
         } catch is CancellationError {
             return
+        } catch let error as URLError where error.code == .cancelled {
+            return
         } catch {
+            guard canApply(load: loadID, page: pageID, instanceGeneration: instanceGeneration) else { return }
             // Retain the cursor for an explicit retry, but stop the visible
             // sentinel from immediately starting the same failing request again.
-            paginationError = error.localizedDescription
+            requests.finishPage(pageID, error: error.localizedDescription)
         }
     }
 
     private func retryNextPage() async {
-        paginationError = nil
+        requests.retryPage()
         await loadNextPage()
     }
 
@@ -258,9 +267,13 @@ struct ChannelDetailView: View {
         videoNextPage = nil
         shortsTabData = nil
         shortsNextPage = nil
-        isLoadingNextPage = false
-        paginationError = nil
+        requests.retryPage()
         await load(force: true)
+    }
+
+    private func canApply(load: UUID, page: UUID? = nil, instanceGeneration: UInt64) -> Bool {
+        !Task.isCancelled && instanceGeneration == app.instanceGeneration
+            && requests.accepts(load: load, page: page)
     }
 
     @discardableResult
