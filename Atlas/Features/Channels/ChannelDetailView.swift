@@ -1,6 +1,7 @@
 import PipedKit
 import SwiftData
 import SwiftUI
+import os
 
 struct ChannelDetailView: View {
     @Environment(AppModel.self) private var app
@@ -15,6 +16,7 @@ struct ChannelDetailView: View {
     @Query(sort: \HistoryEntry.watchedAt, order: .reverse) private var history: [HistoryEntry]
 
     @State private var phase: LoadPhase<Channel> = .idle
+    @State private var liveStream: StreamItem?
     @State private var regularVideos: [StreamItem] = []
     @State private var shorts: [StreamItem] = []
     @State private var videoNextPage: String?
@@ -56,14 +58,15 @@ struct ChannelDetailView: View {
     }
 
     private var displayItems: [StreamItem] {
-        let leadCount = min(3, regularVideos.count)
-        return Array(regularVideos.prefix(leadCount))
+        let videos = regularVideos.filter { $0.id != liveStream?.id }
+        let leadCount = min(3, videos.count)
+        return Array(videos.prefix(leadCount))
             + shorts
-            + Array(regularVideos.dropFirst(leadCount))
+            + Array(videos.dropFirst(leadCount))
     }
 
     private var loadedIDs: Set<String> {
-        Set((regularVideos + shorts).map(\.id))
+        Set(((liveStream.map { [$0] } ?? []) + regularVideos + shorts).map(\.id))
     }
 
     init(channelID: String) {
@@ -88,6 +91,9 @@ struct ChannelDetailView: View {
         }
         .navigationTitle(headerName)
         .navigationBarTitleDisplayMode(.inline)
+        .userActivity(AtlasActivity.channel) { activity in
+            AtlasActivity.configureChannel(activity, channelID: channelID, name: headerName)
+        }
         .task(id: app.instanceGeneration) { await reloadForSelectedInstance() }
     }
 
@@ -97,6 +103,7 @@ struct ChannelDetailView: View {
         return ChannelDetailContent(
             channel: channel,
             channelID: channelID,
+            liveStream: liveStream,
             shownItems: shownItems,
             hasFilteredItems: !displayItems.isEmpty && shownItems.isEmpty,
             watchedIDs: watchedIDs,
@@ -154,20 +161,36 @@ struct ChannelDetailView: View {
             }
             let split = splitUploads(StreamItemIdentity.firstOccurrences(in: loaded))
             let tabData = channel.shortsTabData
+            let liveTabData = channel.livestreamsTabData
+            let shouldLoadShorts = !app.hideShorts
+            async let shortsPage = Self.loadChannelTab(
+                client: client,
+                data: shouldLoadShorts ? tabData : nil)
+            async let livePage = Self.loadChannelTab(client: client, data: liveTabData)
+            let (loadedShortsPage, loadedLivePage) = await (shortsPage, livePage)
+            guard instanceGeneration == app.instanceGeneration else { return }
+
             var loadedShorts = split.shorts
             var loadedShortsNextPage: String?
-            if !app.hideShorts, let tabData {
-                let shortsPage = try? await client.channelTab(data: tabData)
-                guard instanceGeneration == app.instanceGeneration else { return }
-                let tabShorts = splitUploads(shortsPage?.content ?? []).shorts
+            if shouldLoadShorts, let loadedShortsPage {
+                let tabShorts = splitUploads(loadedShortsPage.content ?? []).shorts
                 let loadedIDs = Set((split.regular + loadedShorts).map(\.id))
                 loadedShorts.append(
                     contentsOf: StreamItemIdentity.firstOccurrences(
                         in: tabShorts,
                         excludingIDs: loadedIDs))
-                loadedShortsNextPage = normalizedNextPage(shortsPage?.nextPage)
+                loadedShortsNextPage = normalizedNextPage(loadedShortsPage.nextPage)
             }
+
+            let loadedLiveStream = await resolveCurrentLiveStream(
+                from: (loadedLivePage?.content ?? []) + loaded)
+            guard instanceGeneration == app.instanceGeneration else { return }
+            Self.log.info(
+                "channel \(channelID, privacy: .public) liveTab=\(liveTabData == nil ? "none" : "present", privacy: .public) liveItems=\(loadedLivePage?.content?.count ?? -1, privacy: .public) live=\(loadedLiveStream?.videoID ?? "none", privacy: .public)"
+            )
+
             phase = .loaded(channel)
+            liveStream = loadedLiveStream
             regularVideos = split.regular
             shorts = loadedShorts
             videoNextPage = normalizedNextPage(channel.nextPage)
@@ -229,6 +252,7 @@ struct ChannelDetailView: View {
 
     private func reloadForSelectedInstance() async {
         phase = .idle
+        liveStream = nil
         regularVideos = []
         shorts = []
         videoNextPage = nil
@@ -265,6 +289,35 @@ struct ChannelDetailView: View {
         )
     }
 
+    private func resolveCurrentLiveStream(from items: [StreamItem]) async -> StreamItem? {
+        for candidate in ChannelLiveStreamDetector.candidates(from: items) {
+            if ChannelLiveStreamDetector.isActive(candidate, detail: nil) {
+                return candidate
+            }
+            guard let videoID = candidate.videoID,
+                let detail = try? await app.resolveStreamThrottled(videoID)
+            else { continue }
+            if ChannelLiveStreamDetector.isActive(candidate, detail: detail) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func loadChannelTab(
+        client: PipedClient,
+        data: String?
+    ) async -> ChannelTabPage? {
+        guard let data else { return nil }
+        do {
+            return try await client.channelTab(data: data)
+        } catch {
+            Self.log.error("channel tab load failed: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+    private nonisolated static let log = Logger(subsystem: "sh.cmf.atlas", category: "channel")
+
     /// Warm the first batch of thumbnails so they're decoded before scroll, the
     /// same head start the Home feed gives its list.
     private func prefetchThumbnails(_ videos: [StreamItem]) async {
@@ -278,6 +331,17 @@ struct ChannelDetailView: View {
 
 extension Channel {
     fileprivate var shortsTabData: String? {
-        tabs?.first { ($0.name ?? "").caseInsensitiveCompare("shorts") == .orderedSame }?.data
+        tabData(namedAnyOf: ["shorts"])
+    }
+
+    fileprivate var livestreamsTabData: String? {
+        tabData(namedAnyOf: ["livestreams", "live", "streams"])
+    }
+
+    private func tabData(namedAnyOf names: Set<String>) -> String? {
+        tabs?.first { tab in
+            guard let name = tab.name?.lowercased() else { return false }
+            return names.contains(name)
+        }?.data
     }
 }

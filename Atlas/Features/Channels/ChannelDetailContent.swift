@@ -4,6 +4,7 @@ import SwiftUI
 struct ChannelDetailContent: View {
     let channel: Channel
     let channelID: String
+    let liveStream: StreamItem?
     let shownItems: [StreamItem]
     let hasFilteredItems: Bool
     let watchedIDs: Set<String>
@@ -20,6 +21,10 @@ struct ChannelDetailContent: View {
     let onRetryNextPage: () async -> Void
     let onRefresh: () async -> Void
 
+    private var visibleItems: [StreamItem] {
+        (liveStream.map { [$0] } ?? []) + shownItems
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -32,8 +37,30 @@ struct ChannelDetailContent: View {
                 Divider()
                     .padding(.horizontal)
 
+                if let liveStream {
+                    VideoRow(
+                        item: liveStream,
+                        avatarFallback: channel.avatarURL,
+                        channelIDFallback: channelID,
+                        watched: liveStream.videoID.map(watchedIDs.contains) ?? false,
+                        liveStatusOverride: true
+                    ) { onPlay(liveStream) }
+                    .videoContextMenu(liveStream)
+                    .onAppear { onAppearItem(liveStream) }
+                    .padding(.horizontal)
+
+                    if !shownItems.isEmpty {
+                        Divider()
+                            .padding(.horizontal)
+                    }
+                }
+
                 if shownItems.isEmpty {
-                    emptyState
+                    if liveStream == nil {
+                        emptyState
+                    } else {
+                        paginationFooter
+                    }
                 } else {
                     GroupedVideoList(
                         items: shownItems,
@@ -44,11 +71,11 @@ struct ChannelDetailContent: View {
                         onAppearItem: onAppearItem,
                         onPlay: onPlay
                     )
-                    .onScreenVideos(shownItems)
                     .padding(.horizontal)
                     paginationFooter
                 }
             }
+            .onScreenVideos(visibleItems)
             .padding(.bottom, 24)
         }
         .refreshable { await onRefresh() }
