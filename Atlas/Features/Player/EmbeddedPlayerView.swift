@@ -161,12 +161,8 @@ struct EmbeddedPlayerView: View {
                     .padding()
                 }
             } else {
-                ContentUnavailableView {
-                    Label("Comments unavailable", systemImage: "bubble.left.and.bubble.right")
-                } description: {
-                    Text(AppModel.missingInstanceMessage)
-                }
-                .padding()
+                MissingInstanceView()
+                    .padding()
             }
         } else if let message = model.errorMessage {
             Spacer()
