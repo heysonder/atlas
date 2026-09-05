@@ -130,6 +130,9 @@ final class AppModel {
     nonisolated static let missingInstanceMessage =
         "Set a Piped instance in Settings before using online video features."
 
+    /// Public instance offered by "Use the default" in `MissingInstanceView`.
+    nonisolated static let defaultInstanceURL = "https://api.piped.private.coffee"
+
     init(
         persistenceRecoveryMessage: String? = nil,
         instanceStore: InstanceStore = .live,
