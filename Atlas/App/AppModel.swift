@@ -129,7 +129,6 @@ final class AppModel {
     static let instanceKey = InstanceStore.defaultsKey
     nonisolated static let missingInstanceMessage =
         "Set a Piped instance in Settings before using online video features."
-
     /// Public instance offered by "Use the default" in `MissingInstanceView`.
     nonisolated static let defaultInstanceURL = "https://api.piped.private.coffee"
 
@@ -465,12 +464,22 @@ final class AppModel {
     /// fire more than a couple of extractions at the instance at once — the task
     /// registers in `inflight` synchronously, so a same-turn burst of calls
     /// can't slip past the cap.
+    ///
+    /// The AV1 HLS manifest is warmed even when the details are already cached:
+    /// bulk metadata resolution fills `streamCache` without warming, and a plain
+    /// GET of the master manifest (the body is discarded) is what moves the
+    /// instance's extraction off the tap. Per-URL dedupe keeps this to one
+    /// request per video per `manifestWarmTTL`.
     func prefetchStream(_ videoID: String?) {
-        guard let videoID,
-            cachedDetail(videoID) == nil,
-            inflight[videoID] == nil,
-            inflight.count < 2
-        else { return }
+        guard let videoID else { return }
+        if cachedDetail(videoID) != nil {
+            // Same concurrency ceiling as the extraction path: a fast scroll
+            // over cached rows must not fan out manifest extractions.
+            guard manifestWarmTasks.count < 2, let client = try? client else { return }
+            warmAV1Manifest(videoID, client: client)
+            return
+        }
+        guard inflight[videoID] == nil, inflight.count < 2 else { return }
         _ = try? startResolution(videoID, warmingManifest: true)
     }
 
