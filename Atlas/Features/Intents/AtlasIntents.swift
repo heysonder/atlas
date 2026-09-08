@@ -48,6 +48,100 @@ struct OpenDownloadsIntent: AppIntent {
     }
 }
 
+/// "Open <channel> in Atlas" — also what Spotlight runs when a subscribed
+/// channel result is tapped (it's the `OpenIntent` for `ChannelEntity`).
+struct OpenChannelIntent: AppIntent, OpenIntent {
+    static let title: LocalizedStringResource = "Open Channel"
+    static let description = IntentDescription("Open a channel you're subscribed to.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Channel") var target: ChannelEntity
+
+    @Dependency var app: AppModel
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Open \(\.$target)")
+    }
+
+    func perform() async throws -> some IntentResult {
+        let id = target.id
+        await MainActor.run { app.pendingIntent = .openChannel(id) }
+        return .result()
+    }
+}
+
+/// "Play the latest from <channel>" — fetches the channel's newest upload and
+/// plays it. Works as a spoken Siri command and as a Shortcuts building block.
+struct PlayLatestFromChannelIntent: AppIntent {
+    static let title: LocalizedStringResource = "Play Latest From Channel"
+    static let description = IntentDescription("Play the newest video from a channel you follow.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Channel") var channel: ChannelEntity
+
+    @Dependency var app: AppModel
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Play the latest from \(\.$channel)")
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let video = await IntentDataStore.latestVideo(fromChannel: channel.id) else {
+            return .result(dialog: "I couldn't find a recent video from \(channel.name).")
+        }
+        let request = PlayRequest(
+            videoID: video.id, title: video.title, uploader: video.uploader,
+            thumbnail: video.thumbnail, localURL: nil)
+        await MainActor.run { app.nowPlaying = request }
+        return .result(dialog: "Playing \(video.title).")
+    }
+}
+
+/// Opens the Library → Playlists screen; the `OpenIntent` Spotlight runs when a
+/// playlist result is tapped.
+struct OpenPlaylistIntent: AppIntent, OpenIntent {
+    static let title: LocalizedStringResource = "Open Playlist"
+    static let description = IntentDescription("Open one of your playlists.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Playlist") var target: PlaylistEntity
+
+    @Dependency var app: AppModel
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { app.pendingIntent = .openPlaylists }
+        return .result()
+    }
+}
+
+/// System search schema (Apple Intelligence / Spotlight "Search Atlas for …").
+/// Kept separate from `ShowSearchResultsIntent` so the existing phrases and
+/// Shortcuts keep their `String` parameter.
+@AssistantIntent(schema: .system.search)
+struct AtlasSystemSearchIntent: ShowInAppSearchResultsIntent {
+    static let searchScopes: [StringSearchScope] = [.general]
+
+    @Parameter var criteria: StringSearchCriteria
+
+    @Dependency var app: AppModel
+
+    func perform() async throws -> some IntentResult {
+        let query = criteria.term
+        await MainActor.run { app.pendingIntent = .search(query) }
+        return .result()
+    }
+}
+
+/// Lets Spotlight / Shortcuts turn typed text straight into video values
+/// (iOS 26+ `IntentValueQuery`): "Atlas: <query>" offers matching videos to
+/// play or add without opening the app first.
+struct VideoValueQuery: IntentValueQuery {
+    @MainActor
+    func values(for input: String) async throws -> [VideoEntity] {
+        await IntentDataStore.searchVideos(input, limit: 8)
+    }
+}
+
 /// "Find videos about …" — returns matching videos as a value, so a Shortcut can
 /// chain them: Find Videos → Get First Item → Add to Playlist / Play. (The search
 /// schema above only *shows* results in-app; this one hands them back.)
@@ -97,7 +191,7 @@ struct ResumeWatchingIntent: AppIntent {
 
 /// "Play this" — plays a video entity (the one on screen, or one you name).
 /// Prefers the offline file when the video is downloaded.
-struct PlayVideoIntent: AppIntent {
+struct PlayVideoIntent: AppIntent, OpenIntent {
     static let title: LocalizedStringResource = "Play Video"
     static let description = IntentDescription("Play a video in Atlas.")
     static let openAppWhenRun = true

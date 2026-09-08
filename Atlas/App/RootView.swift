@@ -43,6 +43,28 @@ struct RootView: View {
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
             playFromSpotlight(activity)
         }
+        // Handoff: advertise what's playing so another device can pick it up;
+        // also accept activities handed to us (and the same ids from Spotlight).
+        .userActivity(AtlasActivity.watch, isActive: app.nowPlaying != nil) { activity in
+            guard let request = app.nowPlaying else { return }
+            AtlasActivity.configureWatch(activity, request: request)
+        }
+        .onContinueUserActivity(AtlasActivity.watch) { activity in
+            guard let videoID = activity.userInfo?[AtlasActivity.videoIDKey] as? String else { return }
+            play(
+                videoID: videoID,
+                title: activity.userInfo?[AtlasActivity.titleKey] as? String ?? activity.title ?? "Video",
+                uploader: activity.userInfo?[AtlasActivity.uploaderKey] as? String,
+                thumbnail: activity.userInfo?[AtlasActivity.thumbnailKey] as? String)
+        }
+        .onContinueUserActivity(AtlasActivity.channel) { activity in
+            guard let id = activity.userInfo?[AtlasActivity.channelIDKey] as? String else { return }
+            app.pendingIntent = .openChannel(id)
+        }
+        // atlas:// links (Control Center widgets, and anything else external).
+        .onOpenURL { url in
+            if let action = AtlasURL.action(for: url) { app.pendingIntent = action }
+        }
         .alert(
             "Local Library Temporarily Unavailable",
             isPresented: Binding {
@@ -73,6 +95,12 @@ struct RootView: View {
         case .openDownloads:
             app.selectedTab = .profile
             app.libraryTarget = .downloads
+        case .openChannel(let channelID):
+            app.selectedTab = .profile
+            app.libraryTarget = .channel(channelID)
+        case .openPlaylists:
+            app.selectedTab = .profile
+            app.libraryTarget = .playlists
         }
     }
 
@@ -91,6 +119,16 @@ struct RootView: View {
     private func playFromSpotlight(_ activity: NSUserActivity) {
         guard let itemID = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
         else { return }
+        switch SpotlightIndexer.target(fromItemID: itemID) {
+        case .channel(let channelID):
+            app.pendingIntent = .openChannel(channelID)
+            return
+        case .playlist:
+            app.pendingIntent = .openPlaylists
+            return
+        case .video:
+            break
+        }
         let videoID = SpotlightIndexer.videoID(fromItemID: itemID)
         let entry = try? modelContext.fetch(
             FetchDescriptor<HistoryEntry>(

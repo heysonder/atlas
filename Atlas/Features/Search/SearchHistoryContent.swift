@@ -67,8 +67,7 @@ struct SearchHistoryContent: View {
             Button("Clear", action: onClear)
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.plain)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                .inlineTapTarget()
         }
         .foregroundStyle(.secondary)
     }

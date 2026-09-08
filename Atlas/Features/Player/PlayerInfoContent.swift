@@ -1,3 +1,4 @@
+import DeclaredAgeRange
 import PipedKit
 import SwiftData
 import SwiftUI
@@ -11,6 +12,11 @@ struct PlayerInfoContent: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.requestAgeRange) private var requestAgeRange
+    /// Comments, live chat, and chat replay are user-generated content and stay
+    /// off until the Declared Age Range check allows social features.
+    private var socialGate: SocialFeaturesGate { SocialFeaturesGate.shared }
+    private var allowsSocial: Bool { socialGate.allowsSocialFeatures }
     @Query(sort: \Playlist.createdAt, order: .reverse) private var playlists: [Playlist]
 
     let title: String
@@ -149,14 +155,20 @@ struct PlayerInfoContent: View {
                     onTimestampTap: onTimestampTap)
             }
 
-            Divider()
-
-            PlayerInfoCommentsSection(
-                loader: loader,
-                videoID: videoID,
-                currentPlaybackSeconds: currentPlaybackSeconds,
-                inline: inline,
-                onTimestampTap: onTimestampTap)
+            if !allowsSocial {
+                Divider()
+                SocialFeaturesNotice(gate: socialGate) {
+                    Task { await socialGate.resolve(using: requestAgeRange, force: true) }
+                }
+            } else {
+                Divider()
+                PlayerInfoCommentsSection(
+                    loader: loader,
+                    videoID: videoID,
+                    currentPlaybackSeconds: currentPlaybackSeconds,
+                    inline: inline,
+                    onTimestampTap: onTimestampTap)
+            }
 
             if !app.queuedVideos.isEmpty {
                 Divider()
@@ -168,6 +180,11 @@ struct PlayerInfoContent: View {
             await loadCreatorFallbackIfNeeded()
         }
         .task {
+            // Ask (or re-ask after 30 days) before any UGC is requested.
+            await socialGate.resolve(using: requestAgeRange)
+        }
+        .task(id: allowsSocial) {
+            guard allowsSocial else { return }
             if loader == nil { loader = CommentsLoader(client: client, videoID: videoID) }
             await loader?.loadInitial()
         }

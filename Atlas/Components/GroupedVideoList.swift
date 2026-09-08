@@ -6,7 +6,9 @@ import SwiftUI
 /// appear. Shared by the feed, search, recs, channel.
 struct GroupedVideoList: View {
     @Environment(AppModel.self) private var app
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Measured container width; drives the stack-vs-grid choice so a landscape
+    /// phone (compact size class, but ~650pt wide) still gets two columns.
+    @State private var containerWidth: CGFloat = 0
 
     let items: [StreamItem]
     var avatarFallback: String? = nil
@@ -43,11 +45,27 @@ struct GroupedVideoList: View {
         self.onPlay = onPlay
     }
 
+    /// Minimum card width in the grid; also the width threshold for using it.
+    private static let gridMinCardWidth: CGFloat = 300
+    private static let gridColumnSpacing: CGFloat = 16
+
+    /// Grid once two minimum-width columns fit; otherwise the single stack.
+    private var usesGrid: Bool {
+        containerWidth >= Self.gridMinCardWidth * 2 + Self.gridColumnSpacing
+    }
+
     var body: some View {
-        if horizontalSizeClass == .regular {
-            gridLayout
-        } else {
-            stackLayout
+        Group {
+            if usesGrid {
+                gridLayout
+            } else {
+                stackLayout
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) {
+            $0.size.width
+        } action: {
+            containerWidth = $0
         }
     }
 
@@ -85,7 +103,11 @@ struct GroupedVideoList: View {
     /// into a single horizontal shelf near the top (their tall 9:16 posters don't
     /// tile cleanly beside wide 16:9 cards).
     private var gridLayout: some View {
-        let track = [GridItem(.adaptive(minimum: 300), spacing: 16, alignment: .top)]
+        let track = [
+            GridItem(
+                .adaptive(minimum: Self.gridMinCardWidth),
+                spacing: Self.gridColumnSpacing, alignment: .top)
+        ]
         let shorts = items.filter { $0.isShort == true }
         let videos = items.filter { $0.isShort != true }
         let firstIndexByID = firstIndexByID()

@@ -71,7 +71,13 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         /// When `currentDetail`'s URLs were resolved — runtime fallback uses
         /// this to decide whether they may have expired.
         var currentDetailLoadedAt: Date?
-        var infoButtonHost: UIHostingController<InfoOverlayButton>?
+        var infoButtonHost: UIHostingController<PlayerOverlayButtons>?
+        let chatButtonModel = ChatButtonModel()
+        /// Chat loaders for the current video, created on demand and shared by
+        /// the Chat page and the replay probe; reset with the player.
+        var liveChatLoader: LiveChatLoader?
+        var chatReplayLoader: LiveChatReplayLoader?
+        var chatProbeTask: Task<Void, Never>?
         var debugOverlayHost: UIHostingController<PlayerDebugOverlay>?
         let infoButtonModel = InfoButtonModel()
         let debugModel = PlayerDebugModel()
@@ -134,6 +140,9 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
 
             let player = AVPlayer()
             player.appliesMediaSelectionCriteriaAutomatically = false
+            // Preserve background audio while AVKit stays attached to publish
+            // Now Playing metadata and manage PiP transitions.
+            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
             // Keep buffering/stall behavior at AVPlayer defaults
             // (automaticallyWaitsToMinimizeStalling defaults to true).
             let controller = AVPlayerViewController()
@@ -198,6 +207,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                     source: playback.sourceName)
                 debugModel.configure(detail: detail, composed: playback.composed, allowAV1: Self.supportsAV1)
                 PlaybackDiagnostics.start(videoID: request.videoID, source: playback.sourceName)
+                AppDiagnostics.reportPlayback(source: playback.sourceName)
                 if playback.failureFallback != .none {
                     observeForFailure(
                         initialItem,
@@ -218,6 +228,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
                 currentDetailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
                 installDebugOverlay(on: controller)
                 installInfoButton(on: controller)
+                installChatAvailability(detail: detail, client: client, videoID: request.videoID)
                 // Resume from a saved position (ignore if we're at/near the end).
                 if let resume = savedPosition(for: request.videoID),
                     resume >= PlaybackHistoryStore.minWatchSeconds
@@ -278,6 +289,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             installItemDiagnostics(for: item, videoID: request.videoID, source: "local")
             debugModel.configureLocal()
             PlaybackDiagnostics.start(videoID: request.videoID, source: "local")
+            AppDiagnostics.reportPlayback(source: "local")
             installDebugOverlay(on: controller)
             PlayerNowPlayingMetadata.attachArtwork(
                 to: item,

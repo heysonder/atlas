@@ -39,7 +39,7 @@ struct CommentRow: View {
                     if replyError != nil {
                         Button("Retry replies") { Task { await toggleReplies() } }
                             .font(.caption2.weight(.semibold))
-                            .frame(minHeight: 44)
+                            .inlineTapTarget()
                     }
                 }
                 Spacer(minLength: 0)
@@ -118,8 +118,7 @@ struct CommentRow: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
                 .disabled(loadingReplies)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                .inlineTapTarget()
             }
         }
         .padding(.top, 1)

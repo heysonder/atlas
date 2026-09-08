@@ -18,12 +18,36 @@ nonisolated enum PolicyMediaAssetFactory {
     static let maximumMediaBytes: Int64 = 8 * 1_024 * 1_024 * 1_024
     static let mediaChunkBytes: Int64 = 4 * 1_024 * 1_024
 
+    /// An asset AVFoundation loads natively (no custom scheme / resource
+    /// loader), after the root URL passes the destination policy. Used for HLS:
+    /// routing HLS through the resource-loader proxy broke on-device playback
+    /// (AV1 HLS never left "waiting" or lost video — regression from 879a1e8),
+    /// and AVPlayer's native HLS pipeline handles playlists, byte ranges, and
+    /// ABR itself. Nested playlist/segment hosts are those the instance
+    /// advertises; the root is validated here.
+    static func nativeAsset(
+        for url: URL,
+        client: PolicyHTTPClient,
+        noCache: Bool = false
+    ) async throws -> AVURLAsset {
+        try await client.context.validateAsynchronously(url)
+        guard noCache else { return AVURLAsset(url: url) }
+        return AVURLAsset(
+            url: url,
+            options: [
+                "AVURLAssetHTTPHeaderFieldsKey": [
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                ]
+            ])
+    }
+
     static func asset(
         for url: URL,
         client: PolicyHTTPClient,
         noCache: Bool = false
-    ) throws -> AVURLAsset {
-        try client.context.validate(url)
+    ) async throws -> AVURLAsset {
+        try await client.context.validateAsynchronously(url)
         let encoded = try policyURL(for: url)
         let delegate = PolicyMediaResourceLoader(client: client, noCache: noCache)
         let asset = AVURLAsset(url: encoded)

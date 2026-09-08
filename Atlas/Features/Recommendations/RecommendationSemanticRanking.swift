@@ -8,11 +8,35 @@ extension RecommendationEngine {
     nonisolated static func rankByTopic(
         _ items: [StreamItem], profile: InterestProfile,
         sourcesByID: [String: Set<CandidateSource>] = [:],
-        enrichment: [String: VideoSignals] = [:]
+        enrichment: [String: VideoSignals] = [:],
+        frequency: [String: Int] = [:],
+        impressions: [String: Int] = [:],
+        useContextualEmbedding: Bool = false
     ) -> [StreamItem] {
+        rankByTopicScored(
+            items, profile: profile, sourcesByID: sourcesByID, enrichment: enrichment,
+            frequency: frequency, impressions: impressions,
+            useContextualEmbedding: useContextualEmbedding
+        ).items
+    }
+
+    nonisolated static func rankByTopicScored(
+        _ items: [StreamItem], profile: InterestProfile,
+        sourcesByID: [String: Set<CandidateSource>] = [:],
+        enrichment: [String: VideoSignals] = [:],
+        frequency: [String: Int] = [:],
+        impressions: [String: Int] = [:],
+        useContextualEmbedding: Bool = false
+    ) -> RankedTopicResult {
         let workItems = Array(items.prefix(RecommendationWorkBudget.maximumRankingItems))
         let remainder = Array(items.dropFirst(workItems.count))
-        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return items }
+        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else {
+            return RankedTopicResult(items: items, features: [:])
+        }
+        // Sentence-level transformer vectors when the model is ready (the refine
+        // pass); nil falls back to the IDF-weighted word mean below. The choice
+        // is pass-wide — the two vector spaces must never be cosine-compared.
+        let contextual = useContextualEmbedding ? ContextualEmbedder.loadedModel() : nil
 
         // Only pure grammar words are dropped outright. Topical-but-common words
         // ("new", "best", "review") are KEPT — IDF below down-weights whatever turns
@@ -112,29 +136,40 @@ extension RecommendationEngine {
             return prototypes.max { cosine($0.vec, v) < cosine($1.vec, v) }?.name
         }
 
-        // Taste = your watches from the last 7 days. With nearest-match scoring
-        // (below) a bigger sample only helps, so widen it — but floor it when you've
-        // had a quiet week, and cap it so the math stays cheap.
-        let cutoff = Date().addingTimeInterval(-7 * 86_400)
+        // Two-tier taste. Tier 1 = the last 7 days at full priority: the cap is
+        // wide enough that even a heavy week keeps the whole window (the old 60
+        // cap silently shrank it to ~3 days for heavy watchers). Floor it when
+        // you've had a quiet week.
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-7 * 86_400)
         var recent = profile.history.filter { $0.watchedAt >= cutoff }
         if recent.count < 15 { recent = Array(profile.history.prefix(30)) }
-        recent = Array(recent.prefix(60))
+        recent = Array(recent.prefix(100))
+
+        // Tier 2 = the last ~30 days at lower priority: only strong watches,
+        // channel-capped, blended at 25% below — so a three-day rabbit hole
+        // can't fully hijack the feed, and last month's interests keep a pull
+        // instead of falling off a cliff at day 7.
+        let recentIDs = Set(recent.map(\.videoID))
+        let longTerm = longTermTasteSignals(profile.history, excluding: recentIDs, now: now)
 
         // Weight each watch by how much of it you finished: a video you watched to
-        // the end joins your taste up to 4×, a half-watch once (as before). Repeating
-        // the doc lets the "top-3 nearest" scoring below lean hard toward the topics
-        // you actually finish — "suggest more like the things I watch all the way."
+        // the end joins your taste up to 4×, a half-watch once (as before), and an
+        // early bail (weight rounds to 0) not at all — opening a video and leaving
+        // is not taste. Repeating the doc lets the "top-3 nearest" scoring below
+        // lean hard toward the topics you actually finish — "suggest more like the
+        // things I watch all the way."
         let tasteDocs = recent.flatMap { entry -> [[String]] in
+            let copies = Int(
+                watchWeight(
+                    position: entry.positionSeconds,
+                    duration: entry.durationSeconds
+                ).rounded())
+            guard copies >= 1 else { return [] }
             let doc = docTokens(title: entry.title, channel: entry.uploader)
-            let copies = max(
-                1,
-                Int(
-                    watchWeight(
-                        position: entry.positionSeconds,
-                        duration: entry.durationSeconds
-                    ).rounded()))
             return Array(repeating: doc, count: copies)
         }
+        let longTermDocs = longTerm.map { docTokens(title: $0.title, channel: $0.uploader) }
         // Fold creator tags (when enriched) into the candidate's text — clean topical
         // keywords that sharpen both the similarity and the category classification.
         let candDocs = workItems.map { item -> [String] in
@@ -170,7 +205,7 @@ extension RecommendationEngine {
         // like on that category raises its share and lifts the gate.
         var catCount: [String: Int] = [:]
         var classified = 0
-        for doc in tasteDocs + likedDocs + savedDocs + searchDocs {
+        for doc in tasteDocs + longTermDocs + likedDocs + savedDocs + searchDocs {
             if let category = classify(doc) {
                 catCount[category, default: 0] += 1
                 classified += 1
@@ -194,17 +229,23 @@ extension RecommendationEngine {
         // IDF over the live pool: a word in every title (incl. "new"/"best"/"video")
         // earns weight ~1; a distinctive word earns more. Down-weight, never drop.
         var df: [String: Int] = [:]
-        for doc in tasteDocs + candDocs + likedDocs + dislikedDocs + savedDocs + searchDocs {
+        for doc in tasteDocs + longTermDocs + candDocs + likedDocs + dislikedDocs + savedDocs
+            + searchDocs
+        {
             for word in Set(doc) {
                 df[word, default: 0] += 1
             }
         }
         let total = Double(
-            tasteDocs.count + candDocs.count + likedDocs.count + dislikedDocs.count
-                + savedDocs.count + searchDocs.count)
+            tasteDocs.count + longTermDocs.count + candDocs.count + likedDocs.count
+                + dislikedDocs.count + savedDocs.count + searchDocs.count)
         func idf(_ w: String) -> Double { log((total + 1) / Double((df[w] ?? 0) + 1)) + 1 }
 
         func vector(_ doc: [String]) -> [Double]? {
+            if let contextual {
+                return ContextualEmbedder.vector(
+                    for: doc.joined(separator: " "), model: contextual)
+            }
             var sum: [Double] = []
             var wsum = 0.0
             for w in doc {
@@ -226,10 +267,14 @@ extension RecommendationEngine {
         // exactly what the top-3 mean exists to prevent. Dedupe before vectorizing.
         let tasteVectors = deduplicatedDocs(tasteDocs + likedDocs + savedDocs + searchDocs)
             .compactMap(vector)
+        let longTermVectors = deduplicatedDocs(longTermDocs).compactMap(vector)
         let dislikedVectors = dislikedDocs.compactMap(vector)
-        guard !tasteVectors.isEmpty else { return items }
+        guard !tasteVectors.isEmpty else {
+            return RankedTopicResult(items: items, features: [:])
+        }
 
         let maxAff = max(profile.channelAffinity.values.max() ?? 1, 1)
+        let nowSeconds = Date().timeIntervalSince1970
 
         func topThreeMeanSimilarity(to v: [Double], in candidates: [[Double]]) -> Double {
             var first = -Double.infinity
@@ -260,12 +305,19 @@ extension RecommendationEngine {
             return (item: item, vector: vector(doc), category: category, fit: categoryFit(category))
         }
 
-        func score(_ item: StreamItem, vector v: [Double], category: String?, fit: Double) -> Double {
+        func score(
+            _ item: StreamItem, vector v: [Double], category: String?, fit: Double
+        ) -> (Double, RecommendationOutcomeFeatures) {
             let id = item.videoID ?? ""
             let sources = sourcesByID[id] ?? []
             // Mean of your 3 NEAREST interests: as sharp as a single max, but one
             // stray off-topic watch can't single-handedly magnet a candidate up.
-            let topicSim = topThreeMeanSimilarity(to: v, in: tasteVectors)
+            // Recent taste leads; the 30-day tier tempers it at 25%.
+            let recentSim = topThreeMeanSimilarity(to: v, in: tasteVectors)
+            let longSim =
+                longTermVectors.isEmpty
+                ? recentSim : topThreeMeanSimilarity(to: v, in: longTermVectors)
+            let topicSim = 0.75 * recentSim + 0.25 * longSim
             // Categorical gate: collapse the score of a video whose category you
             // essentially never watch (e.g. war/news for an all-tech history). The
             // 0.15 floor keeps it soft, so a misclassification can't fully erase it.
@@ -277,7 +329,17 @@ extension RecommendationEngine {
             let sourceBoost =
                 (sources.contains(.saved) ? 0.12 : 0) + (sources.contains(.search) ? 0.10 : 0)
                 + (sources.contains(.subscription) ? 0.08 : 0) + (sources.contains(.exploration) ? 0.03 : 0)
-            var s = gated + aff * 0.25 + sub + sourceBoost
+            // Corroboration: several of your watches' related-streams pointing at
+            // the same candidate is the strongest recommendation signal we get.
+            let corroboration = frequencyBoost(frequency[id] ?? 0)
+            // Mild freshness prior so a five-year-old video doesn't tie a
+            // yesterday upload; stronger for a subscribed channel's uploads,
+            // where "it's new" is most of the point.
+            var recency = uploadFreshness(item.uploaded, now: nowSeconds, horizonDays: 60) * 0.1
+            if sources.contains(.subscription) {
+                recency += uploadFreshness(item.uploaded, now: nowSeconds, horizonDays: 14) * 0.15
+            }
+            var s = gated + aff * 0.25 + sub + sourceBoost + corroboration + recency
             // YouTube's own category is authoritative: if it says News & politics and
             // you don't watch news, bury it regardless of what the title words imply.
             if newsShare < 0.15,
@@ -288,28 +350,74 @@ extension RecommendationEngine {
             }
             // "Suggest less": push down anything resembling a thumbs-down, and bury a
             // whole category you've down-voted.
-            if !dislikedVectors.isEmpty {
-                let dislikeSim = dislikedVectors.map { cosine($0, v) }.max() ?? 0
-                s -= 0.6 * max(0, dislikeSim)  // dislike weight: tunable knob
-            }
+            let dislikeSim = max(0, dislikedVectors.map { cosine($0, v) }.max() ?? 0)
+            s -= 0.6 * dislikeSim  // dislike weight: tunable knob
             if !dislikedCategories.isEmpty, let c = category, dislikedCategories.contains(c) {
                 s *= 0.2
             }
-            return s
+            // Shown repeatedly, never tapped → sink it. Only positive scores:
+            // shrinking a negative score would be a boost.
+            if s > 0 {
+                s *= impressionPenalty(impressions[id] ?? 0)
+            }
+            let features = RecommendationOutcomeFeatures(
+                topicSimilarity: recentSim,
+                longTermSimilarity: longSim,
+                categoryFit: fit,
+                corroboration: frequency[id] ?? 0,
+                freshness: uploadFreshness(item.uploaded, now: nowSeconds, horizonDays: 60),
+                channelAffinity: aff,
+                isSubscribed: sub > 0,
+                dislikeSimilarity: dislikeSim,
+                priorImpressions: impressions[id] ?? 0,
+                fromRelated: sources.contains(.related),
+                fromSearch: sources.contains(.search),
+                fromSaved: sources.contains(.saved),
+                fromSubscription: sources.contains(.subscription),
+                fromExploration: sources.contains(.exploration),
+                usedContextualEmbedding: contextual != nil)
+            return (s, features)
         }
 
-        return
-            candidateFeatures
-            .map { feature in
-                (
-                    feature.item,
-                    feature.vector.map {
-                        score(feature.item, vector: $0, category: feature.category, fit: feature.fit)
-                    } ?? -1
-                )
-            }
-            .sorted { $0.1 > $1.1 }
-            .map { $0.0 } + remainder
+        var featuresByID: [String: RecommendationOutcomeFeatures] = [:]
+        let scored = candidateFeatures.map {
+            feature -> (StreamItem, Double) in
+            guard let v = feature.vector else { return (feature.item, -1) }
+            let (s, outcomeFeatures) = score(
+                feature.item, vector: v, category: feature.category, fit: feature.fit)
+            if let id = feature.item.videoID { featuresByID[id] = outcomeFeatures }
+            return (feature.item, s)
+        }
+        return RankedTopicResult(
+            items: scored.sorted { $0.1 > $1.1 }.map { $0.0 } + remainder,
+            features: featuresByID)
+    }
+
+    /// Tier-2 taste: strong watches (well past the halfway mark) from the last
+    /// ~30 days that aren't already in the recent tier, channel-capped so one
+    /// binge can't own the tier.
+    nonisolated static func longTermTasteSignals(
+        _ history: [HistorySignal], excluding recentIDs: Set<String>,
+        now: Date = .now, windowDays: Double = 30,
+        limit: Int = 40, channelCap: Int = 2
+    ) -> [HistorySignal] {
+        let cutoff = now.addingTimeInterval(-windowDays * 86_400)
+        var byChannel: [String: Int] = [:]
+        var chosen: [HistorySignal] = []
+        for entry in history {
+            guard chosen.count < limit else { break }
+            guard !recentIDs.contains(entry.videoID), entry.watchedAt >= cutoff else { continue }
+            guard
+                watchWeight(
+                    position: entry.positionSeconds,
+                    duration: entry.durationSeconds) >= 2
+            else { continue }
+            let key = entry.uploader ?? entry.videoID
+            guard byChannel[key, default: 0] < channelCap else { continue }
+            byChannel[key, default: 0] += 1
+            chosen.append(entry)
+        }
+        return chosen
     }
 
     /// Collapse exact-duplicate docs (watch-weight replication, repeated
@@ -320,14 +428,23 @@ extension RecommendationEngine {
         return docs.filter { seen.insert($0).inserted }
     }
 
-    nonisolated static func rankByTopicInBackground(
+    nonisolated static func rankByTopicScoredInBackground(
         _ items: [StreamItem],
         profile: InterestProfile,
         sourcesByID: [String: Set<CandidateSource>] = [:],
-        enrichment: [String: VideoSignals] = [:]
-    ) async -> [StreamItem] {
-        await Task.detached(priority: .userInitiated) {
-            rankByTopic(items, profile: profile, sourcesByID: sourcesByID, enrichment: enrichment)
+        enrichment: [String: VideoSignals] = [:],
+        frequency: [String: Int] = [:],
+        impressions: [String: Int] = [:],
+        useContextualEmbedding: Bool = false
+    ) async -> RankedTopicResult {
+        // Start loading the transformer during the (word-embedding) coarse pass
+        // so it's usually ready by the time the refine pass asks for it.
+        ContextualEmbedder.warmUp()
+        return await Task.detached(priority: .userInitiated) {
+            rankByTopicScored(
+                items, profile: profile, sourcesByID: sourcesByID, enrichment: enrichment,
+                frequency: frequency, impressions: impressions,
+                useContextualEmbedding: useContextualEmbedding)
         }.value
     }
 }

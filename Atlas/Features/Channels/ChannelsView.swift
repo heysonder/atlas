@@ -14,8 +14,9 @@ struct ChannelsView: View {
                 } description: {
                     Text("Channels you subscribe to show up here.")
                 } actions: {
-                    Button("Search") { app.selectedTab = .search }
+                    Button("Find channels") { app.selectedTab = .search }
                         .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
                 }
             } else {
                 List {

@@ -97,7 +97,7 @@ import Testing
     }
 }
 
-@Test func policyMediaRejectsPrivateDestinationForPublicInstance() throws {
+@Test func policyMediaRejectsPrivateDestinationForPublicInstance() async throws {
     let policy = NetworkDestinationPolicy(
         resolver: HostAddressResolver { host in
             host == "public.example" ? ["93.184.216.34"] : ["192.168.1.20"]
@@ -107,8 +107,8 @@ import Testing
         policy: policy)
     let client = PolicyHTTPClient(context: context)
 
-    #expect(throws: NetworkPolicyError.destinationNotAllowed) {
-        _ = try PolicyMediaAssetFactory.asset(
+    await #expect(throws: NetworkPolicyError.destinationNotAllowed) {
+        _ = try await PolicyMediaAssetFactory.asset(
             for: URL(string: "https://private.example/video.m3u8")!,
             client: client)
     }
@@ -132,4 +132,21 @@ import Testing
     #expect(throws: PolicyMediaAssetFactory.MediaError.invalidRange) {
         _ = try PolicyMediaAssetFactory.finiteMediaRange(offset: Int64.max, remaining: Int64.max)
     }
+}
+
+@MainActor
+@Test func playbackDestinationResolutionDoesNotRunOnTheMainThread() async throws {
+    let policy = NetworkDestinationPolicy(
+        resolver: HostAddressResolver { _ in
+            #expect(!Thread.isMainThread)
+            return ["93.184.216.34"]
+        })
+    // A literal origin avoids DNS during context construction, so the resolver
+    // assertion covers actual playback URL validation only.
+    let context = try InstanceNetworkContext(
+        instanceURL: #require(URL(string: "https://93.184.216.34")), policy: policy)
+    let client = PolicyHTTPClient(context: context)
+    let detail = streamPlaybackDetail(hls: "https://media.example/master.m3u8", includeComposedStreams: false)
+    let playback = await StreamPlaybackBuilder.makePlayerItem(detail, allowAV1: false, client: client)
+    #expect(playback != nil)
 }

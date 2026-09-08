@@ -87,7 +87,7 @@ extension VideoPlayerPresenter.Coordinator {
         case .none:
             fallbackPlayback = nil
         case .direct:
-            fallbackPlayback = StreamPlaybackBuilder.makeDirectFailureFallbackItem(
+            fallbackPlayback = await StreamPlaybackBuilder.makeDirectFailureFallbackItem(
                 for: detail,
                 client: client)
         case .composedOrDirect:
@@ -110,6 +110,13 @@ extension VideoPlayerPresenter.Coordinator {
         statusObservation = nil
         let resume = player.currentTime()
         let wasPlaying = player.timeControlStatus != .paused
+        // After a media-services reset the old AVPlayer never plays again
+        // (its next item reports "missing"); swap in a fresh one first.
+        let player =
+            PlayerRuntimeFallbackPolicy.isMediaServicesReset(item)
+            ? replacePlayerAfterMediaServicesReset(player)
+            : player
+        let recreated = player.currentItem == nil
         PlaybackDiagnostics.fallback(
             videoID: currentRequest?.videoID ?? "unknown",
             source: activePlaybackSource,
@@ -128,7 +135,7 @@ extension VideoPlayerPresenter.Coordinator {
             : currentMetadata
         if fallbackPlayback.selectsPreferredAudio {
             await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
-            guard self.player === player, player.currentItem === item else { return }
+            guard self.player === player, recreated || player.currentItem === item else { return }
         }
         player.replaceCurrentItem(with: fallbackItem)
         PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)
@@ -141,6 +148,40 @@ extension VideoPlayerPresenter.Coordinator {
         await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
         // `defaultRate` carries the user's selected playback speed.
         if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
+    }
+
+    /// Builds a replacement AVPlayer for the presented controller, moving the
+    /// coordinator's per-player observers over. Returns the new player.
+    private func replacePlayerAfterMediaServicesReset(_ old: AVPlayer) -> AVPlayer {
+        PlaybackDiagnostics.message(
+            "media-services-reset-recreate",
+            videoID: currentRequest?.videoID,
+            source: activePlaybackSource)
+        let fresh = AVPlayer()
+        fresh.appliesMediaSelectionCriteriaAutomatically = false
+        fresh.defaultRate = old.defaultRate
+        if let timeObserver {
+            old.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        if let sponsorObserver {
+            old.removeTimeObserver(sponsorObserver)
+            self.sponsorObserver = nil
+        }
+        if let infoCommentTimeObserver {
+            old.removeTimeObserver(infoCommentTimeObserver)
+            self.infoCommentTimeObserver = nil
+        }
+        old.pause()
+        old.replaceCurrentItem(with: nil)
+        playerVC?.player = fresh
+        player = fresh
+        installProgressTracking(on: fresh)
+        if let request = currentRequest, let controller = playerVC {
+            sponsorSegments = []
+            loadSponsorSegments(for: request, player: fresh, controller: controller)
+        }
+        return fresh
     }
 
     /// Startup picked a composition that outranks the playing manifest but

@@ -33,6 +33,7 @@ struct FeedContentView: View {
                 .onScreenVideos(videos)
                 .padding(.horizontal)
                 .padding(.top, 8)
+                .animation(.smooth(duration: 0.35), value: videos.map(\.id))
                 paginationFooter
             }
         }

@@ -1,3 +1,4 @@
+import DeclaredAgeRange
 import PipedKit
 import SwiftUI
 
@@ -9,15 +10,30 @@ enum SettingsRoute: Hashable {
     case instances
     case sponsorBlock
     case backup
+    case diagnostics
 }
 
 /// Root settings screen: the lightweight, frequently-touched controls stay
 /// inline; heavier groups (instance, SponsorBlock, backup) drill into their own
 /// pages with a summary value shown on the row.
 struct SettingsView: View {
+    /// Player style + Stats for Nerds are developer knobs; hidden for now.
+    private static let showsPlayerOptions = false
+
     @Environment(AppModel.self) private var app
     @AppStorage(FeedMode.storageKey) private var feedMode: FeedMode = .subscriptions
     @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
+    @Environment(\.requestAgeRange) private var requestAgeRange
+    private var socialGate: SocialFeaturesGate { SocialFeaturesGate.shared }
+
+    private var socialSummary: String {
+        switch socialGate.status {
+        case .allowed: "On"
+        case .underage: "Off (under 13)"
+        case .declined: "Off (not shared)"
+        case .unknown: "Not checked"
+        }
+    }
 
     private var currentHost: String {
         guard !app.instanceURLString.isEmpty else { return "Not set" }
@@ -88,21 +104,40 @@ struct SettingsView: View {
                 Text(privacyNetworkSummary)
             }
 
-            Section {
-                Picker("Player", selection: $app.playerStyle) {
-                    ForEach(PlayerStyle.allCases) { Text($0.label).tag($0) }
+            if SocialFeaturesGate.isEnforced {
+                Section {
+                    LabeledContent("Comments & Chat", value: socialSummary)
+                    Button("Check Age Range") {
+                        Task { await socialGate.resolve(using: requestAgeRange, force: true) }
+                    }
+                    .disabled(socialGate.isChecking)
+                } header: {
+                    Text("Social Features")
+                } footer: {
+                    Text(
+                        "Comments, live chat, and chat replay are user-generated content and are only shown to users 13 or older, "
+                            + "based on the age range declared for your Apple Account. Only the result (on or off) is stored on this device."
+                    )
                 }
-                Toggle("Stats for Nerds", isOn: $app.statsForNerdsEnabled)
-            } header: {
-                Text("Playback")
-            } footer: {
-                let diagnosticsDescription =
-                    "Shows a playback diagnostics button over videos "
-                    + "with resolution, codec, stream, buffer, and stall details."
-                Text(
-                    app.statsForNerdsEnabled
-                        ? diagnosticsDescription
-                        : app.playerStyle.blurb)
+            }
+
+            if Self.showsPlayerOptions {
+                Section {
+                    Picker("Player", selection: $app.playerStyle) {
+                        ForEach(PlayerStyle.allCases) { Text($0.label).tag($0) }
+                    }
+                    Toggle("Stats for Nerds", isOn: $app.statsForNerdsEnabled)
+                } header: {
+                    Text("Playback")
+                } footer: {
+                    let diagnosticsDescription =
+                        "Shows a playback diagnostics button over videos "
+                        + "with resolution, codec, stream, buffer, and stall details."
+                    Text(
+                        app.statsForNerdsEnabled
+                            ? diagnosticsDescription
+                            : app.playerStyle.blurb)
+                }
             }
 
             Section {
@@ -123,6 +158,9 @@ struct SettingsView: View {
                         : "Off")
                 NavigationLink(value: SettingsRoute.backup) {
                     Label("Backup & Data", systemImage: "externaldrive")
+                }
+                NavigationLink(value: SettingsRoute.diagnostics) {
+                    Label("Diagnostics", systemImage: "waveform.path.ecg")
                 }
             }
 

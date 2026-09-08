@@ -90,6 +90,7 @@ struct ProfileView: View {
                 case .instances: InstancesSettingsView()
                 case .sponsorBlock: SponsorBlockSettingsView()
                 case .backup: BackupSettingsView()
+                case .diagnostics: DiagnosticsSettingsView()
                 }
             }
             .navigationDestination(for: String.self) { id in
@@ -110,6 +111,14 @@ struct ProfileView: View {
         case .downloads: path = NavigationPath([Route.downloads])
         case .history: path = NavigationPath([Route.history])
         case .playlists: path = NavigationPath([Route.playlists])
+        case .channel(let channelID):
+            var next = NavigationPath([Route.channels])
+            next.append(channelID)
+            path = next
+        case .instanceSettings:
+            var next = NavigationPath([Route.settings])
+            next.append(SettingsRoute.instances)
+            path = next
         }
     }
 }

@@ -45,8 +45,16 @@ public struct StreamItem: Codable, Identifiable, Hashable, Sendable {
     public var isVideo: Bool { (type ?? "stream") == "stream" && videoID != nil }
     public var isChannel: Bool { type == "channel" || ownChannelID != nil }
     public var displayTitle: String { title ?? name ?? "Untitled" }
-    public var isLive: Bool { livestream == true }
-    public var needsLiveStatusResolution: Bool { livestream == nil && duration == -1 }
+    /// Live right now. Piped's search and channel rows keep `livestream: true`
+    /// on *past* broadcasts (with their real duration), so a positive duration
+    /// means it already ended; only the live sentinel (-1/0) counts.
+    public var isLive: Bool { livestream == true && (duration ?? -1) <= 0 }
+    /// Channel/tab list responses can omit `livestream`, or briefly report it as
+    /// false while retaining the sentinel live duration. Resolve those
+    /// ambiguous rows through `/streams/:id` before presenting their status.
+    public var needsLiveStatusResolution: Bool {
+        livestream != true && duration == -1
+    }
 }
 
 public struct MediaStream: Codable, Hashable, Sendable {

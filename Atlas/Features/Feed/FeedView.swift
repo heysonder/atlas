@@ -97,7 +97,15 @@ struct FeedView: View {
                         paginationError: feedMode.isForYou ? nil : subsLoader?.paginationError,
                         loadMoreToken: loadMoreToken,
                         onAppearItem: { app.prefetchStream($0.videoID) },
-                        onPlay: { app.play($0) },
+                        onPlay: { item in
+                            // A For You tap is the positive training label, and
+                            // it clears the video's staleness penalty.
+                            if feedMode.isForYou, let id = item.videoID {
+                                FeedImpressionStore.recordTap(id, in: modelContext)
+                                RecommendationOutcomeStore.recordTap(id, in: modelContext)
+                            }
+                            app.play(item)
+                        },
                         onRefresh: { await load(refreshing: true) },
                         onLoadMore: loadMore,
                         onRetryLoadMore: retryLoadMore)
@@ -124,7 +132,10 @@ struct FeedView: View {
                 ChannelDetailView(channelID: id)
             }
         }
-        .task(id: loadKey) { await loadIfNeeded() }
+        .task(id: loadKey) {
+            AppDiagnostics.reportFeed(mode: feedMode)
+            await loadIfNeeded()
+        }
     }
 
     private var canLoadMore: Bool {
@@ -336,8 +347,13 @@ struct FeedView: View {
         let subIDs = subscriptions.map(\.channelID)
         let subscribedIDs = Set(subIDs)
         let profile = RecommendationProfileStore.loadOrBuild(
-            in: modelContext, history: Array(history.prefix(200)), feedback: signals, saved: saved,
+            in: modelContext,
+            history: Array(history.prefix(RecommendationWorkBudget.maximumProfileHistory)),
+            feedback: signals, saved: saved,
             searches: searches, subscribedIDs: subscribedIDs)
+        // Snapshot of first-screen appearances taken before this load records
+        // its own, so a load never penalizes itself.
+        let impressions = FeedImpressionStore.counts(in: modelContext)
         let seedQueries = profile.candidateSearchQueries
         let savedSeedIDs = profile.savedSeedIDs
         let relatedSeeds = profile.relatedSeeds
@@ -370,6 +386,7 @@ struct FeedView: View {
                         collector: collector,
                         engine: engine,
                         profile: profile,
+                        impressions: impressions,
                         requestedMode: requestedMode,
                         recentTopIDs: recentTopIDs,
                         requestKey: requestKey,
@@ -385,6 +402,7 @@ struct FeedView: View {
                         collector: collector,
                         engine: engine,
                         profile: profile,
+                        impressions: impressions,
                         requestedMode: requestedMode,
                         recentTopIDs: recentTopIDs,
                         requestKey: requestKey,
@@ -400,6 +418,7 @@ struct FeedView: View {
                         collector: collector,
                         engine: engine,
                         profile: profile,
+                        impressions: impressions,
                         requestedMode: requestedMode,
                         recentTopIDs: recentTopIDs,
                         requestKey: requestKey,
@@ -415,6 +434,7 @@ struct FeedView: View {
                         collector: collector,
                         engine: engine,
                         profile: profile,
+                        impressions: impressions,
                         requestedMode: requestedMode,
                         recentTopIDs: recentTopIDs,
                         requestKey: requestKey,
@@ -430,6 +450,7 @@ struct FeedView: View {
                         collector: collector,
                         engine: engine,
                         profile: profile,
+                        impressions: impressions,
                         requestedMode: requestedMode,
                         recentTopIDs: recentTopIDs,
                         requestKey: requestKey,
@@ -445,6 +466,26 @@ struct FeedView: View {
                     !collector.didPresentPersonalized,
                     !collector.didStartDiscovery
                 else { return }
+                // Slow sources: render whatever has arrived rather than a
+                // spinner; a straggler source still triggers the complete pass.
+                let pool = collector.pool
+                if !pool.items.isEmpty {
+                    collector.didPresentPersonalized = true
+                    collector.renderRevision += 1
+                    await renderForYou(
+                        pool: pool,
+                        engine: engine,
+                        profile: profile,
+                        impressions: impressions,
+                        collector: collector,
+                        renderRevision: collector.renderRevision,
+                        requestedMode: requestedMode,
+                        recentTopIDs: recentTopIDs,
+                        requestKey: requestKey,
+                        generation: generation,
+                        refine: false)
+                    return
+                }
                 collector.didStartDiscovery = true
                 await loadDiscovery(
                     requestKey: requestKey, generation: generation,
@@ -474,6 +515,7 @@ struct FeedView: View {
         collector: ForYouCandidateCollector,
         engine: RecommendationEngine,
         profile: InterestProfile,
+        impressions: [String: Int],
         requestedMode: FeedMode,
         recentTopIDs: Set<String>,
         requestKey: String,
@@ -494,8 +536,10 @@ struct FeedView: View {
             return
         }
 
-        let shouldRender = !collector.didPresentPersonalized || collector.isComplete
-        guard shouldRender else { return }
+        // First paint waits for every source (or the initial-response timeout
+        // below, which renders the partial pool). Rendering on the first
+        // source and again on completion reordered the whole list mid-read.
+        guard collector.isComplete else { return }
         let refine = collector.isComplete && requestedMode.isPersonalized
         collector.didPresentPersonalized = true
         collector.renderRevision += 1
@@ -504,6 +548,7 @@ struct FeedView: View {
             pool: pool,
             engine: engine,
             profile: profile,
+            impressions: impressions,
             collector: collector,
             renderRevision: renderRevision,
             requestedMode: requestedMode,
@@ -517,6 +562,7 @@ struct FeedView: View {
         pool: CandidatePool,
         engine: RecommendationEngine,
         profile: InterestProfile,
+        impressions: [String: Int],
         collector: ForYouCandidateCollector,
         renderRevision: Int,
         requestedMode: FeedMode,
@@ -527,9 +573,11 @@ struct FeedView: View {
     ) async {
         switch requestedMode {
         case .forYouRelated:
-            let ranked = RecommendationEngine.rankRelated(pool, profile: profile)
+            let ranked = RecommendationEngine.rankRelated(
+                pool, profile: profile, impressions: impressions)
+            let novel = RecommendationEngine.injectNoveltySlots(ranked, profile: profile)
             let rotated = RecommendationEngine.rotateRecentlyShown(
-                ranked, recentTopIDs: recentTopIDs)
+                novel, recentTopIDs: recentTopIDs)
             await applyForYou(
                 rotated,
                 collector: collector,
@@ -537,9 +585,13 @@ struct FeedView: View {
                 requestKey: requestKey,
                 generation: generation)
         case .forYouCustom:
-            let coarse = await RecommendationEngine.rankByTopicInBackground(
-                pool.items, profile: profile, sourcesByID: pool.sourcesByID)
-            let diverseCoarse = RecommendationEngine.diversify(coarse)
+            let coarseScored = await RecommendationEngine.rankByTopicScoredInBackground(
+                pool.items, profile: profile, sourcesByID: pool.sourcesByID,
+                frequency: pool.frequency, impressions: impressions)
+            let coarse = coarseScored.items
+            collector.outcomeFeatures.merge(coarseScored.features) { _, new in new }
+            let diverseCoarse = RecommendationEngine.injectNoveltySlots(
+                RecommendationEngine.diversify(coarse), profile: profile)
             let rotatedCoarse = RecommendationEngine.rotateRecentlyShown(
                 diverseCoarse, recentTopIDs: recentTopIDs)
             await applyForYou(
@@ -552,8 +604,11 @@ struct FeedView: View {
                 isCurrentLoad(requestKey: requestKey, generation: generation)
             else { return }
             let refineHead = Array(coarse.prefix(50))  // per-video /streams budget — tunable knob
-            let refined = await engine.refineWithSignals(
-                refineHead, profile: profile, sourcesByID: pool.sourcesByID)
+            let refinedScored = await engine.refineWithSignals(
+                refineHead, profile: profile, sourcesByID: pool.sourcesByID,
+                frequency: pool.frequency, impressions: impressions)
+            let refined = refinedScored.items
+            collector.outcomeFeatures.merge(refinedScored.features) { _, new in new }
             // Refinement only re-ranks the head; keep the un-refined coarse tail
             // (deduped) so the ranked list never shrinks under a scrolled user.
             let refinedIDs = Set(refined.map { $0.videoID ?? $0.id })
@@ -562,8 +617,10 @@ struct FeedView: View {
                 + coarse.dropFirst(refineHead.count).filter {
                     !refinedIDs.contains($0.videoID ?? $0.id)
                 }
+            let novelUpgraded = RecommendationEngine.injectNoveltySlots(
+                upgraded, profile: profile)
             let rotatedRefined = RecommendationEngine.rotateRecentlyShown(
-                upgraded, recentTopIDs: recentTopIDs)
+                novelUpgraded, recentTopIDs: recentTopIDs)
             await applyForYou(
                 rotatedRefined,
                 collector: collector,
@@ -587,9 +644,33 @@ struct FeedView: View {
         else { return }
         presentForYou(ranked)
         rememberForYouTop(ranked)
+        recordImpressions(ranked, collector: collector)
         loadedKey = requestKey
         settleLoad(generation: generation)
         await prefetch(visible(ranked))
+    }
+
+    /// Count a first-screen appearance for ranking's impression penalty, and
+    /// log each one (with its scoring features, when the semantic ranker
+    /// produced them) as a training outcome for the learned-weights follow-up.
+    /// The collector dedupes within a load so the refine re-render doesn't
+    /// count the same slots twice.
+    private func recordImpressions(_ ranked: [StreamItem], collector: ForYouCandidateCollector) {
+        var newIDs: [String] = []
+        var outcomes: [RecommendationOutcomeStore.Impression] = []
+        for (position, item) in visible(ranked).prefix(10).enumerated() {
+            guard let id = item.videoID, !collector.recordedImpressionIDs.contains(id) else {
+                continue
+            }
+            newIDs.append(id)
+            if let features = collector.outcomeFeatures[id] {
+                outcomes.append(.init(videoID: id, position: position, features: features))
+            }
+        }
+        guard !newIDs.isEmpty else { return }
+        collector.recordedImpressionIDs.formUnion(newIDs)
+        FeedImpressionStore.record(newIDs, in: modelContext)
+        RecommendationOutcomeStore.record(outcomes, in: modelContext)
     }
 
     private func cancelForYouSourceTasks() {
@@ -642,7 +723,14 @@ struct FeedView: View {
     private func presentForYou(_ ranked: [StreamItem]) {
         let uniqueRanked = StreamItemIdentity.firstOccurrences(in: ranked)
         forYouRanked = uniqueRanked
-        phase = .loaded(Array(uniqueRanked.prefix(forYouShown)))
+        let shown = Array(uniqueRanked.prefix(forYouShown))
+        // A re-rank of an already-visible list (the refine pass) moves rows
+        // instead of blinking the whole list; the first paint stays instant.
+        if case .loaded = phase {
+            withAnimation(.smooth(duration: 0.35)) { phase = .loaded(shown) }
+        } else {
+            phase = .loaded(shown)
+        }
     }
 
     private func rememberForYouTop(_ videos: [StreamItem]) {

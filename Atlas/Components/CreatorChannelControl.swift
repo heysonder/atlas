@@ -35,8 +35,7 @@ struct CreatorChannelControl<Content: View>: View {
 
     private var interactiveLabel: some View {
         label()
-            .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
+            .inlineTapTarget()
     }
 
     private var collaboratorAccessibilityLabel: String {

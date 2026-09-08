@@ -38,7 +38,10 @@ enum StreamPlaybackBuilder {
     }
 
     static let defaultStallFallbackDelay: TimeInterval = 15
-    static let av1HLSStallFallbackDelay: TimeInterval = 45
+    /// The master is pre-warmed alongside /streams and not-ready variants are
+    /// retried in the loader, so a rendition that still hasn't produced a frame
+    /// after this long is treated as dead rather than slow.
+    static let av1HLSStallFallbackDelay: TimeInterval = 20
     /// Remote composition assembly (track + duration loads through the proxy)
     /// is cancelled after this long, so a hung proxy degrades to the direct
     /// fallback instead of a spinner that never resolves.
@@ -73,13 +76,13 @@ enum StreamPlaybackBuilder {
             preferredLanguages: preferredLanguages
         ) {
         case .direct(let url):
-            return directPlayback(url: url, av1HLSURL: av1HLSURL, client: client)
+            return await directPlayback(url: url, av1HLSURL: av1HLSURL, client: client)
         case .composed(let video, let audio):
             // Assembly takes seconds, so when a manifest exists play it right
             // away and hand the caller the pending composition to assemble in
             // the background and swap in once ready.
             if let manifestURL = av1HLSURL ?? playlistURL(from: detail) {
-                return directPlayback(
+                return await directPlayback(
                     url: manifestURL,
                     av1HLSURL: av1HLSURL,
                     client: client,
@@ -93,7 +96,7 @@ enum StreamPlaybackBuilder {
                     timeout: composedAssemblyTimeout)
             else {
                 PlaybackDiagnostics.message("composed-startup-failed")
-                return makeDirectFailureFallbackItem(for: detail, client: client)
+                return await makeDirectFailureFallbackItem(for: detail, client: client)
             }
             return PreparedPlayback(
                 item: composed,
@@ -112,11 +115,11 @@ enum StreamPlaybackBuilder {
         av1HLSURL: URL?,
         client: PolicyHTTPClient,
         composedUpgrade: ComposedUpgrade? = nil
-    ) -> PreparedPlayback? {
+    ) async -> PreparedPlayback? {
         let usesAV1HLS = url == av1HLSURL
         let usesHLS = usesAV1HLS || isHLSPlaylist(url)
         guard
-            let item = playerItem(
+            let item = await playerItem(
                 forDirectURL: url, usesAV1HLS: usesAV1HLS, client: client)
         else { return nil }
         return PreparedPlayback(
@@ -201,11 +204,11 @@ enum StreamPlaybackBuilder {
     static func makeDirectFailureFallbackItem(
         for detail: VideoDetail,
         client: PolicyHTTPClient = AppModel.publicHTTPClient
-    ) -> PreparedPlayback? {
+    ) async -> PreparedPlayback? {
         guard let url = detail.playableURL else { return nil }
         let usesHLS = isHLSPlaylist(url)
         guard
-            let item = playerItem(
+            let item = await playerItem(
                 forDirectURL: url, usesAV1HLS: false, client: client)
         else { return nil }
         return PreparedPlayback(
@@ -243,7 +246,7 @@ enum StreamPlaybackBuilder {
             }
             PlaybackDiagnostics.message("composed-fallback-failed")
         }
-        return makeDirectFailureFallbackItem(for: detail, client: client)
+        return await makeDirectFailureFallbackItem(for: detail, client: client)
     }
 
     static func manifestAdvertisesAV1Video(_ manifest: String) -> Bool {
@@ -256,12 +259,15 @@ enum StreamPlaybackBuilder {
         forDirectURL url: URL,
         usesAV1HLS: Bool,
         client: PolicyHTTPClient
-    ) -> AVPlayerItem? {
+    ) async -> AVPlayerItem? {
         // No bitrate/resolution/buffer caps: hand quality selection entirely to
         // AVPlayer's adaptive logic so it starts low and ramps up on its own.
         // AV1 HLS still uses a no-cache asset to avoid chasing stale signed URLs.
+        // Direct/HLS playback goes through AVFoundation's native loader (the
+        // resource-loader proxy broke HLS on device); the URL is still policy
+        // validated.
         guard
-            let asset = try? PolicyMediaAssetFactory.asset(
+            let asset = try? await PolicyMediaAssetFactory.nativeAsset(
                 for: url, client: client, noCache: usesAV1HLS)
         else { return nil }
         return AVPlayerItem(asset: asset)
@@ -298,8 +304,8 @@ enum StreamPlaybackBuilder {
         client: PolicyHTTPClient,
         timeout: TimeInterval? = nil
     ) async -> AVPlayerItem? {
-        guard let videoAsset = try? PolicyMediaAssetFactory.asset(for: videoURL, client: client),
-            let audioAsset = try? PolicyMediaAssetFactory.asset(for: audioURL, client: client)
+        guard let videoAsset = try? await PolicyMediaAssetFactory.asset(for: videoURL, client: client),
+            let audioAsset = try? await PolicyMediaAssetFactory.asset(for: audioURL, client: client)
         else { return nil }
         let timeoutTask = Task {
             guard let timeout else { return }
