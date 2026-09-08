@@ -15,21 +15,15 @@ concurrency:
 jobs:
   validate:
     name: Build and test
-    runs-on: macos-26
+    # Atlas builds against the iOS 27 SDK (StateReporting, MetricKit state
+    # domains); macos-26's default Xcode 26.6 cannot compile it. Xcode 27
+    # ships on its own preview image label.
+    runs-on: xcode-27
     timeout-minutes: 30
 
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Select Xcode 27
-        # Atlas builds against the iOS 27 SDK (StateReporting, MetricKit
-        # state domains); the image's default Xcode 26.6 cannot compile it.
-        run: |
-          xcode="$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
-          test -n "$xcode" || { echo "No Xcode 27 on this image"; exit 1; }
-          sudo xcode-select -s "$xcode"
-          xcodebuild -version
 
       - name: Install XcodeGen
         run: |
