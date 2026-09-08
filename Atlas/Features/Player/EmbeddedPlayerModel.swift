@@ -18,6 +18,7 @@ final class EmbeddedPlayerModel {
         let player = AVPlayer()
         player.allowsExternalPlayback = true
         player.appliesMediaSelectionCriteriaAutomatically = false
+        player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         return player
     }()
     var request: PlayRequest

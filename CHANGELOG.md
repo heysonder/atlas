@@ -104,6 +104,12 @@ Atlas has not published a tagged release yet.
   endpoints with `Comment` / `CommentsPage` models.
 
 ### Changed
+- **No default instance, even as a shortcut.** The missing-instance screen
+  used to offer a one-tap "Use the default" that pointed Atlas at a public
+  third-party instance. That button is gone; the screen now opens Instance
+  settings and links to Piped for Atlas (self-hosting), the Piped
+  self-hosting docs, and Privacy Guides' frontends page so people pick an
+  instance knowingly. `AppModel.defaultInstanceURL` was removed.
 - **Live chat polls every 4s** (2s floor) instead of honoring the server's
   10s hint; the chat pane is taller (420pt) and sits on a solid background so
   text doesn't shimmer over the sheet's glass; `:shortcode:` emoji
@@ -150,8 +156,10 @@ Atlas has not published a tagged release yet.
   now also requires the live duration sentinel.
 - **Background audio from the full-screen player.** Locking the phone while
   the full-screen player was up stopped playback (only PiP kept going). The
-  player is now detached from the view controller on background and
-  reattached on return, so audio continues with the screen off.
+  player now sets `audiovisualBackgroundPlaybackPolicy = .continuesIfPossible`
+  so audio continues with the screen off while AVKit stays attached and keeps
+  publishing lock-screen Now Playing metadata (an earlier detach-on-background
+  approach blanked the lock screen).
 - Channel-tab load failures and live-stream resolution are now logged under
   the `channel` category instead of being swallowed.
 - **Missing channel avatars in For You / search rows.** Piped's related-

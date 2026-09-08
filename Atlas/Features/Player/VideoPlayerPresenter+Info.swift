@@ -174,8 +174,8 @@ extension VideoPlayerPresenter.Coordinator {
 
     /// Slides up a sheet over the still-playing video with the title, full
     /// description, and a subscribe toggle for the uploader. On wide viewports
-    /// (iPad, landscape) it docks as a trailing side panel instead so the
-    /// video stays watchable beside it.
+    /// (iPad, landscape) it becomes a floating glass card docked under the
+    /// Info button instead, so the video stays watchable beside it.
     private func presentInfo() {
         guard let detail = currentDetail, let host = playerVC,
             let client = currentPipedClient,
@@ -185,7 +185,8 @@ extension VideoPlayerPresenter.Coordinator {
         let channelID = detail.channelID
         let name = detail.uploader ?? currentRequest?.uploader
         let avatar = detail.uploaderAvatar
-        let asSidePanel = host.view.bounds.width >= 700
+        let asSideCard =
+            host.view.bounds.width >= 700
             && host.view.bounds.width > host.view.bounds.height
         let sheet = PlayerInfoSheet(
             title: detail.title ?? currentRequest?.title ?? "Video",
@@ -225,7 +226,7 @@ extension VideoPlayerPresenter.Coordinator {
                 self?.seekToCommentTimestamp(seconds)
             },
             onDisappear: { [weak self] in self?.stopInfoCommentTimeTracking() },
-            asSidePanel: asSidePanel)
+            asSideCard: asSideCard)
         let infoVC = UIHostingController(
             rootView:
                 sheet
@@ -234,9 +235,9 @@ extension VideoPlayerPresenter.Coordinator {
                 .modelContext(modelContext))
         // A clear content view is what lets UISheetPresentationController use
         // its Liquid Glass background at the medium detent (and lets the side
-        // panel float over the video).
+        // card float over the video).
         infoVC.view.backgroundColor = .clear
-        if asSidePanel {
+        if asSideCard {
             infoVC.modalPresentationStyle = .overFullScreen
             infoVC.modalTransitionStyle = .crossDissolve
             host.present(infoVC, animated: true)
