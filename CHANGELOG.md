@@ -104,6 +104,14 @@ Atlas has not published a tagged release yet.
   endpoints with `Comment` / `CommentsPage` models.
 
 ### Changed
+- **Live rows say what they mean.** A stream that's live now reads
+  "9.7K watching · Started 2 hours ago" instead of "9.7K views · 1 minute
+  ago" — the list `views` of a live row is YouTube's concurrent-viewer
+  count, and its `uploaded` is either -1 or the instance's own fetch time,
+  so the start comes from `/streams` (one throttled, cached call per live
+  row). Channel pages label the pinned row with a "Live now" header so it
+  no longer floats unexplained above the uploads. `Format.liveMetaLine`,
+  `VideoRow`, `ChannelDetailContent`.
 - **No default instance, even as a shortcut.** The missing-instance screen
   used to offer a one-tap "Use the default" that pointed Atlas at a public
   third-party instance. That button is gone; the screen now opens Instance

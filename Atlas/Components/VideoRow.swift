@@ -26,6 +26,8 @@ struct VideoRow: View {
     @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
     @State private var collaborators: [CreatorChannel] = []
     @State private var resolvedIsLive: Bool?
+    /// Stream start from `/streams` — list rows carry no usable start time.
+    @State private var resolvedStartMillis: Int64?
     /// Avatar looked up by channel id when the item carries none.
     @State private var resolvedAvatar: String?
 
@@ -81,6 +83,7 @@ struct VideoRow: View {
         }
         .task(id: item.videoID) {
             resolvedIsLive = nil
+            resolvedStartMillis = nil
             resolvedAvatar = nil
             await resolveAvatarIfMissing()
             await loadResolvedMetadataIfNeeded()
@@ -113,8 +116,12 @@ struct VideoRow: View {
     }
 
     /// "639 views · 2 days ago", or just "2 days ago" when the video has fewer
-    /// than 500 views (the count is noise at that scale).
+    /// than 500 views (the count is noise at that scale). Live rows instead read
+    /// "8.8K watching · Started 2 hours ago".
     private var metaText: String {
+        if isLive {
+            return Format.liveMetaLine(watching: item.views, startedMillis: resolvedStartMillis)
+        }
         let timeAgo = Format.relativeTime(item.uploaded) ?? item.uploadedDate
         let viewsStr = (item.views ?? -1) >= 500 ? Format.views(item.views) : nil
         return Format.metaLine(viewsStr, timeAgo)
@@ -158,13 +165,17 @@ struct VideoRow: View {
     private func loadResolvedMetadataIfNeeded() async {
         let shouldLoadCollaborators = collaborators.isEmpty && creator.hasMultipleCreators
         let shouldResolveLiveStatus = liveStatusOverride == nil && item.needsLiveStatusResolution
-        guard shouldLoadCollaborators || shouldResolveLiveStatus,
+        let shouldResolveStartTime = isLive && resolvedStartMillis == nil
+        guard shouldLoadCollaborators || shouldResolveLiveStatus || shouldResolveStartTime,
             let videoID = item.videoID
         else { return }
         guard let detail = try? await app.resolveStreamThrottled(videoID) else { return }
 
         if shouldResolveLiveStatus {
             resolvedIsLive = detail.livestream == true
+        }
+        if isLive, let started = detail.uploaded, started > 0 {
+            resolvedStartMillis = started
         }
 
         if shouldLoadCollaborators {

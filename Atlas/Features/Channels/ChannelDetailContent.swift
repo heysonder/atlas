@@ -38,15 +38,18 @@ struct ChannelDetailContent: View {
                     .padding(.horizontal)
 
                 if let liveStream {
-                    VideoRow(
-                        item: liveStream,
-                        avatarFallback: channel.avatarURL,
-                        channelIDFallback: channelID,
-                        watched: liveStream.videoID.map(watchedIDs.contains) ?? false,
-                        liveStatusOverride: true
-                    ) { onPlay(liveStream) }
-                    .videoContextMenu(liveStream)
-                    .onAppear { onAppearItem(liveStream) }
+                    VStack(alignment: .leading, spacing: 10) {
+                        liveNowHeader
+                        VideoRow(
+                            item: liveStream,
+                            avatarFallback: channel.avatarURL,
+                            channelIDFallback: channelID,
+                            watched: liveStream.videoID.map(watchedIDs.contains) ?? false,
+                            liveStatusOverride: true
+                        ) { onPlay(liveStream) }
+                        .videoContextMenu(liveStream)
+                        .onAppear { onAppearItem(liveStream) }
+                    }
                     .padding(.horizontal)
 
                     if !shownItems.isEmpty {
@@ -79,6 +82,20 @@ struct ChannelDetailContent: View {
             .padding(.bottom, 24)
         }
         .refreshable { await onRefresh() }
+    }
+
+    /// Names the pinned row so it reads as "this channel is live now" rather
+    /// than an unexplained video floating above the uploads. Mirrors the
+    /// Shorts shelf header style.
+    private var liveNowHeader: some View {
+        Label {
+            Text("Live now")
+        } icon: {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .foregroundStyle(Color(.systemRed))
+        }
+        .font(.headline)
+        .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
