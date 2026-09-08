@@ -48,6 +48,21 @@ enum Format {
         compact(count).map { "\($0) views" }
     }
 
+    /// Live rows: 8807 -> "8.8K watching". The list `views` of a current
+    /// livestream is YouTube's concurrent-viewer count, not a total.
+    static func watching(_ count: Int?) -> String? {
+        guard let count, count > 0 else { return nil }
+        return compact(count).map { "\($0) watching" }
+    }
+
+    /// Meta line for a row that is live right now: "8.8K watching · Started
+    /// 2 hours ago". Either half is dropped when unknown; list rows never carry
+    /// a trustworthy start time (instances send -1 or their own fetch time),
+    /// so callers pass the `/streams` detail's timestamp or nil.
+    static func liveMetaLine(watching count: Int?, startedMillis: Int64?) -> String {
+        metaLine(watching(count), relativeTime(startedMillis).map { "Started \($0)" })
+    }
+
     /// 8807 -> "8.8K subscribers", 1 -> "1 subscriber".
     static func subscribers(_ count: Int?) -> String? {
         guard let count, count > 0, let n = compact(count) else { return nil }
