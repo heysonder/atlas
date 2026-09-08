@@ -3,9 +3,12 @@ import Foundation
 import os
 
 /// Publishes subscribed channels, downloads, watch history, and playlists to
-/// Spotlight as classic `CSSearchableItem`s with the matching App Entity
-/// associated (Apple's recommended pairing; the pure `IndexedEntity` donation
-/// path fails silently when the semantic store is unavailable). Tapping a result
+/// Spotlight as classic `CSSearchableItem`s, deliberately *without* an
+/// associated App Entity: both `IndexedEntity` and `associateAppEntity` route
+/// through the semantic-store donation, which fails outright where that store
+/// is unavailable. Expect one "LNSpotlightCascadeTranslator Code=1" log line
+/// per item from the system's App Intents mapper — the classic index still
+/// succeeds; only Siri/semantic search misses these rows. Tapping a result
 /// hands `RootView` an `NSUserActivity` whose identifier we parse back into a
 /// typed target via `target(fromItemID:)`.
 @MainActor

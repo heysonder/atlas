@@ -3,7 +3,9 @@ import SwiftUI
 
 /// The player's "Info" sheet: wraps the shared `PlayerInfoContent` in a sheet
 /// chrome (navigation bar + Done). Presented over the still-playing video, so it
-/// never interrupts playback. Opens at the medium detent — drag up for comments.
+/// never interrupts playback. Portrait opens a bottom sheet at the medium detent
+/// (drag up for comments); landscape shows the same view as a Maps-style
+/// floating glass card docked under the Info button (`asSideCard`).
 struct PlayerInfoSheet: View {
     let title: String
     let uploader: String?
@@ -32,39 +34,98 @@ struct PlayerInfoSheet: View {
     var onTimestampTap: (Int) -> Void = { _ in }
     var onDisappear: () -> Void = {}
 
-    /// Wide viewports dock the sheet as a trailing side panel over the
-    /// still-playing video instead of a bottom sheet (see `PlayerInfoSidePanel`).
-    var asSidePanel = false
+    /// Landscape: a floating glass card docked to the trailing edge under the
+    /// Info button, over the still-playing video, instead of a bottom sheet.
+    /// Hand-rolled to match the system look (Maps, Fitness) because neither
+    /// `UISheetPresentationController.preferredPlacement` nor SwiftUI's
+    /// `presentationPlacement` takes effect in compact height on iOS 27.
+    var asSideCard = false
 
     @Environment(\.dismiss) private var dismiss
-    @State private var panelShown = false
+    @State private var cardShown = false
+    @State private var dragOffset: CGFloat = 0
 
-    private static let panelWidth: CGFloat = 420
+    private static let cardWidth: CGFloat = 440
+    private static let cardCornerRadius: CGFloat = 34
 
     var body: some View {
-        if asSidePanel {
-            HStack(spacing: 0) {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { dismiss() }
-                    .accessibilityLabel("Close info")
-                if panelShown {
-                    stack
-                        .frame(width: Self.panelWidth)
-                        .frame(maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .padding(.vertical, 12)
-                        .padding(.trailing, 12)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .onAppear { withAnimation(.snappy(duration: 0.3)) { panelShown = true } }
-            .onDisappear(perform: onDisappear)
+        if asSideCard {
+            sideCard
         } else {
             stack.onDisappear(perform: onDisappear)
         }
     }
+
+    // MARK: Landscape side card
+
+    private var sideCard: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { closeCard() }
+                .accessibilityLabel("Close info")
+            if cardShown {
+                card
+                    // Grows out of the Info button, which sits at the card's
+                    // top-trailing corner.
+                    .transition(.scale(scale: 0.15, anchor: .topTrailing).combined(with: .opacity))
+            }
+        }
+        .onAppear { withAnimation(.snappy(duration: 0.35)) { cardShown = true } }
+        .onDisappear(perform: onDisappear)
+    }
+
+    private var card: some View {
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: Self.cardCornerRadius, bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0, topTrailingRadius: Self.cardCornerRadius,
+            style: .continuous)
+        return VStack(spacing: 0) {
+            Capsule()
+                .fill(.tertiary)
+                .frame(width: 36, height: 5)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Close info")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { closeCard() }
+            stack
+        }
+        .frame(width: Self.cardWidth)
+        .frame(maxHeight: .infinity)
+        .clipShape(shape)
+        .glassEffect(.regular, in: shape)
+        .padding(.top, 8)
+        .padding(.trailing, 8)
+        .offset(y: dragOffset)
+        // The scroll view keeps its own drags; this catches the grabber and
+        // title bar so the card can be pulled down to close like a sheet.
+        .gesture(dragToDismiss)
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var dragToDismiss: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                dragOffset = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                if value.translation.height > 120 || value.predictedEndTranslation.height > 260 {
+                    closeCard()
+                } else {
+                    withAnimation(.snappy(duration: 0.3)) { dragOffset = 0 }
+                }
+            }
+    }
+
+    private func closeCard() {
+        withAnimation(.snappy(duration: 0.25)) { cardShown = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { dismiss() }
+    }
+
+    // MARK: Shared content
 
     private var stack: some View {
         NavigationStack {
@@ -96,7 +157,9 @@ struct PlayerInfoSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        if asSideCard { closeCard() } else { dismiss() }
+                    }
                 }
             }
         }

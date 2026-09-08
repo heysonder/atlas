@@ -27,16 +27,24 @@ struct ErrorState: View {
 }
 
 /// Empty state shown anywhere online features are requested before a Piped
-/// instance has been chosen. Offers the Instance settings screen and a one-tap
-/// default so the user is never stuck.
+/// instance has been chosen. Atlas deliberately ships no default instance:
+/// the view opens Instance settings and links to self-hosting and instance
+/// resources instead of quietly pointing the user at a third-party server.
 struct MissingInstanceView: View {
     @Environment(AppModel.self) private var app
+
+    static let pipedForAtlasURL = URL(string: "https://github.com/heysonder/piped")!
+    static let pipedDocsURL = URL(string: "https://docs.piped.video/docs/self-hosting/")!
+    static let privacyGuidesURL = URL(string: "https://www.privacyguides.org/en/frontends/")!
 
     var body: some View {
         ContentUnavailableView {
             Label("Choose a Piped instance", systemImage: "server.rack")
         } description: {
-            Text("Video, search, and subscriptions load through the instance you pick.")
+            Text(
+                "Video, search, and subscriptions load through the instance you pick. "
+                    + "Atlas does not ship with a default. Self-hosting keeps your traffic on a server you control."
+            )
         } actions: {
             VStack(spacing: 12) {
                 Button("Open settings") {
@@ -46,9 +54,12 @@ struct MissingInstanceView: View {
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
 
-                Button("Use the default") {
-                    app.instanceURLString = AppModel.defaultInstanceURL
+                VStack(spacing: 6) {
+                    Link("Self-host Piped for Atlas", destination: Self.pipedForAtlasURL)
+                    Link("Piped self-hosting docs", destination: Self.pipedDocsURL)
+                    Link("Privacy Guides: choosing a frontend", destination: Self.privacyGuidesURL)
                 }
+                .font(.footnote)
             }
         }
     }
