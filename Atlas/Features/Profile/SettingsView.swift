@@ -63,13 +63,15 @@ struct SettingsView: View {
         return base + " Direct YouTube collaborator lookup is off."
     }
 
-    /// On/Off at rest; the live status while a round or deletion runs, or when
-    /// something needs attention, so leaving the sync page loses nothing.
+    /// On/Off at rest; the live status while a round or deletion runs, when
+    /// something needs attention, or after a deletion completes, so leaving the
+    /// sync page loses nothing.
     private var syncRowDetail: String {
         switch sync.tone {
         case .working, .attention: sync.statusText
-        case .healthy: sync.isEnabled ? "On" : "Off"
-        case .off: "Off"
+        case .healthy where sync.isEnabled: "On"
+        case .healthy where sync.showsDetail: sync.statusText
+        case .healthy, .off: "Off"
         }
     }
 
