@@ -80,7 +80,10 @@ struct ICloudSyncSettingsView: View {
                 .disabled(sync.isWorking || !sync.isAvailable || !sync.hasLinkedLibrary)
                 .syncConfirmation(.deleteCloudContent, current: $confirmation) {
                     // Deleting drops the device back to the off state, so leave the
-                    // page; the Settings row reports progress and the result.
+                    // page; the Settings row reports progress and the result. A
+                    // round that started while the dialog was open would make the
+                    // coordinator decline the request, so only leave when it will run.
+                    guard !sync.isWorking else { return }
                     dismiss()
                     await sync.deleteCloudContent()
                 }
