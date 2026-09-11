@@ -9,6 +9,32 @@ Atlas has not published a tagged release yet.
 ## Unreleased
 
 ### Added
+- **Opt-in iCloud sync.** Library → Settings → iCloud Sync merges this
+  device's subscriptions, watch and search history, playback progress,
+  playlists and Favorites, Suggest More/Less feedback, For You activity, and
+  portable display/playback preferences with the same Apple Account's other
+  devices through the user's private CloudKit database. Off by default; the
+  consent sheet lists exactly what syncs, what stays on the device
+  (downloads, the Piped instance, permissions, diagnostics, the queue), and
+  the encryption notice: every custom field is a CloudKit encrypted field,
+  and end-to-end encryption depends on Advanced Data Protection being on for
+  the account. Local reads, edits, and playback keep working offline; Sync
+  Now, Turn Off, Reset For You Personalization, and Delete Synced Content
+  from iCloud are separate actions. `CKSyncEngine` transport, an
+  encrypted-only record codec with HMAC-opaque record names, an
+  observed-remove causal register with per-kind merge rules, a durable
+  per-entity journal committed in the same save as every library mutation,
+  category clear barriers, playlist incarnations, session-versioned playback
+  history, and shared retention for For You activity. `Atlas/Support/Sync/`,
+  `Atlas/Models/Sync/`, `Docs/ICLOUD_SYNC_PLAN.md`, `Docs/ICLOUD_SYNC_SETUP.md`,
+  with the engine-delegate, merge, migration, and consent UI tests.
+- **Versioned SwiftData schema.** The store now opens through
+  `AtlasSchemaV1` → `AtlasSchemaV2` (`AtlasSchemaMigration.swift`) and one
+  `AtlasContainerFactory` whose configurations set `cloudKitDatabase: .none`
+  so the new iCloud entitlements can never turn on automatic mirroring.
+  Backups gain a v3 format that carries playlist UUIDs and the Favorites
+  system kind; v1/v2 still import, and same-name playlists merge instead of
+  being skipped.
 - **Chat button in the player.** A Liquid Glass "Chat" button sits beside
   Info (only when the video is live, or a chat replay was found by a
   one-page probe). Portrait opens a glass sheet with just the chat — first
@@ -104,6 +130,16 @@ Atlas has not published a tagged release yet.
   endpoints with `Comment` / `CommentsPage` models.
 
 ### Changed
+- **Search history keeps every query.** The fifteen-most-recent limit is now
+  a presentation limit; retained searches (up to 5,000, then the least
+  recent is evicted) keep informing For You and sync. Clear Search History
+  clears all of them.
+- **Playback progress is batched for upload.** Position is still written
+  locally every few seconds, but iCloud uploads are coalesced to one per
+  30 seconds plus pause, stop, end of playback, and backgrounding.
+- **Live-stream durations.** Piped reports `-1` for live streams; playlist
+  saves, exports, and sync captures now store that as "unknown" instead of
+  refusing the row.
 - **Live rows say what they mean.** A stream that's live now reads
   "9.7K watching · Started 2 hours ago" instead of "9.7K views · 1 minute
   ago" — the list `views` of a live row is YouTube's concurrent-viewer
@@ -159,6 +195,22 @@ Atlas has not published a tagged release yet.
   opens at the medium detent and reveals comments as you drag it up.
 
 ### Fixed
+- **Older libraries no longer open in recovery mode.** A store written by a
+  build whose models predate the frozen `AtlasSchemaV1` has a version the
+  staged migration plan doesn't know, and SwiftData refused it, so the app
+  launched on temporary storage with the library hidden (seen on an iPad
+  TestFlight install). The container factory now retries with an inferred
+  lightweight migration before falling back, and the recovery message
+  carries the error. The iCloud Sync page hides Enable in that state and no
+  longer suggests exporting a backup and reinstalling, which would have
+  exported the empty temporary store and deleted the real one.
+- **Export failed on a playlist containing a live stream.** The backup
+  validator rejected the stored `-1` duration and refused the whole export.
+- **Saving a live stream to Favorites or a playlist silently failed** for the
+  same reason.
+- **Playback position wasn't saved for live or still-loading items** because
+  the indefinite duration failed validation; the position is now kept and
+  only the duration is dropped.
 - **Ended broadcasts no longer show a LIVE badge.** Piped keeps
   `livestream: true` on past streams in search and channel rows; `isLive`
   now also requires the live duration sentinel.
