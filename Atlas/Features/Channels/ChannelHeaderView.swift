@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChannelHeaderView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var bannerWidth: CGFloat = 0
 
     let channel: Channel
     let isSubscribed: Bool
@@ -12,20 +13,37 @@ struct ChannelHeaderView: View {
     var body: some View {
         VStack(spacing: 12) {
             if let banner = channel.bannerURL {
-                Color.clear
+                // `Thumbnail` fills and crops to whatever frame it's given. Don't
+                // add `.scaledToFill()` here: its ideal size is a 10×10 square,
+                // so that laid the ~6:1 banner out as a 390×390 square and
+                // clipped the middle band (stretched letters / a giant "B").
+                Thumbnail(url: banner, networkScope: .selectedInstance)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 120)
-                    .overlay {
-                        Thumbnail(url: banner, networkScope: .selectedInstance)
-                            .scaledToFill()
+                    .frame(height: Self.bannerHeight(forWidth: bannerWidth))
+                    .onGeometryChange(for: CGFloat.self) {
+                        $0.size.width
+                    } action: {
+                        bannerWidth = $0
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .imageEdge(RoundedRectangle(cornerRadius: 14, style: .continuous), url: banner)
                     .padding(.horizontal)
             }
 
             headerRow
                 .padding(.horizontal)
         }
+    }
+
+    /// YouTube banners are ~6.05:1 with the creator's content guaranteed inside
+    /// a centre 3.65:1 "mobile safe area". Narrow layouts crop to that safe
+    /// band; as the width grows (iPad, a resized window, an unfolded phone) the
+    /// crop opens up toward the full banner, capped so it never becomes a wall.
+    static func bannerHeight(forWidth width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 107 }
+        let fullBanner = width / 6.05
+        let safeBand = width / 3.65
+        return min(200, max(fullBanner, min(safeBand, 120)))
     }
 
     @ViewBuilder

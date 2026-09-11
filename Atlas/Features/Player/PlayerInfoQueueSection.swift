@@ -121,6 +121,7 @@ struct PlayerInfoQueueSection: View {
             .frame(width: 84, height: 47)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .imageEdge(RoundedRectangle(cornerRadius: 8, style: .continuous), url: queued.request.thumbnail)
 
             Text("\(position + 1)")
                 .font(.caption2.weight(.bold))

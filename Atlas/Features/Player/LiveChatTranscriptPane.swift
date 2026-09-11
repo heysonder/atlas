@@ -8,7 +8,8 @@ import SwiftUI
 /// Pinning is decided only when a user scroll gesture ends — never from
 /// passive geometry, because appended messages grow the content before the
 /// scroll catches up, which would read as "scrolled away" and cancel the
-/// very scroll that keeps the pane pinned.
+/// very scroll that keeps the pane pinned — and never on touch-down, which
+/// would flash the pill at a reader who is merely scrolling toward the end.
 struct LiveChatTranscriptPane: View {
     let messages: [LiveChatMessageDisplay]
     var accessibilityLabel = "Chat messages"
@@ -18,6 +19,9 @@ struct LiveChatTranscriptPane: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
+    /// A finger is on the transcript: hold off auto-scroll and the "Latest"
+    /// pill until the gesture ends and we know where it left the scroll.
+    @State private var isInteracting = false
     @State private var position = ScrollPosition(edge: .bottom)
 
     private static let paneHeight: CGFloat = 420
@@ -37,21 +41,30 @@ struct LiveChatTranscriptPane: View {
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom)
         .onScrollPhaseChange { _, phase, context in
+            // Pinning is decided when the gesture ends, not when it starts:
+            // unpinning on touch-down flashed the "Latest" pill while the
+            // reader was scrolling *down* toward the newest message.
             switch phase {
             case .interacting:
-                isPinnedToBottom = false
+                isInteracting = true
             case .idle:
+                isInteracting = false
                 isPinnedToBottom = Self.isNearBottom(context.geometry)
             default:
                 break
             }
         }
         .onChange(of: messages.last?.id) { _, _ in
-            guard isPinnedToBottom else { return }
+            guard isPinnedToBottom, !isInteracting else { return }
+            scrollToBottom()
+        }
+        .onChange(of: isInteracting) { _, interacting in
+            // Messages that arrived mid-drag: catch up once the finger lifts.
+            guard !interacting, isPinnedToBottom else { return }
             scrollToBottom()
         }
         .overlay(alignment: .bottomTrailing) {
-            if !isPinnedToBottom {
+            if !isPinnedToBottom, !isInteracting {
                 jumpToLatestButton
             }
         }

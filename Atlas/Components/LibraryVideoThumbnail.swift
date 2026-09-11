@@ -11,20 +11,31 @@ struct LibraryVideoThumbnail: View {
     }
 
     var body: some View {
+        // A fixed corner (not concentric with the surrounding card) because the
+        // duration chip nests into it, and only a rounded rectangle can be a
+        // container shape.
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         ZStack(alignment: .bottomTrailing) {
             Thumbnail(url: url, networkScope: networkScope)
                 .aspectRatio(16 / 9, contentMode: .fill)
                 .frame(width: 120, height: 68)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(shape)
+                .imageEdge(shape, url: url)
             if !durationText.isEmpty {
-                Text(durationText)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.75), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(5)
+                // A pill on three corners; the bottom-trailing one nests
+                // concentrically into the thumbnail's corner instead.
+                ThumbnailChip(
+                    shape: ConcentricRectangle(
+                        topLeadingCorner: .fixed(12), topTrailingCorner: .fixed(12),
+                        bottomLeadingCorner: .fixed(12),
+                        bottomTrailingCorner: .concentric(minimum: .fixed(3))),
+                    compact: true
+                ) {
+                    Text(durationText)
+                }
+                .padding(4)
             }
         }
+        .containerShape(shape)
     }
 }

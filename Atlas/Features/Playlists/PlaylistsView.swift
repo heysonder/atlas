@@ -3,7 +3,6 @@ import SwiftUI
 
 struct PlaylistsView: View {
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \Playlist.createdAt, order: .reverse) private var playlists: [Playlist]
 
     @State private var creating = false
@@ -22,34 +21,36 @@ struct PlaylistsView: View {
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
                 }
-            } else if horizontalSizeClass == .regular {
-                AdaptiveGrid(minCardWidth: 300) {
-                    ForEach(playlists) { playlist in
-                        NavigationLink {
-                            PlaylistDetailView(playlist: playlist)
-                        } label: {
-                            PlaylistRow(playlist: playlist).libraryCard()
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                PlaylistStore.delete(playlist, in: modelContext)
+            } else {
+                LibraryLayout(minCardWidth: 300) {
+                    AdaptiveGrid(minCardWidth: 300) {
+                        ForEach(playlists) { playlist in
+                            NavigationLink {
+                                PlaylistDetailView(playlist: playlist)
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                PlaylistRow(playlist: playlist).libraryCard()
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    PlaylistStore.delete(playlist, in: modelContext)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                List {
-                    ForEach(playlists) { playlist in
-                        NavigationLink {
-                            PlaylistDetailView(playlist: playlist)
-                        } label: {
-                            PlaylistRow(playlist: playlist)
+                } list: {
+                    List {
+                        ForEach(playlists) { playlist in
+                            NavigationLink {
+                                PlaylistDetailView(playlist: playlist)
+                            } label: {
+                                PlaylistRow(playlist: playlist)
+                            }
                         }
+                        .onDelete(perform: delete)
                     }
-                    .onDelete(perform: delete)
                 }
             }
         }
@@ -128,23 +129,13 @@ private struct PlaylistRow: View {
     }
 }
 
-/// Small stacked-thumbnail preview of a playlist's first video.
+/// The playlist's first video, in the same 120×68 thumbnail History and the
+/// playlist detail rows use so the three lists read as one.
 private struct PlaylistThumbnail: View {
     let playlist: Playlist
     var body: some View {
-        let first = playlist.orderedVideos.first
-        Thumbnail(url: first?.thumbnailURL, networkScope: .selectedInstance)
-            .aspectRatio(16 / 9, contentMode: .fill)
-            .frame(width: 84, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(alignment: .bottomTrailing) {
-                Image(systemName: "music.note.list")
-                    .font(.caption2)
-                    .padding(3)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
-                    .foregroundStyle(.white)
-                    .padding(3)
-            }
-            .accessibilityHidden(true)
+        LibraryVideoThumbnail(
+            url: playlist.orderedVideos.first?.thumbnailURL,
+            networkScope: .selectedInstance)
     }
 }

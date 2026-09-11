@@ -27,6 +27,24 @@ final class PlayerPlaybackTime {
     var seconds: Double?
 }
 
+/// Geometry shared by every control layered over the video, so the top-right
+/// Info/Chat cluster and the bottom-right Skip pill sit on one trailing line
+/// with one height and one padding.
+enum PlayerOverlayLayout {
+    static let buttonHeight: CGFloat = 44
+    static let horizontalPadding: CGFloat = 14
+    static let verticalPadding: CGFloat = 9
+    static let spacing: CGFloat = 8
+    /// From the safe area's top edge and from the physical trailing edge —
+    /// iPhones report the same ~59pt landscape inset on both sides, so
+    /// honoring it here left the buttons floating far from the corner.
+    static let edgeInset: CGFloat = 12
+    /// Skip's distance from the safe area's bottom edge — clears the scrubber.
+    static let skipBottomInset: CGFloat = 56
+    /// Stable width the Skip host reserves so the pill can animate in place.
+    static let skipReservedWidth: CGFloat = 240
+}
+
 /// The small Liquid Glass "Info" button layered over the video.
 struct InfoOverlayButton: View {
     let model: InfoButtonModel
@@ -48,9 +66,9 @@ struct InfoOverlayButton: View {
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, model.isPaused ? 14 : 10)
-            .padding(.vertical, 9)
-            .frame(minWidth: 44, minHeight: 44)
+            .padding(.horizontal, model.isPaused ? PlayerOverlayLayout.horizontalPadding : 10)
+            .padding(.vertical, PlayerOverlayLayout.verticalPadding)
+            .frame(minWidth: PlayerOverlayLayout.buttonHeight, minHeight: PlayerOverlayLayout.buttonHeight)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -68,7 +86,7 @@ struct PlayerOverlayButtons: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: PlayerOverlayLayout.spacing) {
             if chat.isVisible {
                 ChatOverlayButton(model: chat)
                     .transition(.blurReplace)
@@ -79,7 +97,8 @@ struct PlayerOverlayButtons: View {
         // when the labels appear on pause; the buttons themselves stay snug.
         .frame(
             minWidth: chat.isVisible
-                ? InfoOverlayButton.expandedFootprintWidth * 2 + 8 : InfoOverlayButton.expandedFootprintWidth,
+                ? InfoOverlayButton.expandedFootprintWidth * 2 + PlayerOverlayLayout.spacing
+                : InfoOverlayButton.expandedFootprintWidth,
             alignment: .trailing
         )
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: chat.isVisible)
@@ -106,9 +125,9 @@ struct ChatOverlayButton: View {
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, model.isPaused ? 14 : 10)
-            .padding(.vertical, 9)
-            .frame(minWidth: 44, minHeight: 44)
+            .padding(.horizontal, model.isPaused ? PlayerOverlayLayout.horizontalPadding : 10)
+            .padding(.vertical, PlayerOverlayLayout.verticalPadding)
+            .frame(minWidth: PlayerOverlayLayout.buttonHeight, minHeight: PlayerOverlayLayout.buttonHeight)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

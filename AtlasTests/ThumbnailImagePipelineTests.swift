@@ -40,6 +40,21 @@ import UIKit
 }
 
 @MainActor
+@Test func thumbnailPipelineReportsMemoryCacheHits() async {
+    let pipeline = ThumbnailImagePipeline(maxConcurrentWork: 1) { _, _, _ in UIImage() }
+    let fetched = await pipeline.load(
+        original: "https://example.com/hit.jpg", upgraded: nil,
+        displaySize: CGSize(width: 100, height: 100), scale: 2,
+        client: nil, namespace: "test")
+    let cached = await pipeline.load(
+        original: "https://example.com/hit.jpg", upgraded: nil,
+        displaySize: CGSize(width: 100, height: 100), scale: 2,
+        client: nil, namespace: "test")
+    #expect(fetched?.fromMemoryCache == false)
+    #expect(cached?.fromMemoryCache == true)
+}
+
+@MainActor
 @Test func thumbnailPipelineCancellationReleasesItsWaiter() async {
     let pipeline = ThumbnailImagePipeline(maxConcurrentWork: 1) { _, _, _ in
         try? await Task.sleep(for: .seconds(30))

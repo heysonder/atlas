@@ -4,8 +4,6 @@ import SwiftUI
 struct PlaylistDetailView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-
     @Bindable var playlist: Playlist
 
     var body: some View {
@@ -16,42 +14,44 @@ struct PlaylistDetailView: View {
                     systemImage: "music.note.list",
                     description: Text(
                         "Long-press a video anywhere and choose Add to Playlist."))
-            } else if horizontalSizeClass == .regular {
-                AdaptiveGrid {
-                    ForEach(playlist.orderedVideos) { video in
-                        Button {
-                            app.playPlaylistVideo(video)
-                        } label: {
-                            PlaylistVideoRow(video: video).libraryCard()
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: playRequest(for: video))
-                            Button(role: .destructive) {
-                                PlaylistStore.removeVideoID(
-                                    video.videoID,
-                                    from: playlist,
-                                    in: modelContext)
+            } else {
+                LibraryLayout {
+                    AdaptiveGrid {
+                        ForEach(playlist.orderedVideos) { video in
+                            Button {
+                                app.playPlaylistVideo(video)
                             } label: {
-                                Label("Remove", systemImage: "trash")
+                                PlaylistVideoRow(video: video).libraryCard()
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                QueueMenuItems(request: playRequest(for: video))
+                                Button(role: .destructive) {
+                                    PlaylistStore.removeVideoID(
+                                        video.videoID,
+                                        from: playlist,
+                                        in: modelContext)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                List {
-                    ForEach(playlist.orderedVideos) { video in
-                        Button {
-                            app.playPlaylistVideo(video)
-                        } label: {
-                            PlaylistVideoRow(video: video)
+                } list: {
+                    List {
+                        ForEach(playlist.orderedVideos) { video in
+                            Button {
+                                app.playPlaylistVideo(video)
+                            } label: {
+                                PlaylistVideoRow(video: video)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                QueueMenuItems(request: playRequest(for: video))
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: playRequest(for: video))
-                        }
+                        .onDelete(perform: removeVideos)
                     }
-                    .onDelete(perform: removeVideos)
                 }
             }
         }

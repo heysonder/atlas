@@ -5,9 +5,17 @@ import SwiftUI
 struct HistoryView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \HistoryEntry.watchedAt, order: .reverse) private var history: [HistoryEntry]
     @State private var confirmingClear = false
+
+    /// Partly watched videos worth picking back up: past the first few
+    /// seconds, not yet at the "watched" threshold, newest first.
+    private var continueWatching: [HistoryEntry] {
+        Array(
+            history
+                .filter { $0.durationSeconds > 0 && $0.positionSeconds >= 15 && !$0.isWatched }
+                .prefix(12))
+    }
 
     var body: some View {
         Group {
@@ -16,39 +24,53 @@ struct HistoryView: View {
                     "No history",
                     systemImage: "clock.arrow.circlepath",
                     description: Text("Videos you watch show up here."))
-            } else if horizontalSizeClass == .regular {
-                AdaptiveGrid {
-                    ForEach(history) { entry in
-                        Button {
-                            app.nowPlaying = entry.asPlayRequest
-                        } label: {
-                            HistoryRow(entry: entry).libraryCard()
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: entry.asPlayRequest)
-                            Button(role: .destructive) {
-                                PlaybackHistoryStore.remove([entry], in: modelContext)
+            } else {
+                LibraryLayout {
+                    AdaptiveGrid {
+                        shelf
+                    } content: {
+                        ForEach(history) { entry in
+                            Button {
+                                app.nowPlaying = entry.asPlayRequest
                             } label: {
-                                Label("Remove", systemImage: "trash")
+                                HistoryRow(entry: entry).libraryCard()
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                QueueMenuItems(request: entry.asPlayRequest)
+                                Button(role: .destructive) {
+                                    PlaybackHistoryStore.remove([entry], in: modelContext)
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                List {
-                    ForEach(history) { entry in
-                        Button {
-                            app.nowPlaying = entry.asPlayRequest
-                        } label: {
-                            HistoryRow(entry: entry)
+                } list: {
+                    List {
+                        if !continueWatching.isEmpty {
+                            Section {
+                                shelf
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            QueueMenuItems(request: entry.asPlayRequest)
+                        Section {
+                            ForEach(history) { entry in
+                                Button {
+                                    app.nowPlaying = entry.asPlayRequest
+                                } label: {
+                                    HistoryRow(entry: entry)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    QueueMenuItems(request: entry.asPlayRequest)
+                                }
+                            }
+                            .onDelete(perform: delete)
                         }
                     }
-                    .onDelete(perform: delete)
                 }
             }
         }
@@ -73,6 +95,14 @@ struct HistoryView: View {
         }
     }
 
+    @ViewBuilder private var shelf: some View {
+        if !continueWatching.isEmpty {
+            ContinueWatchingShelf(entries: continueWatching) { entry in
+                app.nowPlaying = entry.asPlayRequest
+            }
+        }
+    }
+
     private func delete(_ offsets: IndexSet) {
         PlaybackHistoryStore.remove(offsets.map { history[$0] }, in: modelContext)
     }
@@ -94,6 +124,7 @@ private struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 10) {
                 LibraryVideoThumbnail(
                     url: entry.thumbnailURL,
+                    durationSeconds: entry.durationSeconds > 0 ? Int(entry.durationSeconds) : nil,
                     networkScope: .selectedInstance)
                 details
             }
@@ -101,6 +132,7 @@ private struct HistoryRow: View {
             HStack(spacing: 12) {
                 LibraryVideoThumbnail(
                     url: entry.thumbnailURL,
+                    durationSeconds: entry.durationSeconds > 0 ? Int(entry.durationSeconds) : nil,
                     networkScope: .selectedInstance)
                 details
                 Spacer(minLength: 0)

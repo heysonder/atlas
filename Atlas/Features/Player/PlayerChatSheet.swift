@@ -79,15 +79,14 @@ struct PlayerChatContent: View {
     }
 }
 
-/// Portrait: the same chrome as the Info sheet (inline title, Done). The
-/// transcript's scroll view spans the full sheet width — like Info's — so the
-/// navigation bar's scroll-edge glass matches the sheet instead of drawing an
-/// inset box; the horizontal inset lives inside the scroll content.
-struct PlayerChatSheet: View {
+/// The chat page chrome shared by the portrait sheet and the landscape side
+/// card: inline title + Done. The transcript's scroll view spans the full
+/// width — like Info's — so the navigation bar's scroll-edge glass matches the
+/// container instead of drawing an inset box; the horizontal inset lives
+/// inside the scroll content.
+struct PlayerChatPage: View {
     let content: PlayerChatContent
-    var onDisappear: () -> Void = {}
-    @Environment(\.dismiss) private var dismiss
-
+    let onDone: () -> Void
     private var title: String { content.liveLoader != nil ? "Live Chat" : "Chat Replay" }
 
     var body: some View {
@@ -98,54 +97,39 @@ struct PlayerChatSheet: View {
                 .containerBackground(.clear, for: .navigation)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button("Done", action: onDone)
                     }
                 }
         }
-        .onDisappear(perform: onDisappear)
     }
 }
 
-/// Landscape: a Liquid Glass panel docked to the trailing edge over the
-/// still-playing video. Tapping the video area dismisses it.
-struct PlayerChatSidePanel: View {
+/// Portrait: a bottom sheet over the video.
+struct PlayerChatSheet: View {
     let content: PlayerChatContent
     var onDisappear: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
-    private static let panelWidth: CGFloat = 360
+    var body: some View {
+        PlayerChatPage(content: content, onDone: { dismiss() })
+            .onDisappear(perform: onDisappear)
+    }
+}
+
+/// Landscape: the same page in a side card docked to the trailing edge over
+/// the still-playing video. Tapping the video area dismisses it.
+struct PlayerChatSidePanel: View {
+    let content: PlayerChatContent
+    var bottomSafeInset: CGFloat = 0
+    var onWillDismiss: () -> Void = {}
+    var onDisappear: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { dismiss() }
-                .accessibilityLabel("Close chat")
-            VStack(spacing: 8) {
-                HStack {
-                    Text(content.liveLoader != nil ? "Live Chat" : "Chat Replay")
-                        .font(.headline)
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close chat")
-                }
-                .padding(.horizontal, 4)
-                content
-            }
-            .padding(12)
-            .frame(width: Self.panelWidth)
-            .frame(maxHeight: .infinity)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .padding(.vertical, 12)
-            .padding(.trailing, 12)
+        PlayerSideCard(
+            width: 360, closeLabel: "Close chat", bottomSafeInset: bottomSafeInset,
+            onWillClose: onWillDismiss, onDisappear: onDisappear
+        ) { close in
+            PlayerChatPage(content: content, onDone: close)
         }
-        .onDisappear(perform: onDisappear)
     }
 }

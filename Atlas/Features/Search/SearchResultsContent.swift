@@ -5,7 +5,6 @@ struct SearchResultsContent: View {
     let results: SearchResults
     let videos: [StreamItem]
     let query: String
-    let horizontalSizeClass: UserInterfaceSizeClass?
     let isLoadingMore: Bool
     let canLoadMore: Bool
     let loadMoreError: String?
@@ -27,9 +26,7 @@ struct SearchResultsContent: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ChannelSearchResults(
-                        channels: results.channels,
-                        horizontalSizeClass: horizontalSizeClass)
+                    ChannelSearchResults(channels: results.channels)
                     if !results.channels.isEmpty {
                         Color.clear.frame(height: 12)
                     }
@@ -78,22 +75,25 @@ struct SearchResultsContent: View {
 
 private struct ChannelSearchResults: View {
     let channels: [StreamItem]
-    let horizontalSizeClass: UserInterfaceSizeClass?
 
     private var topChannels: [StreamItem] {
         Array(channels.prefix(3))
     }
 
     var body: some View {
-        if horizontalSizeClass == .regular {
+        // Cards once two fit side by side, plain rows otherwise (the parent
+        // already pads horizontally, so no outer padding in the threshold).
+        ViewThatFits(in: .horizontal) {
             LazyVGrid(
                 columns: LibraryGrid.columns(minCardWidth: 320),
                 spacing: LibraryGrid.spacing
             ) {
                 channelLinks(useCards: true)
             }
-        } else {
-            channelLinks(useCards: false)
+            .frame(minWidth: LibraryGrid.minimumGridWidth(minCardWidth: 320, outerPadding: 0))
+            VStack(spacing: 0) {
+                channelLinks(useCards: false)
+            }
         }
     }
 

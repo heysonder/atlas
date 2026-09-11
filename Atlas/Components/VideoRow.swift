@@ -15,10 +15,6 @@ struct VideoRow: View {
     var channelIDFallback: String? = nil
     /// Marks the thumbnail as already watched (dimmed, with a "Watched" badge).
     var watched: Bool = false
-    /// Reserves space for a full two-line title even when the title is one line,
-    /// so cards keep a uniform height when tiled in a grid — otherwise short
-    /// titles leave ragged gaps and the columns drift into a masonry look.
-    var reservesTitleSpace: Bool = false
     /// Lets a parent that already verified a current livestream avoid repeating
     /// the metadata request and present the live state immediately.
     var liveStatusOverride: Bool? = nil
@@ -53,9 +49,11 @@ struct VideoRow: View {
                         .overlay {
                             Thumbnail(url: item.thumbnail, networkScope: .selectedInstance)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .imageEdge(RoundedRectangle(cornerRadius: 14, style: .continuous), url: item.thumbnail)
                                 .opacity(watched ? 0.55 : 1)
                                 .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
-                                .overlay(alignment: .topLeading) {
+                                // Bottom-leading, opposite the duration pill.
+                                .overlay(alignment: .bottomLeading) {
                                     if watched { WatchedBadge().padding(8) }
                                 }
                         }
@@ -94,7 +92,7 @@ struct VideoRow: View {
         Button(action: onPlay) {
             Text(item.displayTitle)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(2, reservesSpace: reservesTitleSpace)
+                .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
