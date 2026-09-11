@@ -804,6 +804,12 @@ final class CloudSyncCoordinator {
             case .zoneNotFound, .unknownItem, .userDeletedZone:
                 statusText = "Needs Attention"
                 detailText = CloudSyncError.cloudReset.localizedDescription
+            case .invalidArguments, .missingEntitlement, .badContainer:
+                // Production CloudKit never creates record types on demand, so a
+                // TestFlight or App Store build hits this until the schema is deployed.
+                statusText = "Needs Attention"
+                detailText =
+                    "iCloud rejected Atlas’s records (error \(cloudError.errorCode)). On a TestFlight or App Store build this usually means the CloudKit schema has not been deployed to Production yet. Your local data and pending changes are preserved."
             default:
                 statusText = "Needs Attention"
                 // Do not expose CloudKit error descriptions: these can contain IDs.
