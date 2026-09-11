@@ -2,8 +2,14 @@ import SwiftUI
 
 /// Consent lives here rather than in an appearance task: opening Settings never
 /// enrolls the device or starts an account lookup.
+///
+/// Two layouts share this screen. With sync off it reads like onboarding:
+/// coverage grid, what stays local, and the encryption notice sit above the
+/// enable button. Once sync is on, the page collapses to a status card and the
+/// actions; coverage moves behind a "What Syncs" row.
 struct ICloudSyncSettingsView: View {
     @Environment(CloudSyncCoordinator.self) private var sync
+    @Environment(\.dismiss) private var dismiss
     @State private var presentedSheet: SyncSheet?
     @State private var confirmation: SyncConfirmation?
 
@@ -11,7 +17,7 @@ struct ICloudSyncSettingsView: View {
         Form {
             Section {
                 SyncStatusHeader(sync: sync)
-                if let detail = sync.detailText {
+                if let detail = sync.detailText, sync.showsDetail {
                     Text(detail)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -20,68 +26,68 @@ struct ICloudSyncSettingsView: View {
                     LabeledContent("Items Not Applied", value: sync.quarantinedCount.formatted())
                         .accessibilityIdentifier("icloud.sync.quarantined")
                 }
-                if sync.isEnabled {
-                    if let lastSync = sync.lastSync {
-                        LabeledContent("Last Synced") {
-                            Text(lastSync, format: .relative(presentation: .named))
-                        }
-                    }
-                    LabeledContent("Pending Changes", value: sync.pendingCount.formatted())
-                    Button("Sync Now", systemImage: "arrow.trianglehead.2.clockwise") {
-                        Task { await sync.syncNow() }
-                    }
-                    .disabled(sync.isWorking || !sync.isAvailable)
-                } else if sync.isAvailable {
-                    Button {
+            } footer: {
+                if let footerText {
+                    Text(footerText)
+                }
+            }
+
+            if !sync.isEnabled, sync.isAvailable {
+                Section {
+                    Button("Enable iCloud Sync", systemImage: "icloud.and.arrow.up") {
                         presentedSheet = .enable
-                    } label: {
-                        Label("Enable iCloud Sync…", systemImage: "icloud.and.arrow.up")
-                            .font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .disabled(sync.isWorking)
                 }
-            } footer: {
-                Text(footerText)
             }
 
-            Section("What Syncs") {
-                SyncCategoryGrid()
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-            }
+            if sync.isEnabled {
+                Section {
+                    NavigationLink {
+                        SyncCoverageView()
+                    } label: {
+                        SyncCoverageRow()
+                    }
+                    SyncEncryptionRow()
+                }
+            } else {
+                Section("What Syncs") {
+                    SyncCategoryGrid()
+                        .listRowInsets(SyncCategoryGrid.rowInsets)
+                    SyncDeviceOnlyRow()
+                }
 
-            Section {
-                SyncDeviceOnlyRow()
-            } footer: {
-                Text("Recommendations are still generated on this device.")
-            }
-
-            Section {
-                SyncEncryptionCard()
-            } header: {
-                Text("Encryption")
-            } footer: {
-                Text(
-                    "Check Advanced Data Protection in Settings → your name → iCloud. Atlas does not verify whether it is enabled; availability depends on your account and region."
-                )
+                Section("Encryption") {
+                    SyncEncryptionNotice()
+                }
             }
 
             Section {
                 if sync.isEnabled {
                     Button("Turn Off Sync on This Device…") { confirmation = .disable }
+                        .syncConfirmation(.disable, current: $confirmation) { await sync.disable() }
                 }
                 Button("Reset For You Personalization…", role: .destructive) {
                     confirmation = .resetPersonalization
                 }
                 .disabled(sync.isWorking || !sync.isAvailable)
+                .syncConfirmation(.resetPersonalization, current: $confirmation) {
+                    await sync.resetPersonalization()
+                }
                 Button("Delete Synced Content from iCloud…", role: .destructive) {
                     confirmation = .deleteCloudContent
                 }
                 .disabled(sync.isWorking || !sync.isAvailable || !sync.hasLinkedLibrary)
+                .syncConfirmation(.deleteCloudContent, current: $confirmation) {
+                    // Deleting drops the device back to the off state, so leave the
+                    // page; the Settings row reports progress and the result.
+                    dismiss()
+                    await sync.deleteCloudContent()
+                }
             } footer: {
-                Text(
-                    "Turning off sync keeps both your local and iCloud copies. It does not change your device’s iCloud Backup setting."
-                )
+                if sync.isEnabled {
+                    Text("Turning off sync keeps your local and iCloud copies.")
+                }
             }
         }
         .navigationTitle("iCloud Sync")
@@ -89,46 +95,51 @@ struct ICloudSyncSettingsView: View {
         .sheet(item: $presentedSheet) { _ in
             ICloudSyncConsentView()
         }
-        .confirmationDialog(
-            confirmation?.title ?? "iCloud Sync",
-            isPresented: Binding(
-                get: { confirmation != nil },
-                set: { if !$0 { confirmation = nil } }),
-            titleVisibility: .visible,
-            presenting: confirmation
-        ) { action in
-            Button(action.buttonTitle, role: action.isDestructive ? .destructive : nil) {
-                confirmation = nil
-                Task {
-                    switch action {
-                    case .disable: await sync.disable()
-                    case .deleteCloudContent: await sync.deleteCloudContent()
-                    case .resetPersonalization: await sync.resetPersonalization()
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) { confirmation = nil }
-        } message: { action in
-            Text(action.message)
-        }
     }
 
-    private var footerText: String {
+    private var footerText: String? {
         if !sync.isAvailable {
             return
                 "Sync cannot be enabled while Atlas is running on temporary storage. Your saved library is still on this device, so do not delete or reinstall the app. Relaunch Atlas, and update to the latest version if this keeps happening."
         }
-        if sync.isEnabled {
-            return "Your library stays available offline. iOS decides when background sync runs."
+        if sync.isEnabled { return nil }
+        return "Nothing leaves this device until you enable it."
+    }
+}
+
+// MARK: - Status
+
+/// How the status line should read at a glance. Routine states hide the
+/// coordinator's detail sentence; attention states show it.
+enum SyncStatusTone {
+    case off, working, healthy, attention
+}
+
+extension CloudSyncCoordinator {
+    var tone: SyncStatusTone {
+        switch statusText {
+        case "Off", "Unavailable": .off
+        case "Up to Date", "Changes Pending", "iCloud Content Deleted": .healthy
+        case "Needs Attention", "Account Changed", "Account Unavailable", "iCloud Storage Full",
+            "Deletion Not Finished":
+            .attention
+        default: .working
         }
-        return "Sync is off. Nothing leaves this device until you enable it."
+    }
+
+    /// Routine states repeat the status line; problems and the post-deletion
+    /// note about the reset marker are worth the extra sentence.
+    var showsDetail: Bool {
+        tone == .attention || statusText == "iCloud Content Deleted" || !isAvailable
     }
 }
 
 // MARK: - Header
 
-/// Icon, name, and the live status line. The status is one accessibility element
-/// whose value is the plain status text.
+/// Icon, name, and the live status line. Last-sync time and pending count fold
+/// into one caption so the card never repeats itself. The status is one
+/// accessibility element whose value is the plain status text. When sync is on,
+/// the trailing control is Sync Now (or a spinner while a round runs).
 private struct SyncStatusHeader: View {
     let sync: CloudSyncCoordinator
 
@@ -150,23 +161,55 @@ private struct SyncStatusHeader: View {
                 .accessibilityLabel("Sync Status")
                 .accessibilityValue(sync.statusText)
                 .accessibilityIdentifier("icloud.sync.status")
+                if let caption {
+                    caption
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 0)
             if sync.isWorking {
                 ProgressView()
+            } else if sync.isEnabled {
+                Button {
+                    Task { await sync.syncNow() }
+                } label: {
+                    Image(systemName: "arrow.trianglehead.2.clockwise")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .disabled(!sync.isAvailable)
+                .accessibilityLabel("Sync Now")
             }
         }
         .padding(.vertical, 4)
     }
 
+    private var caption: Text? {
+        guard sync.isEnabled, !sync.isWorking else { return nil }
+        let pending = sync.pendingCount
+        switch (pending > 0, sync.lastSync) {
+        case (false, nil):
+            return nil
+        case (true, nil):
+            return Text("^[\(pending) change](inflect: true) waiting")
+        case (false, let last?):
+            return Text("Synced \(last, format: .relative(presentation: .named))")
+        case (true, let last?):
+            return Text(
+                "^[\(pending) change](inflect: true) waiting · Synced \(last, format: .relative(presentation: .named))"
+            )
+        }
+    }
+
     private var statusColor: Color {
-        switch sync.statusText {
-        case "Up to Date", "iCloud Content Deleted": .green
-        case "Off", "Unavailable": .secondary
-        case "Needs Attention", "Account Changed", "Account Unavailable", "iCloud Storage Full",
-            "Deletion Not Finished":
-            .orange
-        default: .accentColor
+        switch sync.tone {
+        case .healthy: .green
+        case .off: .secondary
+        case .attention: .orange
+        case .working: .accentColor
         }
     }
 }
@@ -217,6 +260,8 @@ private struct SyncCategory: Identifiable {
 /// Grid of what leaves the device, one chip per category. Columns adapt to the
 /// available width: two on a phone, more in a wide iPad form.
 private struct SyncCategoryGrid: View {
+    /// Extra top inset keeps the first row's icons clear of the card's corners.
+    static let rowInsets = EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18)
     private let columns = [GridItem(.adaptive(minimum: 160, maximum: 260), spacing: 10)]
 
     var body: some View {
@@ -261,36 +306,169 @@ private struct SyncDeviceOnlyRow: View {
     }
 }
 
+/// One-line summary for the enabled state: the category icons stand in for the
+/// full grid, which lives one push away.
+private struct SyncCoverageRow: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What Syncs")
+            HStack(spacing: 6) {
+                ForEach(SyncCategory.synced) { category in
+                    Image(systemName: category.symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(category.tint.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(SyncCategory.synced.map(\.title).joined(separator: ", "))
+    }
+}
+
+/// Full coverage list, reachable from the enabled state.
+private struct SyncCoverageView: View {
+    var body: some View {
+        Form {
+            Section {
+                SyncCategoryGrid()
+                    .listRowInsets(SyncCategoryGrid.rowInsets)
+            }
+            Section {
+                SyncDeviceOnlyRow()
+            } footer: {
+                Text("Recommendations are still generated on this device.")
+            }
+        }
+        .navigationTitle("What Syncs")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 // MARK: - Encryption
 
-/// The full notice is required copy before any upload and stays on the settings
-/// page; the lead line keeps the takeaway readable at a glance.
-private struct SyncEncryptionCard: View {
-    private let instructionsURL = URL(string: "https://support.apple.com/en-us/108756")!
+enum SyncEncryptionCopy {
+    /// "iCloud data security overview".
+    static let overviewURL = URL(string: "https://support.apple.com/en-us/102651")!
+    /// "How to turn on Advanced Data Protection for iCloud". iOS has no public
+    /// way to open the Apple Account → iCloud page, so the guide is the path.
+    static let howToURL = URL(string: "https://support.apple.com/en-us/108756")!
 
-    static let notice =
-        "Atlas stores your synced library and activity in encrypted iCloud fields. End-to-end encryption requires Advanced Data Protection for your Apple Account. Without it, Apple holds the keys needed to decrypt this data. Some iCloud service metadata is not end-to-end encrypted, even with Advanced Data Protection."
+    /// Lead line, required before any upload. Keep the phrase
+    /// "End-to-end encryption requires Advanced Data Protection" intact; the UI
+    /// test looks for it on the consent sheet.
+    static let lead =
+        "Atlas stores your synced library in encrypted iCloud fields. End-to-end encryption requires Advanced Data Protection on your Apple Account."
+
+    static let withADP = "Only your devices can read your synced library."
+    static let withoutADP = "Apple holds the keys and could read it."
+
+    /// One-line takeaway for the enabled state.
+    static let summary = "End-to-end only with Advanced Data Protection."
+}
+
+/// Compact encryption status plus the Apple support link, for the enabled
+/// state. The full notice stays on the off state and the consent sheet, where
+/// it gates the first upload.
+private struct SyncEncryptionRow: View {
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            SyncEncryptionIcon()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Encrypted in iCloud")
+                Text(SyncEncryptionCopy.summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        SyncEncryptionLink()
+    }
+}
+
+private struct SyncEncryptionIcon: View {
+    var body: some View {
+        Image(systemName: "lock.shield.fill")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(Color.green.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct SyncEncryptionLink: View {
+    var body: some View {
+        Link(destination: SyncEncryptionCopy.overviewURL) {
+            Label("About Advanced Data Protection", systemImage: "arrow.up.right.square")
+        }
+    }
+}
+
+private struct SyncEncryptionHowToLink: View {
+    var body: some View {
+        Link(destination: SyncEncryptionCopy.howToURL) {
+            Label("Turn On Advanced Data Protection", systemImage: "lock.icloud")
+        }
+    }
+}
+
+/// Full notice for onboarding: the lead line, then the two account states so
+/// the privacy trade-off is legible without reading a paragraph.
+private struct SyncEncryptionNotice: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                SyncEncryptionIcon()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Encrypted in iCloud")
+                        .font(.subheadline.weight(.semibold))
+                    Text(SyncEncryptionCopy.lead)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                ADPStateRow(
+                    on: true, title: "Advanced Data Protection on",
+                    detail: SyncEncryptionCopy.withADP)
+                ADPStateRow(
+                    on: false, title: "Advanced Data Protection off",
+                    detail: SyncEncryptionCopy.withoutADP)
+            }
+            .padding(.leading, 42)
+        }
+        .padding(.vertical, 2)
+        SyncEncryptionLink()
+        SyncEncryptionHowToLink()
+    }
+}
+
+private struct ADPStateRow: View {
+    let on: Bool
+    let title: String
+    let detail: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(Color.green.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Encrypted in iCloud")
-                    .font(.subheadline.weight(.semibold))
-                Text(Self.notice)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: on ? "lock.fill" : "lock.open.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(on ? Color.green : Color.orange)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+                Text(detail)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 2)
-        Link(destination: instructionsURL) {
-            Label("About Advanced Data Protection", systemImage: "arrow.up.right.square")
-        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -329,12 +507,7 @@ private struct ICloudSyncConsentView: View {
                     }
 
                     ConsentCard(title: "Encryption") {
-                        SyncEncryptionCard()
-                        Text(
-                            "Check Advanced Data Protection in Settings → your name → iCloud. Atlas does not verify whether it is enabled."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        SyncEncryptionNotice()
                     }
                 }
                 .padding(.horizontal, 16)
@@ -388,7 +561,7 @@ private struct ConsentCard<Content: View>: View {
             VStack(alignment: .leading, spacing: 12) {
                 content
             }
-            .padding(16)
+            .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 Color(.secondarySystemGroupedBackground),
@@ -402,6 +575,41 @@ private struct ConsentCard<Content: View>: View {
 private enum SyncSheet: String, Identifiable {
     case enable
     var id: String { rawValue }
+}
+
+/// Each action row owns its dialog so the popover anchors to the tapped row.
+/// Attached to the Form instead, iOS 27 anchors it to the form's center.
+private struct SyncConfirmationModifier: ViewModifier {
+    let action: SyncConfirmation
+    @Binding var current: SyncConfirmation?
+    let perform: @MainActor () async -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            action.title,
+            isPresented: Binding(
+                get: { current == action },
+                set: { if !$0 { current = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(action.buttonTitle, role: action.isDestructive ? .destructive : nil) {
+                current = nil
+                Task { await perform() }
+            }
+            Button("Cancel", role: .cancel) { current = nil }
+        } message: {
+            Text(action.message)
+        }
+    }
+}
+
+extension View {
+    fileprivate func syncConfirmation(
+        _ action: SyncConfirmation, current: Binding<SyncConfirmation?>,
+        perform: @escaping @MainActor () async -> Void
+    ) -> some View {
+        modifier(SyncConfirmationModifier(action: action, current: current, perform: perform))
+    }
 }
 
 private enum SyncConfirmation {
