@@ -47,15 +47,19 @@ extension VideoPlayerPresenter.Coordinator {
             rootView: PlayerOverlayButtons(info: infoButtonModel, chat: chatButtonModel))
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        // Keep the host's frame in step with the cluster's width (Chat
+        // appearing, labels expanding on pause); without this the buttons
+        // trailing-align inside a stale frame and drift off the inset line.
+        host.sizingOptions = .intrinsicContentSize
         controller.addChild(host)
         overlay.addSubview(host.view)
         host.didMove(toParent: controller)
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(
-                equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 12),
-            host.view.trailingAnchor.constraint(
-                equalTo: overlay.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-        ])
+        host.view.topAnchor.constraint(
+            equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: PlayerOverlayLayout.edgeInset
+        ).isActive = true
+        host.view.trailingAnchor.constraint(
+            equalTo: overlay.trailingAnchor, constant: -PlayerOverlayLayout.edgeInset
+        ).isActive = true
         infoButtonHost = host
         observePlaybackForInfoButton(on: controller.player)
     }
@@ -112,16 +116,27 @@ extension VideoPlayerPresenter.Coordinator {
             replayLoader: chatReplayLoader,
             playbackTime: infoPlaybackTime)
         let isLandscape = host.view.bounds.width > host.view.bounds.height
-        let onDisappear: () -> Void = { [weak self] in self?.stopInfoCommentTimeTracking() }
+        let onDisappear: () -> Void = { [weak self] in
+            self?.stopInfoCommentTimeTracking()
+            self?.setOverlayButtonsHidden(false)
+        }
         let chatVC: UIViewController
         if isLandscape {
-            let vc = UIHostingController(
+            setOverlayButtonsHidden(true)
+            let vc = SideCardHostingController(
                 rootView:
-                    PlayerChatSidePanel(content: content, onDisappear: onDisappear)
+                    PlayerChatSidePanel(
+                        content: content,
+                        bottomSafeInset: bottomSafeInset(in: host),
+                        onWillDismiss: { [weak self] in self?.setOverlayButtonsHidden(false) },
+                        onDisappear: onDisappear
+                    )
                     .environment(app))
             vc.view.backgroundColor = .clear
             vc.modalPresentationStyle = .overFullScreen
             vc.modalTransitionStyle = .crossDissolve
+            // Rotating to portrait with the side panel up: swap to the sheet.
+            vc.onRotateToPortrait = { [weak self] in self?.presentChat() }
             chatVC = vc
         } else {
             let vc = UIHostingController(
@@ -145,6 +160,76 @@ extension VideoPlayerPresenter.Coordinator {
             chatVC = vc
         }
         host.present(chatVC, animated: true)
+    }
+
+    /// Hosts a landscape side card. When the window turns portrait it dismisses
+    /// itself (unanimated, under the rotation) and, once the rotation lands,
+    /// asks the presenter to show the portrait presentation instead.
+    final class SideCardHostingController<Content: View>: UIHostingController<Content> {
+        var onRotateToPortrait: (() -> Void)?
+
+        override init(rootView: Content) {
+            super.init(rootView: rootView)
+            // The card lays itself out from insets the presenter captured;
+            // see `PlayerSideCard.bottomSafeInset`.
+            safeAreaRegions = []
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        /// `safeAreaRegions = []` only strips SwiftUI's notion of the safe area.
+        /// The card's `NavigationStack` is a UINavigationController underneath
+        /// and takes its insets from UIKit, so where the card overlaps the
+        /// window's side and bottom safe areas the bar and content stepped in
+        /// by the overlap (51pt on the trailing side in landscape). Cancel
+        /// the system insets here; the card supplies its own.
+        override func viewSafeAreaInsetsDidChange() {
+            super.viewSafeAreaInsetsDidChange()
+            let total = view.safeAreaInsets
+            let extra = additionalSafeAreaInsets
+            let system = UIEdgeInsets(
+                top: total.top - extra.top, left: total.left - extra.left,
+                bottom: total.bottom - extra.bottom, right: total.right - extra.right)
+            let cancel = UIEdgeInsets(
+                top: -system.top, left: -system.left, bottom: -system.bottom, right: -system.right)
+            if cancel != additionalSafeAreaInsets {
+                additionalSafeAreaInsets = cancel
+            }
+        }
+
+        override func viewWillTransition(
+            to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator
+        ) {
+            super.viewWillTransition(to: size, with: coordinator)
+            guard size.height > size.width, let onRotateToPortrait else { return }
+            self.onRotateToPortrait = nil
+            let presenter = presentingViewController
+            dismiss(animated: false)
+            coordinator.animate(alongsideTransition: nil) { _ in
+                guard presenter?.presentedViewController == nil else { return }
+                onRotateToPortrait()
+            }
+        }
+    }
+
+    /// The home-indicator inset a side card's content must keep, resolved now
+    /// from the window rather than left to the presented view (see
+    /// `PlayerSideCard.bottomSafeInset`).
+    private func bottomSafeInset(in host: UIViewController) -> CGFloat {
+        (host.view.window?.safeAreaInsets ?? host.view.safeAreaInsets).bottom
+    }
+
+    /// A landscape side card sits on top of the Info/Chat buttons; fading them
+    /// out stops them peeking around the card's corner while it's up. Alpha
+    /// rather than `isHidden` so the buttons don't re-lay out (and re-animate
+    /// their collapsed/expanded state) when they come back.
+    private func setOverlayButtonsHidden(_ hidden: Bool) {
+        guard let view = infoButtonHost?.view else { return }
+        let alpha: CGFloat = hidden ? 0 : 1
+        guard view.alpha != alpha else { return }
+        view.isUserInteractionEnabled = !hidden
+        UIView.animate(withDuration: hidden ? 0.15 : 0.3) { view.alpha = alpha }
     }
 
     private func installInfoCommentTimeTracking(on player: AVPlayer?) {
@@ -226,24 +311,34 @@ extension VideoPlayerPresenter.Coordinator {
             onTimestampTap: { [weak self] seconds in
                 self?.seekToCommentTimestamp(seconds)
             },
-            onDisappear: { [weak self] in self?.stopInfoCommentTimeTracking() },
+            onDisappear: { [weak self] in
+                self?.stopInfoCommentTimeTracking()
+                self?.setOverlayButtonsHidden(false)
+            },
+            onWillDismiss: { [weak self] in self?.setOverlayButtonsHidden(false) },
+            sideCardBottomInset: asSideCard ? bottomSafeInset(in: host) : 0,
             asSideCard: asSideCard)
-        let infoVC = UIHostingController(
-            rootView:
-                sheet
-                .environment(app)
-                .environment(downloads)
-                .modelContext(modelContext))
-        // A clear content view is what lets UISheetPresentationController use
-        // its Liquid Glass background at the medium detent (and lets the side
-        // card float over the video).
-        infoVC.view.backgroundColor = .clear
+        let rootView =
+            sheet
+            .environment(app)
+            .environment(downloads)
+            .modelContext(modelContext)
         if asSideCard {
-            infoVC.modalPresentationStyle = .overFullScreen
-            infoVC.modalTransitionStyle = .crossDissolve
-            host.present(infoVC, animated: true)
+            setOverlayButtonsHidden(true)
+            let cardVC = SideCardHostingController(rootView: rootView)
+            cardVC.view.backgroundColor = .clear
+            cardVC.modalPresentationStyle = .overFullScreen
+            cardVC.modalTransitionStyle = .crossDissolve
+            // Rotating to portrait with the card up: swap to the sheet. The
+            // card's layout doesn't survive the size change.
+            cardVC.onRotateToPortrait = { [weak self] in self?.presentInfo() }
+            host.present(cardVC, animated: true)
             return
         }
+        let infoVC = UIHostingController(rootView: rootView)
+        // A clear content view is what lets UISheetPresentationController use
+        // its Liquid Glass background at the medium detent.
+        infoVC.view.backgroundColor = .clear
         infoVC.modalPresentationStyle = .pageSheet
         if let presentation = infoVC.sheetPresentationController {
             presentation.detents = [.medium(), .large()]

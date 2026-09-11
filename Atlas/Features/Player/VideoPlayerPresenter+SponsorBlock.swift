@@ -75,29 +75,29 @@ extension VideoPlayerPresenter.Coordinator {
             toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
     }
 
-    /// Hosts the skip button. Unlike the Info button, this host fills the
-    /// overlay's safe area and lets the SwiftUI view place the pill in the
-    /// lower-trailing corner itself. A fixed full-size host means the pill
-    /// never overflows its bounds as it animates in (a content-sized host
-    /// collapses to zero between segments and momentarily draws the pill off
-    /// the bottom of the screen). The empty area isn't hit-testable, and the
-    /// host sits *below* the Info button, so neither the transport controls
-    /// nor the Info button lose their taps.
+    /// Hosts the skip button, anchored bottom-trailing exactly like the
+    /// Info/Chat host is anchored top-trailing, so both sit on one inset
+    /// line. The SwiftUI view reserves a stable frame (`skipReservedWidth` ×
+    /// `buttonHeight`) rather than collapsing to zero between segments, which
+    /// is what used to draw the pill outside its bounds mid-animation. Only
+    /// the pill is hit-testable, and the host sits *below* the Info button.
     private func installSkipButton(on controller: AVPlayerViewController) {
         guard skipButtonHost == nil, let overlay = controller.contentOverlayView else { return }
         let host = UIHostingController(rootView: SkipSponsorButton(model: sponsorModel))
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        host.sizingOptions = .intrinsicContentSize
         controller.addChild(host)
         overlay.insertSubview(host.view, at: 0)
         host.didMove(toParent: controller)
-        let guide = overlay.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(equalTo: guide.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
-            host.view.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
-        ])
+        // Same anchoring as the Info/Chat host so the two share one trailing
+        // line; the SwiftUI view reserves a stable frame for the animation.
+        host.view.bottomAnchor.constraint(
+            equalTo: overlay.safeAreaLayoutGuide.bottomAnchor, constant: -PlayerOverlayLayout.skipBottomInset
+        ).isActive = true
+        host.view.trailingAnchor.constraint(
+            equalTo: overlay.trailingAnchor, constant: -PlayerOverlayLayout.edgeInset
+        ).isActive = true
         skipButtonHost = host
     }
 

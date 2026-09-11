@@ -40,6 +40,7 @@ struct ShortPoster: View {
                         .padding(10)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .imageEdge(RoundedRectangle(cornerRadius: 14, style: .continuous), url: item.thumbnail)
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(alignment: .topLeading) {
                     Image(systemName: "play.square.stack.fill")

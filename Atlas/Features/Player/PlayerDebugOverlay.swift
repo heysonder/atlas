@@ -63,7 +63,9 @@ struct PlayerDebugOverlay: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .frame(maxWidth: 360, alignment: .leading)
-        .glassEffect(.regular.tint(.black.opacity(0.24)), in: .rect(cornerRadius: 22))
+        .glassEffect(
+            .regular.tint(.black.opacity(0.24)),
+            in: ConcentricRectangle(corners: .concentric(minimum: .fixed(22))))
     }
 
     @ViewBuilder

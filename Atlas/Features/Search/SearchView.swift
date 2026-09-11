@@ -49,7 +49,10 @@ struct SearchView: View {
         NavigationStack {
             content
                 .navigationTitle("Search")
-                .navigationBarTitleDisplayMode(.large)
+                // At regular width the search tab already puts the field and an
+                // inline title in the bar; a large title on top duplicated it
+                // (and drew flush to the window edge in a resized iPad window).
+                .navigationBarTitleDisplayMode(horizontalSizeClass == .regular ? .inline : .large)
                 .navigationDestination(for: String.self) { id in
                     ChannelDetailView(channelID: id)
                 }
@@ -144,7 +147,6 @@ struct SearchView: View {
     @ViewBuilder private var searchHistoryList: some View {
         SearchHistoryContent(
             entries: searchHistory,
-            horizontalSizeClass: horizontalSizeClass,
             onSelect: selectSearchHistory,
             onDeleteOffsets: deleteSearchHistory,
             onDeleteEntry: deleteSearchHistory,
@@ -157,7 +159,6 @@ struct SearchView: View {
             results: results,
             videos: videos,
             query: activeQuery,
-            horizontalSizeClass: horizontalSizeClass,
             isLoadingMore: isLoadingMore,
             canLoadMore: nextPage != nil,
             loadMoreError: loadMoreError,

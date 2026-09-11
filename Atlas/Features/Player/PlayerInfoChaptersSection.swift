@@ -40,6 +40,7 @@ struct PlayerInfoChaptersSection: View {
                     .frame(width: 84, height: 47)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .imageEdge(RoundedRectangle(cornerRadius: 8, style: .continuous), url: chapter.image ?? thumbnail)
 
                     Text(Format.clock(chapter.start))
                         .font(.caption2.weight(.bold))

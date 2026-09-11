@@ -1,30 +1,34 @@
 import SwiftData
 import SwiftUI
 
+/// The Library tab. A `NavigationSplitView`: at regular width the sections
+/// are a sidebar with the selected one (History by default) filling the
+/// detail column, so an iPad never opens onto an empty menu; in compact width
+/// the split view collapses into the familiar list-then-push stack on its own.
 struct ProfileView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query private var subscriptions: [SubscribedChannel]
     @Query private var downloads: [DownloadedVideo]
-    // Type-erased so the stack can hold more than one value type. The Library
-    // pushes `Route` (top-level menu), `SettingsRoute` (Settings sub-screens),
-    // and `String` (a channel id, from ChannelsView). A typed `[Route]` path
-    // silently drops any non-`Route` push — the row highlights but never
-    // navigates — which is why tapping a channel here used to do nothing while
-    // the same channel link works from Feed/Search (those stacks are untyped).
-    @State private var path = NavigationPath()
 
-    /// Value-based routes for the Library menu. Keeping navigation entirely
-    /// value-based (rather than mixing in destination-based `NavigationLink`s)
-    /// is what prevents the channel-detail push from misbehaving: a stack that
-    /// mixes both styles double-navigates (you'd land back on the list and have
-    /// to tap "back" to reach the detail).
+    @State private var selection: Route?
+    // Type-erased so the detail stack can hold more than one value type: it
+    // pushes `SettingsRoute` (Settings sub-screens) and `String` (a channel
+    // id, from ChannelsView). A typed path silently drops any other push —
+    // the row highlights but never navigates.
+    @State private var detailPath = NavigationPath()
+
+    /// Value-based routes for the Library sections. Keeping navigation
+    /// value-based (rather than mixing in destination-based `NavigationLink`s
+    /// at this level) is what keeps the channel-detail push from
+    /// double-navigating.
     private enum Route: Hashable {
         case channels, history, playlists, downloads, settings
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
+        NavigationSplitView {
+            List(selection: $selection) {
                 Section {
                     NavigationLink(value: Route.channels) {
                         Label {
@@ -76,49 +80,66 @@ struct ProfileView: View {
                 }
             }
             .navigationTitle("Library")
-            .navigationDestination(for: Route.self) { route in
-                switch route {
-                case .channels: ChannelsView()
-                case .history: HistoryView()
-                case .playlists: PlaylistsView()
-                case .downloads: DownloadsView()
-                case .settings: SettingsView()
-                }
-            }
-            .navigationDestination(for: SettingsRoute.self) { route in
-                switch route {
-                case .instances: InstancesSettingsView()
-                case .sponsorBlock: SponsorBlockSettingsView()
-                case .backup: BackupSettingsView()
-                case .diagnostics: DiagnosticsSettingsView()
-                }
-            }
-            .navigationDestination(for: String.self) { id in
-                ChannelDetailView(channelID: id)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        } detail: {
+            NavigationStack(path: $detailPath) {
+                detailRoot
+                    .navigationDestination(for: SettingsRoute.self) { route in
+                        switch route {
+                        case .instances: InstancesSettingsView()
+                        case .sponsorBlock: SponsorBlockSettingsView()
+                        case .backup: BackupSettingsView()
+                        case .diagnostics: DiagnosticsSettingsView()
+                        }
+                    }
+                    .navigationDestination(for: String.self) { id in
+                        ChannelDetailView(channelID: id)
+                    }
             }
         }
-        // Deep-link from Siri / "Open Downloads": push the requested sub-screen.
+        // A sidebar with nothing selected is the only empty screen in the app;
+        // in compact width `nil` correctly means "show the list".
+        .onAppear { selectDefaultIfNeeded() }
+        .onChange(of: horizontalSizeClass) { _, _ in selectDefaultIfNeeded() }
+        // Deep-link from Siri / "Open Downloads": select the section and push
+        // anything beneath it. Handles both the warm case (onChange) and a cold
+        // launch (onAppear).
         .onAppear { applyLibraryTarget() }
         .onChange(of: app.libraryTarget) { _, _ in applyLibraryTarget() }
     }
 
-    /// Honors a pending `AppModel.libraryTarget` by pushing its route, then clears
-    /// it. Handles both the warm case (onChange) and a cold launch (onAppear).
+    @ViewBuilder private var detailRoot: some View {
+        switch selection ?? .history {
+        case .channels: ChannelsView()
+        case .history: HistoryView()
+        case .playlists: PlaylistsView()
+        case .downloads: DownloadsView()
+        case .settings: SettingsView()
+        }
+    }
+
+    private func selectDefaultIfNeeded() {
+        if horizontalSizeClass == .regular, selection == nil {
+            selection = .history
+        }
+    }
+
+    /// Honors a pending `AppModel.libraryTarget`, then clears it.
     private func applyLibraryTarget() {
         guard let target = app.libraryTarget else { return }
         app.libraryTarget = nil
+        var path = NavigationPath()
         switch target {
-        case .downloads: path = NavigationPath([Route.downloads])
-        case .history: path = NavigationPath([Route.history])
-        case .playlists: path = NavigationPath([Route.playlists])
+        case .downloads: selection = .downloads
+        case .history: selection = .history
+        case .playlists: selection = .playlists
         case .channel(let channelID):
-            var next = NavigationPath([Route.channels])
-            next.append(channelID)
-            path = next
+            selection = .channels
+            path.append(channelID)
         case .instanceSettings:
-            var next = NavigationPath([Route.settings])
-            next.append(SettingsRoute.instances)
-            path = next
+            selection = .settings
+            path.append(SettingsRoute.instances)
         }
+        detailPath = path
     }
 }

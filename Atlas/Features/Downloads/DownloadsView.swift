@@ -6,7 +6,6 @@ import SwiftUI
 struct DownloadsView: View {
     @Environment(AppModel.self) private var app
     @Environment(DownloadManager.self) private var downloads
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \DownloadedVideo.createdAt, order: .reverse) private var saved: [DownloadedVideo]
 
     private var inFlight: [DownloadManager.ActiveDownload] {
@@ -20,27 +19,29 @@ struct DownloadsView: View {
                     "No downloads",
                     systemImage: "arrow.down.circle",
                     description: Text("Long-press any video and choose Download to save it for offline."))
-            } else if horizontalSizeClass == .regular {
-                gridLayout
             } else {
-                List {
-                    if !inFlight.isEmpty {
-                        Section("Downloading") {
-                            ForEach(inFlight) { item in
-                                ActiveDownloadRow(
-                                    item: item,
-                                    onCancel: { downloads.cancel(item.id) },
-                                    onDismiss: { downloads.dismissFailed(item.id) })
+                LibraryLayout {
+                    gridLayout
+                } list: {
+                    List {
+                        if !inFlight.isEmpty {
+                            Section("Downloading") {
+                                ForEach(inFlight) { item in
+                                    ActiveDownloadRow(
+                                        item: item,
+                                        onCancel: { downloads.cancel(item.id) },
+                                        onDismiss: { downloads.dismissFailed(item.id) })
+                                }
                             }
                         }
-                    }
-                    if !saved.isEmpty {
-                        // The "Saved" header only earns its place when there's a
-                        // "Downloading" section above to distinguish it from.
-                        if inFlight.isEmpty {
-                            Section { savedRows }
-                        } else {
-                            Section("Saved") { savedRows }
+                        if !saved.isEmpty {
+                            // The "Saved" header only earns its place when there's
+                            // a "Downloading" section above to distinguish it from.
+                            if inFlight.isEmpty {
+                                Section { savedRows }
+                            } else {
+                                Section("Saved") { savedRows }
+                            }
                         }
                     }
                 }
@@ -50,8 +51,8 @@ struct DownloadsView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// iPad: in-flight downloads stay full-width (their progress bars want the
-    /// room); finished downloads tile into the adaptive multi-column grid.
+    /// Wide layouts: in-flight downloads stay full-width (their progress bars
+    /// want the room); finished downloads tile into the multi-column grid.
     private var gridLayout: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {

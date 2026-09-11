@@ -20,36 +20,36 @@ final class SponsorSkipModel {
 }
 
 /// The Liquid Glass "Skip …" pill layered over the video, pinned to the
-/// lower-trailing corner above the transport bar. The view fills its host (the
-/// player's safe area) and positions the pill itself with padding, so only the
-/// pill is hit-testable — the empty space lets taps fall through to the controls
-/// beneath. Filling a *stable* container, rather than letting the host resize to
-/// the pill, is what keeps the show animation from briefly drawing the pill
-/// off the bottom of the screen as the segment becomes active.
+/// lower-trailing corner above the transport bar on the same trailing line as
+/// the Info/Chat cluster. The host is sized to a stable reserved width (not
+/// the pill), so the show animation never draws the pill outside its bounds
+/// and only the pill itself is hit-testable.
 struct SkipSponsorButton: View {
     let model: SponsorSkipModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack(alignment: .trailing) {
             if let prompt = model.prompt {
                 Button(action: model.onSkip) {
                     Label("Skip \(prompt.noun)", systemImage: "forward.end.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .frame(minHeight: 44)
+                        .padding(.horizontal, PlayerOverlayLayout.horizontalPadding)
+                        .padding(.vertical, PlayerOverlayLayout.verticalPadding)
+                        .frame(minHeight: PlayerOverlayLayout.buttonHeight)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Capsule())
-                .padding(.trailing, 12)
-                .padding(.bottom, 56)
-                .transition(reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity))
+                .transition(
+                    reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .frame(
+            width: PlayerOverlayLayout.skipReservedWidth, height: PlayerOverlayLayout.buttonHeight,
+            alignment: .trailing
+        )
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.82), value: model.prompt)
     }
 }
