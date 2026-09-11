@@ -42,7 +42,7 @@ enum IntentDataStore {
     /// so playlists/downloads/history are reachable from a background intent.
     static var container: ModelContainer? {
         if let injectedContainer { return injectedContainer }
-        injectedContainer = try? ModelContainer(for: AtlasModelSchema.schema)
+        injectedContainer = try? AtlasContainerFactory.make()
         return injectedContainer
     }
 

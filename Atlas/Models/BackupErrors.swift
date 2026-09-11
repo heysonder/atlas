@@ -8,6 +8,8 @@ enum BackupRestoreError: Error, LocalizedError, Equatable {
     case limitExceeded(field: String, maximum: Int)
     case invalidValue(field: String)
     case duplicateValue(field: String)
+    case ambiguousPlaylist(name: String)
+    case cannotSavePendingChanges
     case cannotSave
 
     var errorDescription: String? {
@@ -26,6 +28,10 @@ enum BackupRestoreError: Error, LocalizedError, Equatable {
             "The backup contains an invalid value at \(field)."
         case .duplicateValue(let field):
             "The backup contains a duplicate value at \(field)."
+        case .ambiguousPlaylist(let name):
+            "More than one playlist is named ‘\(name)’. Rename the matching playlists so their names are distinct, then import this older backup again. Your library was not changed."
+        case .cannotSavePendingChanges:
+            "Atlas couldn't save your pending local changes. They remain open on this device, and no backup data was imported. Try again after your local changes save."
         case .cannotSave:
             "Atlas couldn't save the imported data. Your library was not changed."
         }

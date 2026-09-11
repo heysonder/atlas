@@ -22,6 +22,7 @@ final class EmbeddedPlayerModel {
         return player
     }()
     var request: PlayRequest
+    var historySession: PlaybackHistorySession?
     var detail: VideoDetail?
     /// `detail.description` stripped of HTML once when the detail arrives —
     /// body re-evaluates every playback tick, so it must not re-parse there.
@@ -70,6 +71,8 @@ final class EmbeddedPlayerModel {
     func start() {
         guard !started else { return }
         started = true
+        historySession = PlaybackHistoryStore.beginSession(
+            videoID: request.videoID, in: modelContext)
         updateFavoritesCommand(for: request)
         if let local = request.localURL {
             loadLocal(local)
@@ -245,7 +248,7 @@ final class EmbeddedPlayerModel {
         upgradeTask?.cancel()
         upgradeTask = nil
         let t = player.currentTime().seconds
-        if t.isFinite { savePosition(t) }
+        if t.isFinite { savePosition(t, flush: true) }
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
             self.timeObserver = nil

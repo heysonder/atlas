@@ -62,6 +62,7 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
         var activePlaybackSource = "unknown"
         var fallbackInProgress = false
         var currentRequest: PlayRequest?
+        var historySession: PlaybackHistorySession?
         var currentDetail: VideoDetail?
         /// The clients that resolved `currentDetail`. Keep playback pinned to
         /// that immutable instance generation even if the selected instance
@@ -136,6 +137,8 @@ struct VideoPlayerPresenter: UIViewControllerRepresentable {
             if playerVC != nil { hardStop() }  // replace any existing (incl. PiP) player
             presentedID = request.videoID
             currentRequest = request
+            historySession = PlaybackHistoryStore.beginSession(
+                videoID: request.videoID, in: modelContext)
             updateFavoritesCommand(for: request)
 
             let player = AVPlayer()

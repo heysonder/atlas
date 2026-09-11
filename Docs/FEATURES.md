@@ -2,6 +2,12 @@
 
 Atlas is organized around three tabs: Home, Library, and Search. Most online features require a configured Piped API instance. Local library features such as history, playlists, and completed downloads use SwiftData and local files.
 
+## Optional iCloud sync
+
+Library → Settings → iCloud Sync offers an explicit merge of subscriptions, watch and search history, playback progress, playlists and Favorites, recommendation feedback and activity, and portable display/playback preferences. Sync is off by default; the local library works offline. Downloads, Piped instances, privacy permissions, diagnostics, and the current player queue stay on the device.
+
+Every custom CloudKit field uses encrypted storage in the user's private database. End-to-end encryption requires Advanced Data Protection; Atlas shows this warning before consent and does not claim to detect its status. Controls allow turning sync off on one device, resetting personalization, or deleting synced content while retaining local copies. See [data and privacy](DATA_AND_PRIVACY.md) and [developer setup](ICLOUD_SYNC_SETUP.md).
+
 ## Home
 
 Home is implemented by `Atlas/Features/Feed/FeedView.swift`.

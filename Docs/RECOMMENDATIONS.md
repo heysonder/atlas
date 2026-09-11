@@ -26,7 +26,10 @@ The personalized system derives its profile and ranking weights from local signa
 - Suggest More / Suggest Less feedback.
 - Cached video category and tag metadata from `/streams`.
 
-Atlas does not upload a recommendation profile or library database. It does send
+When optional iCloud Sync is enabled, Atlas synchronizes the underlying personal
+signals and retained recommendation activity through encrypted CloudKit fields.
+Derived profiles and embeddings rebuild locally; ranking stays on device. See
+[iCloud setup and verification](ICLOUD_SYNC_SETUP.md). Atlas also sends
 recent search terms and video or channel identifiers derived from those local
 signals to the selected Piped instance when gathering search, related-video,
 channel, stream-metadata, or trending candidates.

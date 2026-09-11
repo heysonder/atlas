@@ -71,7 +71,9 @@ struct PlaylistEntityQuery: EntityStringQuery {
             if id.hasPrefix(PlaylistEntity.createPrefix) {
                 return PlaylistEntity(id: id, name: String(id.dropFirst(PlaylistEntity.createPrefix.count)))
             }
-            return playlists.first { $0.id.uuidString == id }.map(PlaylistEntity.init)
+            return playlists.first {
+                $0.id.uuidString == id || $0.legacyIDs?.contains(where: { $0.uuidString == id }) == true
+            }.map(PlaylistEntity.init)
         }
     }
 

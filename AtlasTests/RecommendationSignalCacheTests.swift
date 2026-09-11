@@ -38,7 +38,7 @@ import Testing
 @MainActor
 @Test func batchedSignalCacheFetchesRequestedIDsFromSwiftData() throws {
     let schema = Schema([VideoSignalCacheEntry.self])
-    let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+    let config = AtlasContainerFactory.configuration(schema: schema, inMemory: true)
     let container = try ModelContainer(for: schema, configurations: [config])
     let context = container.mainContext
     context.insert(

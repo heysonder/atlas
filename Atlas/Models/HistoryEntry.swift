@@ -14,6 +14,10 @@ final class HistoryEntry {
     var positionSeconds: Double = 0
     /// Total video length (seconds), when known.
     var durationSeconds: Double = 0
+    /// One explicit playback request owns a session; later progress is sequenced.
+    var playbackSessionID: String?
+    var playbackSessionStartedAt: Date?
+    var playbackSequence: Int = 0
 
     init(
         videoID: String, title: String, uploader: String? = nil,

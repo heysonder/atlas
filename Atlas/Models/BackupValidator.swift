@@ -2,7 +2,7 @@ import Foundation
 
 enum BackupValidator {
     static func validate(_ backup: AtlasBackup) throws {
-        guard (1...2).contains(backup.version) else {
+        guard (1...3).contains(backup.version) else {
             throw BackupRestoreError.unsupportedVersion(backup.version)
         }
         try requireCount(
@@ -119,13 +119,29 @@ enum BackupValidator {
     }
 
     private static func validatePlaylists(_ playlists: [AtlasBackup.PlaylistDTO]) throws {
-        var playlistNames = Set<String>()
+        var playlistIDs = Set<UUID>()
+        var legacyPlaylistNames = Set<String>()
+        var systemKinds = Set<String>()
         for (playlistIndex, row) in playlists.enumerated() {
             let field = "playlists[\(playlistIndex)]"
             try requireNonemptyText(row.name, field: field + ".name")
-            let nameKey = PersistedMetadataPolicy.playlistNameKey(row.name)
-            guard playlistNames.insert(nameKey).inserted else {
-                throw BackupRestoreError.duplicateValue(field: field + ".name")
+            if let id = row.id {
+                guard playlistIDs.insert(id).inserted else {
+                    throw BackupRestoreError.duplicateValue(field: field + ".id")
+                }
+            } else {
+                let nameKey = PersistedMetadataPolicy.playlistNameKey(row.name)
+                guard legacyPlaylistNames.insert(nameKey).inserted else {
+                    throw BackupRestoreError.duplicateValue(field: field + ".name")
+                }
+            }
+            if let kind = row.systemKind {
+                guard kind == PlaylistStore.favoritesSystemKind else {
+                    throw BackupRestoreError.invalidValue(field: field + ".systemKind")
+                }
+                guard systemKinds.insert(kind).inserted else {
+                    throw BackupRestoreError.duplicateValue(field: field + ".systemKind")
+                }
             }
             try requireFiniteDate(row.createdAt, field: field + ".createdAt")
             try validatePlaylistVideos(row.videos, field: field)

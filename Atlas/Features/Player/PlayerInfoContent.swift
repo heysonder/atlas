@@ -265,7 +265,9 @@ struct PlayerInfoContent: View {
             Button {
                 addCurrentVideo(to: playlist)
             } label: {
-                Label(playlist.name, systemImage: containsVideo ? "checkmark" : "music.note.list")
+                Label(
+                    PlaylistStore.displayName(for: playlist, among: playlists),
+                    systemImage: containsVideo ? "checkmark" : "music.note.list")
             }
             .disabled(containsVideo)
         }

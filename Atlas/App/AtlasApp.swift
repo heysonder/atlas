@@ -5,8 +5,10 @@ import SwiftUI
 
 @main
 struct AtlasApp: App {
+    @UIApplicationDelegateAdaptor(AtlasApplicationDelegate.self) private var applicationDelegate
     @State private var app: AppModel
     @State private var downloads: DownloadManager
+    @State private var cloudSync: CloudSyncCoordinator
     private let modelContainer: ModelContainer
 
     init() {
@@ -19,6 +21,17 @@ struct AtlasApp: App {
             storageMode: containerResult.downloadStorageMode)
         _app = State(initialValue: appModel)
         _downloads = State(initialValue: downloadManager)
+        let sync = CloudSyncCoordinator(
+            context: modelContainer.mainContext,
+            persistenceAvailable: containerResult.recoveryMessage == nil)
+        _cloudSync = State(initialValue: sync)
+        AtlasApplicationDelegate.cloudSync = sync
+        if containerResult.recoveryMessage == nil {
+            SyncPreferences.attach(app: appModel, in: modelContainer.mainContext)
+            // Older installs keep a Favorites row under a random ID; fold it into
+            // the canonical one before any view can bind to it.
+            PlaylistStore.adoptLegacyFavoritesIfNeeded(in: modelContainer.mainContext)
+        }
         configureAudioSession()
         AppDiagnostics.start()
 
@@ -51,10 +64,17 @@ struct AtlasApp: App {
             RootView()
                 .environment(app)
                 .environment(downloads)
+                .environment(cloudSync)
+                .task { await cloudSync.startIfEnrolled() }
         }
         .modelContainer(modelContainer)
         .onChange(of: scenePhase, initial: true) { _, phase in
             AppDiagnostics.sceneDidChange(active: phase == .active)
+            if phase == .active {
+                Task { await cloudSync.sceneActive() }
+            } else {
+                cloudSync.sceneInactive()
+            }
         }
     }
 
@@ -69,16 +89,13 @@ struct AtlasApp: App {
     /// in-memory storage and surface the problem so the saved data remains
     /// available for migration/backup recovery instead of being silently wiped.
     private static func makeModelContainer() -> ModelContainerResult {
-        let schema = AtlasModelSchema.schema
-        let config = ModelConfiguration(schema: schema)
         do {
             return ModelContainerResult(
-                container: try ModelContainer(for: schema, configurations: [config]),
+                container: try AtlasContainerFactory.make(),
                 recoveryMessage: nil,
                 downloadStorageMode: .persistent)
         } catch {
-            let memoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-            if let fallback = try? ModelContainer(for: schema, configurations: [memoryConfig]) {
+            if let fallback = try? AtlasContainerFactory.make(inMemory: true) {
                 return ModelContainerResult(
                     container: fallback,
                     recoveryMessage:

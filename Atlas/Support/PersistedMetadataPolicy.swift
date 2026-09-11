@@ -85,6 +85,20 @@ nonisolated enum PersistedMetadataPolicy {
         }
     }
 
+    /// Durations are advisory display metadata, so an unusable value (Piped reports
+    /// `-1` for live streams, and older rows stored it) becomes "unknown" (0) rather
+    /// than making a whole export or sync capture fail.
+    static func sanitizedPlaybackDuration(_ value: Int) -> Int {
+        (0...maximumPlaybackSeconds).contains(value) ? value : 0
+    }
+
+    /// Same rule for floating-point durations from AVFoundation, where a live or
+    /// not-yet-loaded item reports NaN or infinity.
+    static func sanitizedPlaybackNumber(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value >= 0, value <= Double(maximumPlaybackSeconds) else { return nil }
+        return value
+    }
+
     static func requireIdentifiers(
         _ values: [String],
         maximum: Int = maximumCollectionValues,
