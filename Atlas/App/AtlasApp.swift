@@ -96,10 +96,13 @@ struct AtlasApp: App {
                 downloadStorageMode: .persistent)
         } catch {
             if let fallback = try? AtlasContainerFactory.make(inMemory: true) {
+                // Keep the reason visible (bounded, no library content) so a recovery
+                // launch can be diagnosed from the settings screen instead of guessed at.
+                let reason = String("\(error)".prefix(300))
                 return ModelContainerResult(
                     container: fallback,
                     recoveryMessage:
-                        "Atlas could not open its saved library, so it started with temporary storage. Your existing on-device data was left untouched.",
+                        "Atlas could not open its saved library, so it started with temporary storage. Your existing on-device data was left untouched. (\(reason))",
                     downloadStorageMode: .recoveryReadOnly)
             }
             fatalError("Unrecoverable SwiftData error: \(error)")

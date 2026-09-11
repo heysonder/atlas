@@ -31,7 +31,7 @@ struct ICloudSyncSettingsView: View {
                         Task { await sync.syncNow() }
                     }
                     .disabled(sync.isWorking || !sync.isAvailable)
-                } else {
+                } else if sync.isAvailable {
                     Button {
                         presentedSheet = .enable
                     } label: {
@@ -39,13 +39,10 @@ struct ICloudSyncSettingsView: View {
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .disabled(sync.isWorking || !sync.isAvailable)
+                    .disabled(sync.isWorking)
                 }
             } footer: {
-                Text(
-                    sync.isEnabled
-                        ? "Your library stays available offline. iOS decides when background sync runs."
-                        : "Sync is off. Nothing leaves this device until you enable it.")
+                Text(footerText)
             }
 
             Section("What Syncs") {
@@ -114,6 +111,17 @@ struct ICloudSyncSettingsView: View {
         } message: { action in
             Text(action.message)
         }
+    }
+
+    private var footerText: String {
+        if !sync.isAvailable {
+            return
+                "Sync cannot be enabled while Atlas is running on temporary storage. Relaunch Atlas; if this keeps happening, export a backup from Backup & Data and reinstall."
+        }
+        if sync.isEnabled {
+            return "Your library stays available offline. iOS decides when background sync runs."
+        }
+        return "Sync is off. Nothing leaves this device until you enable it."
     }
 }
 
@@ -206,9 +214,10 @@ private struct SyncCategory: Identifiable {
     ]
 }
 
-/// Two-column grid of what leaves the device, one chip per category.
+/// Grid of what leaves the device, one chip per category. Columns adapt to the
+/// available width: two on a phone, more in a wide iPad form.
 private struct SyncCategoryGrid: View {
-    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+    private let columns = [GridItem(.adaptive(minimum: 160, maximum: 260), spacing: 10)]
 
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
