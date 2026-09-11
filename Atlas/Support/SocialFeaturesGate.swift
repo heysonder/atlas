@@ -107,6 +107,10 @@ final class SocialFeaturesGate {
                     apply(.declined)
                 case .declinedOnboarding, .invalidRequest:
                     apply(.declined)
+                case .network:
+                    // Transient: keep the cached verdict (or `.unknown`, which
+                    // re-asks next time) rather than caching "declined" for 30 days.
+                    break
                 @unknown default:
                     apply(.declined)
                 }

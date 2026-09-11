@@ -15,7 +15,7 @@ nonisolated final class ICloudSyncFlowTests: XCTestCase {
         for _ in 0..<4 where !sync.isHittable { app.swipeUp() }
         XCTAssertTrue(sync.waitForExistence(timeout: 5))
         sync.tap()
-        let enable = app.buttons["Enable iCloud Sync…"]
+        let enable = app.buttons["Enable iCloud Sync"]
         XCTAssertTrue(enable.waitForExistence(timeout: 5))
         let status = app.descendants(matching: .any)["icloud.sync.status"].firstMatch
         XCTAssertEqual(status.value as? String, "Off")

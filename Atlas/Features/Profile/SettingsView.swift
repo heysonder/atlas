@@ -63,6 +63,16 @@ struct SettingsView: View {
         return base + " Direct YouTube collaborator lookup is off."
     }
 
+    /// On/Off at rest; the live status while a round or deletion runs, or when
+    /// something needs attention, so leaving the sync page loses nothing.
+    private var syncRowDetail: String {
+        switch sync.tone {
+        case .working, .attention: sync.statusText
+        case .healthy: sync.isEnabled ? "On" : "Off"
+        case .off: "Off"
+        }
+    }
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
@@ -170,7 +180,7 @@ struct SettingsView: View {
                     Label("Backup & Data", systemImage: "externaldrive")
                 }
                 NavigationLink(value: SettingsRoute.iCloudSync) {
-                    settingRow("iCloud Sync", systemImage: "icloud", detail: sync.isEnabled ? "On" : "Off")
+                    settingRow("iCloud Sync", systemImage: "icloud", detail: syncRowDetail)
                 }
                 .accessibilityLabel("iCloud Sync")
                 .accessibilityValue(sync.statusText)

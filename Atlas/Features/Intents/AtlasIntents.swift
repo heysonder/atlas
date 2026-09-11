@@ -117,7 +117,7 @@ struct OpenPlaylistIntent: AppIntent, OpenIntent {
 /// System search schema (Apple Intelligence / Spotlight "Search Atlas for …").
 /// Kept separate from `ShowSearchResultsIntent` so the existing phrases and
 /// Shortcuts keep their `String` parameter.
-@AssistantIntent(schema: .system.search)
+@AppIntent(schema: .system.search)
 struct AtlasSystemSearchIntent: ShowInAppSearchResultsIntent {
     static let searchScopes: [StringSearchScope] = [.general]
 
