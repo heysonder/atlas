@@ -116,7 +116,7 @@ struct ICloudSyncSettingsView: View {
     private var footerText: String {
         if !sync.isAvailable {
             return
-                "Sync cannot be enabled while Atlas is running on temporary storage. Relaunch Atlas; if this keeps happening, export a backup from Backup & Data and reinstall."
+                "Sync cannot be enabled while Atlas is running on temporary storage. Your saved library is still on this device, so do not delete or reinstall the app. Relaunch Atlas, and update to the latest version if this keeps happening."
         }
         if sync.isEnabled {
             return "Your library stays available offline. iOS decides when background sync runs."
