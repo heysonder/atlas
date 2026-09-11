@@ -110,6 +110,6 @@ private func intentAddResultIsMissing(_ result: IntentDataStore.AddResult) -> Bo
 @MainActor
 private func makeViewPersistenceTestContainer() throws -> ModelContainer {
     let schema = AtlasModelSchema.schema
-    let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+    let configuration = AtlasContainerFactory.configuration(schema: schema, inMemory: true)
     return try ModelContainer(for: schema, configurations: [configuration])
 }

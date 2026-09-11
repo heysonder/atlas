@@ -1,12 +1,11 @@
 import Foundation
 
-/// A portable JSON snapshot of everything SwiftData holds that can't be re-fetched
-/// from Piped: watch history, search history, subscriptions, playlists, and taste
-/// feedback. Used to carry data across a bundle-identifier change (which gives the
-/// app a fresh, empty store). Downloads are intentionally excluded — those are
-/// on-disk files, and the videos are re-downloadable.
+/// A portable, unencrypted JSON snapshot of the core library: watch history,
+/// search history, subscriptions, playlists, and taste feedback. Cloud enrollment,
+/// journal state, preferences, recommendation activity, and downloads are excluded.
+/// This export format is independent of the encrypted CloudKit sync protocol.
 struct AtlasBackup: Codable {
-    var version = 2
+    var version = 3
     var exportedAt: Date
     var history: [HistoryDTO]
     var searches: [SearchDTO]
@@ -34,6 +33,10 @@ struct AtlasBackup: Codable {
 
     struct PlaylistDTO: Codable {
         var name: String, createdAt: Date, videos: [VideoDTO]
+        /// v1/v2 identified playlists only by name. New exports always carry an
+        /// ID so independently created, identically named playlists stay distinct.
+        var id: UUID? = nil
+        var systemKind: String? = nil
 
         struct VideoDTO: Codable {
             var videoID: String, title: String

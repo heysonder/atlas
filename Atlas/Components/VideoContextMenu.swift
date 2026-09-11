@@ -44,7 +44,9 @@ struct VideoContextMenu: ViewModifier {
                         Button("New Playlist…", systemImage: "plus") { creatingNew = true }
                         if !data.playlists.isEmpty { Divider() }
                         ForEach(data.playlists) { playlist in
-                            Button(playlist.name) { add(to: playlist) }
+                            Button(PlaylistStore.displayName(for: playlist, among: data.playlists)) {
+                                add(to: playlist)
+                            }
                         }
                     }
                 }

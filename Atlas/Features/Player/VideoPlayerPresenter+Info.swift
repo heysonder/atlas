@@ -79,6 +79,11 @@ extension VideoPlayerPresenter.Coordinator {
                 self.infoButtonModel.isPaused = player.timeControlStatus == .paused
                 self.chatButtonModel.isPaused = self.infoButtonModel.isPaused
                 self.logTimeControl(player)
+                // A pause is a natural upload boundary for batched progress writes.
+                if player.timeControlStatus == .paused {
+                    let seconds = player.currentTime().seconds
+                    if seconds.isFinite { self.savePosition(seconds, flush: true) }
+                }
             }
         }
     }

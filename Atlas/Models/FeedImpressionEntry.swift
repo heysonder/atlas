@@ -1,12 +1,9 @@
 import Foundation
 import SwiftData
 
-/// Local ranking cache (like `VideoSignalCacheEntry`, not user metadata — never
-/// backed up): how many times a video has appeared on the For You first screen
-/// without being opened. Ranking turns the count into a compounding score
-/// haircut so the feed doesn't greet every open with the same untapped
-/// recommendations. Watching a video removes it from the feed entirely (and
-/// its row here ages out), so there is no explicit reset path.
+/// Derived repetition penalties rebuilt from retained local/synced activity.
+/// This aggregate is not itself synchronized; legacy values migrate once to
+/// separately identified baselines before any events are counted.
 @Model
 final class FeedImpressionEntry {
     @Attribute(.unique) var videoID: String
@@ -22,83 +19,139 @@ final class FeedImpressionEntry {
 
 @MainActor
 enum FeedImpressionStore {
-    /// Counts stop mattering past the penalty cap; not growing them keeps the
-    /// signature of the row stable for videos that linger.
-    private static let maximumCount = 12
-    /// Rows this stale are forgotten — an old impression shouldn't keep
-    /// punishing a video that fell out of the pool months ago.
-    private static let maximumAge: TimeInterval = 45 * 86_400
-    /// Hard cap on the table so it can't grow without bound.
-    private static let maximumRows = 4_000
+    static let maximumCount = 12
+    static let maximumAge: TimeInterval = 45 * 86_400
+    static let maximumRows = 4_000
 
-    /// A tap wipes the video's penalty: it was a good recommendation the user
-    /// acted on, not a stale one. (A finished watch removes it from the feed
-    /// anyway; this covers taps that end in a partial watch.)
     static func recordTap(_ videoID: String, in context: ModelContext?) {
-        guard let context else { return }
-        let descriptor = FetchDescriptor<FeedImpressionEntry>(
-            predicate: #Predicate { $0.videoID == videoID })
-        for entry in (try? context.fetch(descriptor)) ?? [] {
-            context.delete(entry)
-        }
+        RecommendationOutcomeStore.recordTap(videoID, in: context)
     }
 
-    /// Every persisted count, for the ranking pass.
     static func counts(in context: ModelContext?) -> [String: Int] {
         guard let context else { return [:] }
         let entries = (try? context.fetch(FetchDescriptor<FeedImpressionEntry>())) ?? []
         let cutoff = Date().addingTimeInterval(-maximumAge)
-        return entries.reduce(into: [:]) { out, entry in
+        return entries.reduce(into: [:]) { result, entry in
             guard entry.lastShownAt >= cutoff else { return }
-            out[entry.videoID] = entry.count
+            result[entry.videoID] = min(max(0, entry.count), maximumCount)
         }
     }
 
-    /// Record one first-screen appearance for each id (callers dedupe within a
-    /// load, so a coarse render followed by the refine re-render doesn't count
-    /// twice). Prunes expired rows and enforces the table cap in the same pass.
+    /// Featureless impressions still have stable event identity; schema version
+    /// zero marks them as unavailable to a future training pass.
     static func record(_ videoIDs: [String], in context: ModelContext?, now: Date = .now) {
-        guard let context, !videoIDs.isEmpty else { return }
-        var seen = Set<String>()
-        let ids = videoIDs.filter {
-            !$0.isEmpty && $0.utf8.count <= PersistedMetadataPolicy.maximumIdentifierBytes
-                && seen.insert($0).inserted
-        }
-        guard !ids.isEmpty else { return }
+        RecommendationOutcomeStore.record(
+            videoIDs.enumerated().map {
+                .init(
+                    videoID: $0.element, position: $0.offset,
+                    features: RecommendationSyncFeatures.empty.features, featureSchemaVersion: 0)
+            }, in: context, now: now)
+    }
 
-        // In-context fetch-and-delete, not a store-level batch delete: the
-        // table is small (capped below), and a batch delete misses rows still
-        // pending in the context.
-        let staleCutoff = now.addingTimeInterval(-maximumAge)
-        let staleDescriptor = FetchDescriptor<FeedImpressionEntry>(
-            predicate: #Predicate { $0.lastShownAt < staleCutoff })
-        for entry in (try? context.fetch(staleDescriptor)) ?? [] {
-            context.delete(entry)
+    /// Deterministic local projection. Taps reset the video penalty everywhere,
+    /// including earlier independent impressions received from another device.
+    ///
+    /// Passing `videoIDs` recomputes only those videos' rows from their own events and
+    /// baselines (a render or a tap); the global row bound is enforced by the full pass
+    /// that runs after every incoming sync batch and after pruning.
+    static func rebuild(in context: ModelContext, now: Date = .now, videoIDs: Set<String>? = nil) throws {
+        if let videoIDs {
+            try rebuildSubset(videoIDs, in: context, now: now)
+            return
         }
-
-        let descriptor = FetchDescriptor<FeedImpressionEntry>(
-            predicate: #Predicate { ids.contains($0.videoID) })
-        let existing = Dictionary(
-            ((try? context.fetch(descriptor)) ?? []).map { ($0.videoID, $0) },
-            uniquingKeysWith: { first, _ in first })
-        for id in ids {
-            if let entry = existing[id] {
-                entry.count = min(entry.count + 1, maximumCount)
-                entry.lastShownAt = now
-            } else {
-                context.insert(FeedImpressionEntry(videoID: id, lastShownAt: now))
+        let events = try context.fetch(FetchDescriptor<RecommendationOutcomeEntry>())
+        let baselines = try context.fetch(FetchDescriptor<FeedImpressionBaseline>())
+        let values = projectedCounts(events: events, baselines: baselines, now: now)
+        let retainedIDs = Set(
+            values.keys.sorted {
+                let lhs = values[$0]!.shownAt
+                let rhs = values[$1]!.shownAt
+                return lhs == rhs ? $0 < $1 : lhs > rhs
+            }.prefix(maximumRows))
+        let existing = try context.fetch(FetchDescriptor<FeedImpressionEntry>())
+        var remaining = retainedIDs
+        for row in existing {
+            guard retainedIDs.contains(row.videoID), let value = values[row.videoID] else {
+                context.delete(row)
+                continue
             }
+            remaining.remove(row.videoID)
+            if row.count != value.count { row.count = value.count }
+            if row.lastShownAt != value.shownAt { row.lastShownAt = value.shownAt }
         }
+        for id in remaining {
+            guard let value = values[id] else { continue }
+            context.insert(FeedImpressionEntry(videoID: id, count: value.count, lastShownAt: value.shownAt))
+        }
+    }
 
-        if let total = try? context.fetchCount(FetchDescriptor<FeedImpressionEntry>()),
-            total > maximumRows
+    private static func rebuildSubset(_ videoIDs: Set<String>, in context: ModelContext, now: Date) throws {
+        // Expired rows are dropped outright on every pass, exactly as the full rebuild does.
+        let cutoff = now.addingTimeInterval(-maximumAge)
+        for stale in try context.fetch(
+            FetchDescriptor<FeedImpressionEntry>(
+                predicate: #Predicate { $0.lastShownAt < cutoff }))
         {
-            var oldest = FetchDescriptor<FeedImpressionEntry>(
-                sortBy: [SortDescriptor(\.lastShownAt, order: .forward)])
-            oldest.fetchLimit = total - maximumRows
-            for entry in (try? context.fetch(oldest)) ?? [] {
-                context.delete(entry)
-            }
+            context.delete(stale)
         }
+        guard !videoIDs.isEmpty else { return }
+        let ids = Array(videoIDs)
+        let events = try context.fetch(
+            FetchDescriptor<RecommendationOutcomeEntry>(
+                predicate: #Predicate { ids.contains($0.videoID) }))
+        let baselines = try context.fetch(
+            FetchDescriptor<FeedImpressionBaseline>(
+                predicate: #Predicate { ids.contains($0.videoID) }))
+        let values = projectedCounts(events: events, baselines: baselines, now: now)
+        let existing = try context.fetch(
+            FetchDescriptor<FeedImpressionEntry>(
+                predicate: #Predicate { ids.contains($0.videoID) }))
+        var remaining = Set(values.keys)
+        for row in existing {
+            guard let value = values[row.videoID] else {
+                context.delete(row)
+                continue
+            }
+            remaining.remove(row.videoID)
+            if row.count != value.count { row.count = value.count }
+            if row.lastShownAt != value.shownAt { row.lastShownAt = value.shownAt }
+        }
+        for id in remaining {
+            guard let value = values[id] else { continue }
+            context.insert(FeedImpressionEntry(videoID: id, count: value.count, lastShownAt: value.shownAt))
+        }
+    }
+
+    /// Shared projection rule for the full and subset rebuilds.
+    private static func projectedCounts(
+        events: [RecommendationOutcomeEntry], baselines: [FeedImpressionBaseline], now: Date
+    ) -> [String: (count: Int, shownAt: Date)] {
+        let cutoff = now.addingTimeInterval(-maximumAge)
+        var latestTap: [String: Date] = [:]
+        for event in events {
+            guard let tappedAt = event.tappedAt, event.tapped else { continue }
+            latestTap[event.videoID] = max(latestTap[event.videoID] ?? tappedAt, tappedAt)
+        }
+        for reset in baselines where reset.count == 0 {
+            latestTap[reset.videoID] = max(latestTap[reset.videoID] ?? reset.lastShownAt, reset.lastShownAt)
+        }
+        var values: [String: (count: Int, shownAt: Date)] = [:]
+        func add(videoID: String, count: Int, shownAt: Date) {
+            guard shownAt >= cutoff, shownAt <= now.addingTimeInterval(86_400),
+                latestTap[videoID].map({ shownAt > $0 }) ?? true
+            else { return }
+            let previous = values[videoID]
+            values[videoID] = (
+                min((previous?.count ?? 0) + count, maximumCount),
+                max(previous?.shownAt ?? shownAt, shownAt)
+            )
+        }
+        for baseline in baselines where baseline.count > 0 {
+            add(videoID: baseline.videoID, count: baseline.count, shownAt: baseline.lastShownAt)
+        }
+        for event in events where event.contributesToImpressions {
+            add(videoID: event.videoID, count: 1, shownAt: event.shownAt)
+        }
+        return values
     }
 }

@@ -1,6 +1,14 @@
 # Data and Privacy
 
-Atlas is local-first. Piped provides online video metadata and streams, but user library state is stored on device.
+Atlas is local-first. Piped provides online video metadata and streams, and user library state is stored on device. Optional iCloud Sync can merge personal library data and recommendation activity across devices on the same Apple Account.
+
+## Optional iCloud sync
+
+Library → Settings → iCloud Sync is off by default. Enabling it requires a separate consent screen that explains its scope and encryption. Subscriptions, watch/search history, resume positions, playlists/Favorites, feedback, recommendation activity and portable preferences use CloudKit's private database. Every custom cloud value is written through encrypted fields, including identifiers and synchronization metadata. Record names are opaque.
+
+The screen explains that end-to-end encryption of these fields requires Advanced Data Protection, and that Atlas does not verify its status. CloudKit service metadata has different protection. See [Apple's iCloud security guidance](https://support.apple.com/en-us/102651).
+
+Downloads, the Piped instance, network permissions, age decisions, diagnostics and the active player queue stay local. Derived recommendation caches rebuild on device. Turning sync off keeps local and cloud copies; deleting synced content is a separate confirmed action that keeps a minimal encrypted reset marker. Neither setting changes system-managed iCloud Backup. Developer setup and release checks are in [ICLOUD_SYNC_SETUP.md](ICLOUD_SYNC_SETUP.md).
 
 ## Runtime settings
 
@@ -41,7 +49,7 @@ Storage behavior:
 - Mirror valid values back to both stores.
 - Clear invalid stored values only when a stored candidate was actually found and invalid.
 
-Atlas does not include a default Piped instance. Online features throw a missing-instance error until the user configures one.
+Atlas does not include a default Piped instance. Online video features throw a missing-instance error until the user configures one. iCloud library synchronization is independent of Piped instance configuration.
 
 ## SwiftData
 
@@ -99,7 +107,7 @@ The backup includes:
 
 Downloads are intentionally excluded. They are file-backed media and can be re-downloaded.
 
-Import merges into the current store and avoids duplicates by stable keys such as video ID, channel ID, query, playlist name, or feedback video ID.
+Backup v3 includes stable playlist identities and still accepts v1/v2 files. Import merges using stable identifiers; legacy name-only playlists require an unambiguous destination. Accepted imports participate in the durable sync journal. Exported JSON never carries iCloud enrollment, account bindings, engine checkpoints or cloud identity keys, and CloudKit encryption does not encrypt an exported file.
 
 ## Spotlight
 

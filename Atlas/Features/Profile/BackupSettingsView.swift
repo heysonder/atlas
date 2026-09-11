@@ -7,25 +7,38 @@ import UniformTypeIdentifiers
 /// playlists, ratings) to and from a JSON file.
 struct BackupSettingsView: View {
     @Environment(\.modelContext) private var context
+    @Environment(CloudSyncCoordinator.self) private var sync
     @State private var exportFile: ExportFile?
     @State private var importing = false
     @State private var backupResult: String?
+    @State private var confirmingRestore = false
 
     var body: some View {
         Form {
             Section {
                 Button("Export Data…", systemImage: "square.and.arrow.up") { exportData() }
-                Button("Import Data…", systemImage: "square.and.arrow.down") { importing = true }
+                Button("Import Data…", systemImage: "square.and.arrow.down") {
+                    if sync.isEnabled { confirmingRestore = true } else { importing = true }
+                }
             } footer: {
                 Text(
                     "Saves your history, searches, subscriptions, playlists, and Suggest "
-                        + "more / less ratings to a JSON file. Export before changing the "
-                        + "app's bundle identifier, then import into the new install.")
+                        + "more / less ratings to an unencrypted JSON file. iCloud field "
+                        + "encryption does not protect exported files. Keep backups somewhere private. "
+                        + "Imports restore missing items and merge playlist memberships.")
             }
         }
         .navigationTitle("Backup & Data")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $exportFile) { ShareSheet(items: [$0.url]) }
+        .confirmationDialog("Restore a Backup?", isPresented: $confirmingRestore, titleVisibility: .visible) {
+            Button("Choose Backup…") { importing = true }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Importing is an explicit restore. It can recreate previously deleted items, and restored items will sync to your other enrolled devices."
+            )
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url): importData(url)

@@ -44,7 +44,12 @@ final class AppModel {
     /// Which player UI handles `nowPlaying`. Defaults to the native full-screen
     /// player so existing behavior is unchanged.
     var playerStyle: PlayerStyle {
-        didSet { UserDefaults.standard.set(playerStyle.rawValue, forKey: Self.playerStyleKey) }
+        didSet {
+            UserDefaults.standard.set(playerStyle.rawValue, forKey: Self.playerStyleKey)
+            guard oldValue != playerStyle else { return }
+            SyncPreferences.recordAppEdit(
+                app: self, key: Self.playerStyleKey, value: playerStyle.rawValue, previousValue: oldValue.rawValue)
+        }
     }
     static let playerStyleKey = "atlas.playerStyle"
 
@@ -56,13 +61,23 @@ final class AppModel {
 
     /// When on, YouTube Shorts are hidden from the feed, search, and channels.
     var hideShorts: Bool {
-        didSet { UserDefaults.standard.set(hideShorts, forKey: Self.hideShortsKey) }
+        didSet {
+            UserDefaults.standard.set(hideShorts, forKey: Self.hideShortsKey)
+            guard oldValue != hideShorts else { return }
+            SyncPreferences.recordAppEdit(
+                app: self, key: Self.hideShortsKey, value: String(hideShorts), previousValue: String(oldValue))
+        }
     }
     static let hideShortsKey = "atlas.hideShorts"
 
     /// How shown Shorts are arranged in the Home feed (ignored when `hideShorts`).
     var shortsLayout: ShortsLayout {
-        didSet { UserDefaults.standard.set(shortsLayout.rawValue, forKey: Self.shortsLayoutKey) }
+        didSet {
+            UserDefaults.standard.set(shortsLayout.rawValue, forKey: Self.shortsLayoutKey)
+            guard oldValue != shortsLayout else { return }
+            SyncPreferences.recordAppEdit(
+                app: self, key: Self.shortsLayoutKey, value: shortsLayout.rawValue, previousValue: oldValue.rawValue)
+        }
     }
     static let shortsLayoutKey = "atlas.shortsLayout"
 
@@ -76,7 +91,13 @@ final class AppModel {
     /// Master switch for SponsorBlock. On by default; the player shows a "Skip"
     /// button over the video when a segment in an enabled category plays.
     var sponsorBlockEnabled: Bool {
-        didSet { UserDefaults.standard.set(sponsorBlockEnabled, forKey: Self.sponsorBlockKey) }
+        didSet {
+            UserDefaults.standard.set(sponsorBlockEnabled, forKey: Self.sponsorBlockKey)
+            guard oldValue != sponsorBlockEnabled else { return }
+            SyncPreferences.recordAppEdit(
+                app: self, key: Self.sponsorBlockKey, value: String(sponsorBlockEnabled),
+                previousValue: String(oldValue))
+        }
     }
     static let sponsorBlockKey = "atlas.sponsorBlock.enabled"
 
@@ -85,6 +106,12 @@ final class AppModel {
         didSet {
             UserDefaults.standard.set(
                 sponsorCategories.map(\.rawValue), forKey: Self.sponsorCategoriesKey)
+            for category in oldValue.symmetricDifference(sponsorCategories) {
+                SyncPreferences.recordAppEdit(
+                    app: self, key: SyncPreferences.sponsorCategoryPrefix + category.rawValue,
+                    value: String(sponsorCategories.contains(category)),
+                    previousValue: String(oldValue.contains(category)))
+            }
         }
     }
     static let sponsorCategoriesKey = "atlas.sponsorBlock.categories"

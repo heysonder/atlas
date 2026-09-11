@@ -91,7 +91,10 @@ struct HistoryView: View {
             Button("Clear History", role: .destructive) { clearAll() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes every saved watch and resume position from this device.")
+            Text(
+                "This removes your saved watches and resume positions. If iCloud Sync is enabled, "
+                    + "the removal syncs to your other devices. Activity recorded before an offline "
+                    + "device receives this clear may also be removed.")
         }
     }
 
@@ -108,7 +111,7 @@ struct HistoryView: View {
     }
 
     private func clearAll() {
-        PlaybackHistoryStore.remove(history, in: modelContext)
+        PlaybackHistoryStore.clear(in: modelContext)
     }
 }
 

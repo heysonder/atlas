@@ -90,7 +90,13 @@ extension EmbeddedPlayerModel {
         logTimeControl()
         timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
-                self?.logTimeControl()
+                guard let self else { return }
+                self.logTimeControl()
+                // A pause is a natural upload boundary for batched progress writes.
+                if self.player.timeControlStatus == .paused {
+                    let seconds = self.player.currentTime().seconds
+                    if seconds.isFinite { self.savePosition(seconds, flush: true) }
+                }
             }
         }
     }
@@ -103,7 +109,7 @@ extension EmbeddedPlayerModel {
 
     private func playbackEndedNaturally() {
         let seconds = player.currentTime().seconds
-        if seconds.isFinite { savePosition(seconds) }
+        if seconds.isFinite { savePosition(seconds, flush: true) }
         guard let next = app.dequeueNext() else { return }
         advance(to: next)
     }
@@ -111,7 +117,7 @@ extension EmbeddedPlayerModel {
     func playQueued(_ queued: QueuedVideo) {
         guard let next = app.removeFromQueue(queued) else { return }
         let seconds = player.currentTime().seconds
-        if seconds.isFinite { savePosition(seconds) }
+        if seconds.isFinite { savePosition(seconds, flush: true) }
         advance(to: next)
     }
 
@@ -120,7 +126,7 @@ extension EmbeddedPlayerModel {
     func playRelated(_ item: StreamItem) {
         guard let next = PlayRequest(item: item) else { return }
         let seconds = player.currentTime().seconds
-        if seconds.isFinite { savePosition(seconds) }
+        if seconds.isFinite { savePosition(seconds, flush: true) }
         advance(to: next)
     }
 
@@ -135,6 +141,8 @@ extension EmbeddedPlayerModel {
             // in-place reload is the only way to restart it.
             resetForItemReplacement()
             request = next
+            historySession = PlaybackHistoryStore.beginSession(
+                videoID: next.videoID, in: modelContext)
             app.nowPlaying = next
             updateFavoritesCommand(for: next)
             if let local = next.localURL {
@@ -227,20 +235,25 @@ extension EmbeddedPlayerModel {
         player.play()
     }
 
-    func savePosition(_ seconds: Double) {
+    /// `flush` on pause/stop/advance/teardown so the upload is prompt; periodic
+    /// ticks are batched by the sync coordinator.
+    func savePosition(_ seconds: Double, flush: Bool = false) {
         PlaybackHistoryStore.savePosition(
             seconds,
             videoID: request.videoID,
             duration: player.currentItem?.duration.seconds,
+            session: historySession,
+            flush: flush,
             in: modelContext)
     }
 
     func recordHistory(_ detail: VideoDetail) {
-        PlaybackHistoryStore.record(request, detail: detail, in: modelContext)
+        PlaybackHistoryStore.record(
+            request, detail: detail, session: historySession, in: modelContext)
     }
 
     func recordHistoryLocal() {
-        PlaybackHistoryStore.record(request, in: modelContext)
+        PlaybackHistoryStore.record(request, session: historySession, in: modelContext)
     }
 
     // MARK: Subscribe / feedback (shared stores with the full-screen player)

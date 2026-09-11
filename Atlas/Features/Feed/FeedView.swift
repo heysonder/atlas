@@ -20,6 +20,9 @@ struct FeedView: View {
     /// Top For You items from the last successful render. Pull-to-refresh softly
     /// rotates these down so refresh can reveal the next good candidates.
     @State private var lastForYouTopIDs: [String] = []
+    /// IDs of this device's displayed events, never inferred from synced recency.
+    @State private var displayedImpressionEvents: [String: UUID] = [:]
+    @State private var impressionEventGeneration = -1
     /// Subscriptions feed: paginates each channel's uploads (the RSS-backed
     /// `feed/unauthenticated` is empty/15-capped on many instances).
     @State private var subsLoader: SubscriptionFeedLoader?
@@ -66,7 +69,10 @@ struct FeedView: View {
         return app.filteringShorts(unwatched(videos, watchedIDs: ids))
     }
 
-    /// Reload when the mode changes or the subscription set changes.
+    /// Reload when the mode changes or the subscription set changes. Incoming
+    /// sync data reaches the feed through those same signals (the subscription
+    /// query, the cold/seeded key, the watched filter); keying on every applied
+    /// remote record made two devices on For You reload each other indefinitely.
     private var loadKey: String {
         "\(app.instanceGeneration)|\(feedMode.rawValue)|\(subscriptionKey)|\(forYouSignalKey)"
     }
@@ -101,8 +107,8 @@ struct FeedView: View {
                             // A For You tap is the positive training label, and
                             // it clears the video's staleness penalty.
                             if feedMode.isForYou, let id = item.videoID {
-                                FeedImpressionStore.recordTap(id, in: modelContext)
-                                RecommendationOutcomeStore.recordTap(id, in: modelContext)
+                                RecommendationOutcomeStore.recordTap(
+                                    videoID: id, eventID: displayedImpressionEvents[id], in: modelContext)
                             }
                             app.play(item)
                         },
@@ -663,14 +669,21 @@ struct FeedView: View {
                 continue
             }
             newIDs.append(id)
-            if let features = collector.outcomeFeatures[id] {
-                outcomes.append(.init(videoID: id, position: position, features: features))
-            }
+            let features = collector.outcomeFeatures[id]
+            outcomes.append(
+                .init(
+                    videoID: id, position: position,
+                    features: features ?? RecommendationSyncFeatures.empty.features,
+                    featureSchemaVersion: features == nil ? 0 : 1))
         }
         guard !newIDs.isEmpty else { return }
-        collector.recordedImpressionIDs.formUnion(newIDs)
-        FeedImpressionStore.record(newIDs, in: modelContext)
-        RecommendationOutcomeStore.record(outcomes, in: modelContext)
+        let recorded = RecommendationOutcomeStore.record(outcomes, in: modelContext)
+        collector.recordedImpressionIDs.formUnion(recorded.keys)
+        if impressionEventGeneration != loadGeneration {
+            displayedImpressionEvents = [:]
+            impressionEventGeneration = loadGeneration
+        }
+        displayedImpressionEvents.merge(recorded) { _, new in new }
     }
 
     private func cancelForYouSourceTasks() {

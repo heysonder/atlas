@@ -89,6 +89,7 @@ struct ProfileView: View {
                         case .instances: InstancesSettingsView()
                         case .sponsorBlock: SponsorBlockSettingsView()
                         case .backup: BackupSettingsView()
+                        case .iCloudSync: ICloudSyncSettingsView()
                         case .diagnostics: DiagnosticsSettingsView()
                         }
                     }

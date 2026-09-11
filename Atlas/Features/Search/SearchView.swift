@@ -6,7 +6,16 @@ struct SearchView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Query(sort: \SearchEntry.lastSearchedAt, order: .reverse) private var searchHistory: [SearchEntry]
+    /// Only the recent-search projection is loaded; thousands of retained queries
+    /// stay on disk for recommendations and sync.
+    @Query(Self.recentSearches) private var searchHistory: [SearchEntry]
+
+    private static var recentSearches: FetchDescriptor<SearchEntry> {
+        var descriptor = FetchDescriptor<SearchEntry>(
+            sortBy: [SortDescriptor(\SearchEntry.lastSearchedAt, order: .reverse)])
+        descriptor.fetchLimit = SearchHistoryStore.limit
+        return descriptor
+    }
 
     @State private var query = ""
     @State private var phase: LoadPhase<SearchResults> = .idle
@@ -146,7 +155,7 @@ struct SearchView: View {
 
     @ViewBuilder private var searchHistoryList: some View {
         SearchHistoryContent(
-            entries: searchHistory,
+            entries: Array(searchHistory.prefix(SearchHistoryStore.limit)),
             onSelect: selectSearchHistory,
             onDeleteOffsets: deleteSearchHistory,
             onDeleteEntry: deleteSearchHistory,

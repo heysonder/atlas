@@ -28,12 +28,17 @@ struct PlaylistsView: View {
                             NavigationLink {
                                 PlaylistDetailView(playlist: playlist)
                             } label: {
-                                PlaylistRow(playlist: playlist).libraryCard()
+                                PlaylistRow(
+                                    playlist: playlist,
+                                    title: PlaylistStore.displayName(for: playlist, among: playlists)
+                                ).libraryCard()
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
                                 Button(role: .destructive) {
-                                    PlaylistStore.delete(playlist, in: modelContext)
+                                    if !PlaylistStore.delete(playlist, in: modelContext) {
+                                        creationError = "Atlas couldn’t delete that playlist. Please try again."
+                                    }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -46,7 +51,9 @@ struct PlaylistsView: View {
                             NavigationLink {
                                 PlaylistDetailView(playlist: playlist)
                             } label: {
-                                PlaylistRow(playlist: playlist)
+                                PlaylistRow(
+                                    playlist: playlist,
+                                    title: PlaylistStore.displayName(for: playlist, among: playlists))
                             }
                         }
                         .onDelete(perform: delete)
@@ -90,8 +97,8 @@ struct PlaylistsView: View {
     }
 
     private func delete(_ offsets: IndexSet) {
-        for index in offsets {
-            PlaylistStore.delete(playlists[index], in: modelContext)
+        for index in offsets where !PlaylistStore.delete(playlists[index], in: modelContext) {
+            creationError = "Atlas couldn’t delete that playlist. Please try again."
         }
     }
 }
@@ -100,6 +107,7 @@ struct PlaylistsView: View {
 private struct PlaylistRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let playlist: Playlist
+    let title: String
 
     @ViewBuilder
     var body: some View {
@@ -119,7 +127,7 @@ private struct PlaylistRow: View {
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(playlist.name)
+            Text(title)
                 .font(.body.weight(.medium))
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
             Text("\(playlist.videos.count) video\(playlist.videos.count == 1 ? "" : "s")")

@@ -1,6 +1,6 @@
 # Opt-in iCloud sync implementation plan
 
-Status: proposed implementation; no sync is enabled by this document. Based on the current Atlas source and Apple documentation checked September 10, 2026.
+Status: implementation added on the `codex/icloud-sync` worktree branch. Sync remains opt-in. Container provisioning, production schema deployment, and live two-device acceptance are release gates; see [setup and verification](ICLOUD_SYNC_SETUP.md). This design is based on Atlas source and Apple documentation checked September 10, 2026.
 
 Build an explicit CloudKit sync layer around Atlas's existing local SwiftData store. Use the user's private CloudKit database, `CKSyncEngine`, and encrypted CloudKit fields for every application-defined value. Keep local reads, edits, playback, and recommendations available offline. Enabling sync merges the device's library with the same Apple Account's cloud library.
 

@@ -35,6 +35,7 @@ final class Feedback {
 /// Single entry point for reading/writing feedback, so the card menu and the
 /// info sheet stay consistent. `signal` is the desired end state:
 /// +1 / −1 set it, `0` clears it (the toggle-off case).
+@MainActor
 enum FeedbackStore {
     /// The current signal for a video (0 when there's no feedback).
     static func signal(for videoID: String, in context: ModelContext) -> Int {
@@ -57,45 +58,57 @@ enum FeedbackStore {
         _ signal: Int, videoID: String, title: String, uploader: String?,
         category: String?, tags: [String]?, in context: ModelContext
     ) -> Bool {
-        let descriptor = FetchDescriptor<Feedback>(predicate: #Predicate { $0.videoID == videoID })
-        if signal == 0 {
-            guard let matches = try? context.fetch(descriptor) else { return false }
-            if let existing = matches.first { context.delete(existing) }
-            return true
-        }
         do {
-            try PersistedMetadataPolicy.requireIdentifier(videoID, field: "feedback.videoID")
-            guard signal == -1 || signal == 1 else { return false }
-            try PersistedMetadataPolicy.requireText(title, field: "feedback.title")
-            try PersistedMetadataPolicy.requireOptionalText(
-                uploader, field: "feedback.uploader")
-            try PersistedMetadataPolicy.requireOptionalText(
-                category, field: "feedback.category")
-            try PersistedMetadataPolicy.requireTags(tags, field: "feedback.tags")
-        } catch {
-            return false
-        }
-        guard let matches = try? context.fetch(descriptor) else { return false }
-        let existing = matches.first
-        if let existing {
-            existing.signal = signal
-            existing.title = title
-            existing.uploader = uploader
-            if let category { existing.category = category }  // keep richer data once known
-            if let tags { existing.tags = tags }
-            existing.createdAt = .now
-        } else {
-            guard let count = try? context.fetchCount(FetchDescriptor<Feedback>()),
-                count < PersistedMetadataPolicy.maximumFeedback,
-                PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context)
-            else {
-                return false
+            guard signal == -1 || signal == 0 || signal == 1 else { return false }
+            if signal != 0 {
+                try PersistedMetadataPolicy.requireIdentifier(videoID, field: "feedback.videoID")
+                try PersistedMetadataPolicy.requireText(title, field: "feedback.title")
+                try PersistedMetadataPolicy.requireOptionalText(uploader, field: "feedback.uploader")
+                try PersistedMetadataPolicy.requireOptionalText(category, field: "feedback.category")
+                try PersistedMetadataPolicy.requireTags(tags, field: "feedback.tags")
             }
-            context.insert(
-                Feedback(
-                    videoID: videoID, signal: signal, title: title,
-                    uploader: uploader, category: category, tags: tags))
-        }
-        return true
+            let descriptor = FetchDescriptor<Feedback>(predicate: #Predicate { $0.videoID == videoID })
+            let existing = try context.fetch(descriptor).first
+            if signal != 0, existing == nil {
+                guard
+                    try context.fetchCount(FetchDescriptor<Feedback>())
+                        < PersistedMetadataPolicy.maximumFeedback,
+                    PersistedMetadataCapacity.allowsAddingTopLevelRecord(in: context)
+                else { return false }
+            }
+            try LibrarySyncJournal.transaction(in: context, captureChanges: false) {
+                if signal == 0 {
+                    try LibraryDeletionJournal.record(
+                        kind: .feedback, entityID: videoID, in: context)
+                    if let existing { context.delete(existing) }
+                } else if let existing {
+                    existing.signal = signal
+                    existing.title = title
+                    existing.uploader = uploader
+                    if let category { existing.category = category }
+                    if let tags { existing.tags = tags }
+                    existing.createdAt = .now
+                } else {
+                    context.insert(
+                        Feedback(
+                            videoID: videoID, signal: signal, title: title,
+                            uploader: uploader, category: category, tags: tags))
+                }
+                if signal != 0 {
+                    try LibrarySyncJournal.capture(kind: .feedback, entityID: videoID, in: context)
+                }
+            }
+            return true
+        } catch { return false }
+    }
+
+    @discardableResult
+    static func clear(in context: ModelContext) -> Bool {
+        do {
+            try LibrarySyncJournal.transaction(in: context, captureChanges: false) {
+                try LibrarySyncJournal.clear(kind: .feedback, in: context)
+            }
+            return true
+        } catch { return false }
     }
 }

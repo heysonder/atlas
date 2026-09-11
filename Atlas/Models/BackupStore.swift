@@ -57,8 +57,9 @@ enum BackupStore {
         }
     }
 
-    /// Merge a backup into the current store. Existing rows (matched by their unique
-    /// key) are kept as-is, so re-importing is safe and never duplicates.
+    /// Restore missing library rows and merge playlist memberships. v3 playlists
+    /// match stable identities; name-only older backups require an unambiguous
+    /// destination. This is an explicit restore, including when sync is enabled.
     @discardableResult
     static func restore(
         from url: URL,
@@ -121,10 +122,12 @@ enum BackupStore {
                             title: $0.title,
                             uploader: $0.uploader,
                             thumbnailURL: $0.thumbnailURL,
-                            duration: $0.duration,
+                            duration: PersistedMetadataPolicy.sanitizedPlaybackDuration($0.duration),
                             addedAt: $0.addedAt
                         )
-                    }
+                    },
+                    id: playlist.id,
+                    systemKind: playlist.systemKind
                 )
             },
             feedback: feedback.map {

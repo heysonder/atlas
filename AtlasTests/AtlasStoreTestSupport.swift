@@ -6,7 +6,7 @@ import SwiftData
 @MainActor
 func makeTestContainer() throws -> ModelContainer {
     let schema = AtlasModelSchema.schema
-    let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+    let config = AtlasContainerFactory.configuration(schema: schema, inMemory: true)
     return try ModelContainer(for: schema, configurations: [config])
 }
 

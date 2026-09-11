@@ -28,12 +28,16 @@ extension VideoPlayerPresenter.Coordinator {
         }
     }
 
-    func savePosition(_ seconds: Double) {
+    /// `flush` on pause/stop/end/teardown so the upload is prompt; periodic ticks
+    /// are batched by the sync coordinator.
+    func savePosition(_ seconds: Double, flush: Bool = false) {
         guard let id = currentRequest?.videoID else { return }
         PlaybackHistoryStore.savePosition(
             seconds,
             videoID: id,
             duration: player?.currentItem?.duration.seconds,
+            session: historySession,
+            flush: flush,
             in: modelContext)
     }
 
@@ -128,7 +132,7 @@ extension VideoPlayerPresenter.Coordinator {
 
     private func playbackEndedNaturally() {
         if let seconds = player?.currentTime().seconds, seconds.isFinite {
-            savePosition(seconds)
+            savePosition(seconds, flush: true)
         }
         guard let next = app.dequeueNext(),
             let player,
@@ -138,6 +142,8 @@ extension VideoPlayerPresenter.Coordinator {
         resetForItemReplacement(on: player)
         presentedID = next.videoID
         currentRequest = next
+        historySession = PlaybackHistoryStore.beginSession(
+            videoID: next.videoID, in: modelContext)
         app.nowPlaying = next
         updateFavoritesCommand(for: next)
         player.replaceCurrentItem(with: nil)
@@ -252,7 +258,7 @@ extension VideoPlayerPresenter.Coordinator {
         upgradeTask = nil
         if let player {
             let t = player.currentTime().seconds
-            if t.isFinite { savePosition(t) }
+            if t.isFinite { savePosition(t, flush: true) }
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             if let sponsorObserver { player.removeTimeObserver(sponsorObserver) }
             if let infoCommentTimeObserver { player.removeTimeObserver(infoCommentTimeObserver) }
@@ -290,6 +296,7 @@ extension VideoPlayerPresenter.Coordinator {
         playerVC = nil
         presentedID = nil
         currentRequest = nil
+        historySession = nil
         currentDetail = nil
         currentDetailLoadedAt = nil
         currentPipedClient = nil
@@ -314,12 +321,13 @@ extension VideoPlayerPresenter.Coordinator {
     }
 
     func recordHistory(_ detail: VideoDetail, _ request: PlayRequest) {
-        PlaybackHistoryStore.record(request, detail: detail, in: modelContext)
+        PlaybackHistoryStore.record(
+            request, detail: detail, session: historySession, in: modelContext)
     }
 
     /// History for offline playback, where only the request fields are known.
     func recordHistory(_ request: PlayRequest) {
-        PlaybackHistoryStore.record(request, in: modelContext)
+        PlaybackHistoryStore.record(request, session: historySession, in: modelContext)
     }
 
 }

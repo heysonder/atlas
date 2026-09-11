@@ -1,5 +1,6 @@
 import DeclaredAgeRange
 import PipedKit
+import SwiftData
 import SwiftUI
 
 /// Drill-down destinations for the heavier settings groups. Kept value-based so
@@ -10,6 +11,7 @@ enum SettingsRoute: Hashable {
     case instances
     case sponsorBlock
     case backup
+    case iCloudSync
     case diagnostics
 }
 
@@ -21,6 +23,8 @@ struct SettingsView: View {
     private static let showsPlayerOptions = false
 
     @Environment(AppModel.self) private var app
+    @Environment(CloudSyncCoordinator.self) private var sync
+    @Environment(\.modelContext) private var context
     @AppStorage(FeedMode.storageKey) private var feedMode: FeedMode = .subscriptions
     @AppStorage(YouTubeCollaborators.settingKey) private var resolveCollaboratorsViaYouTube = false
     @Environment(\.requestAgeRange) private var requestAgeRange
@@ -71,7 +75,13 @@ struct SettingsView: View {
         @Bindable var app = app
         Form {
             Section {
-                Picker("Feed", selection: $feedMode) {
+                Picker(
+                    "Feed",
+                    selection: Binding(
+                        get: { feedMode },
+                        set: { SyncPreferences.set(key: FeedMode.storageKey, value: $0.rawValue, in: context) }
+                    )
+                ) {
                     ForEach(FeedMode.allCases) { mode in Text(mode.label).tag(mode) }
                 }
             } header: {
@@ -159,6 +169,11 @@ struct SettingsView: View {
                 NavigationLink(value: SettingsRoute.backup) {
                     Label("Backup & Data", systemImage: "externaldrive")
                 }
+                NavigationLink(value: SettingsRoute.iCloudSync) {
+                    settingRow("iCloud Sync", systemImage: "icloud", detail: sync.isEnabled ? "On" : "Off")
+                }
+                .accessibilityLabel("iCloud Sync")
+                .accessibilityValue(sync.statusText)
                 NavigationLink(value: SettingsRoute.diagnostics) {
                     Label("Diagnostics", systemImage: "waveform.path.ecg")
                 }

@@ -4,24 +4,16 @@ import Testing
 @testable import Atlas
 
 @MainActor
-@Test func playlistNamesUseOneCaseInsensitivePersistenceIdentity() throws {
+@Test func localPlaylistCreationRejectsAmbiguousNamesWithoutCollapsingSyncedIdentities() throws {
     let container = try makeTestContainer()
     let context = container.mainContext
     #expect(PlaylistStore.createPlaylist(named: "Watch Later", in: context) != nil)
     #expect(PlaylistStore.createPlaylist(named: " watch later ", in: context) == nil)
 
     context.insert(Playlist(name: "WATCH LATER"))
-    do {
-        _ = try BackupStore.export(from: context)
-        Issue.record("Expected duplicate playlist names to block export")
-    } catch let error as BackupExportError {
-        guard case .duplicateStoredValue(let field) = error else {
-            Issue.record("Unexpected export error: \(error)")
-            return
-        }
-        #expect(field.hasPrefix("playlists["))
-        #expect(field.hasSuffix("].name"))
-    }
+    // Independent synced UUIDs may share a display name and remain exportable.
+    _ = try BackupStore.export(from: context)
+    #expect(PlaylistStore.playlist(named: "Watch Later", in: context) == nil)
 }
 
 @MainActor
@@ -138,3 +130,31 @@ import Testing
 }
 
 private struct ForcedPersistenceFailure: Error {}
+
+@MainActor
+@Test func favoritesReadsNeverMutateALegacyRowAndMutationsAdoptIt() throws {
+    let container = try makeTestContainer()
+    let context = container.mainContext
+    let legacy = Playlist(name: "Favorites")
+    let legacyID = legacy.id
+    context.insert(legacy)
+    let video = PlaylistVideo(videoID: "v1", title: "One")
+    video.playlist = legacy
+    context.insert(video)
+    try context.save()
+
+    // Reads (the player's favorite state, a bound detail view) leave the row alone.
+    #expect(PlaylistStore.isFavorite(videoID: "v1", in: context))
+    #expect(PlaylistStore.favoritesPlaylist(in: context) === legacy)
+    #expect(!legacy.isDeleted)
+    #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 1)
+
+    // A mutation folds it into the canonical Favorites first.
+    #expect(PlaylistStore.addToFavorites(.init(videoID: "v2", title: "Two"), in: context) == .added)
+    let canonical = try #require(PlaylistStore.favoritesPlaylist(in: context))
+    #expect(canonical.id == PlaylistStore.favoritesPlaylistID)
+    #expect(canonical.videos.map(\.videoID).sorted() == ["v1", "v2"])
+    #expect(canonical.legacyIDs?.contains(legacyID) == true)
+    #expect(try context.fetchCount(FetchDescriptor<Playlist>()) == 1)
+    #expect(PlaylistStore.adoptLegacyFavoritesIfNeeded(in: context))
+}

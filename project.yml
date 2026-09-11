@@ -22,13 +22,20 @@ targets:
       properties:
         # Declared Age Range API (SocialFeaturesGate); the capability is on the App ID.
         com.apple.developer.declared-age-range: true
+        com.apple.developer.icloud-container-identifiers: [iCloud.sh.cmf.atlas]
+        com.apple.developer.icloud-services: [CloudKit]
+        com.apple.developer.icloud-container-environment: $(ATLAS_ICLOUD_ENVIRONMENT)
+        # Always "development" in the source entitlements: a development profile
+        # only carries that value, so Release runs on a paired device would fail to
+        # sign otherwise. Xcode rewrites it to production at archive export.
+        aps-environment: development
     info:
       path: Atlas/Resources/Info.plist
       properties:
         CFBundleDisplayName: Atlas
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, remote-notification]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
           NSAllowsLocalNetworking: true
@@ -54,6 +61,11 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     settings:
+      configs:
+        Debug:
+          ATLAS_ICLOUD_ENVIRONMENT: Development
+        Release:
+          ATLAS_ICLOUD_ENVIRONMENT: Production
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.cmf.atlas
         DEVELOPMENT_TEAM: R8VQT6V47K
@@ -88,3 +100,19 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Atlas.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Atlas"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  AtlasUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AtlasUITests
+    dependencies:
+      - target: Atlas
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sh.cmf.atlas.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Atlas
+        DEVELOPMENT_TEAM: R8VQT6V47K
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor

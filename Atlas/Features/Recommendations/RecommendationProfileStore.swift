@@ -5,6 +5,14 @@ import SwiftData
 enum RecommendationProfileStore {
     private static let snapshotID = "default"
 
+    /// Profiles are derived from merged library signals, never copied from a
+    /// different device's ranking cache. The caller owns the save transaction.
+    static func invalidate(in context: ModelContext) throws {
+        for snapshot in try context.fetch(FetchDescriptor<RecommendationProfileSnapshot>()) {
+            context.delete(snapshot)
+        }
+    }
+
     static func loadOrBuild(
         in context: ModelContext,
         history: [HistoryEntry],
