@@ -5,7 +5,9 @@ nonisolated final class ICloudSyncFlowTests: XCTestCase {
     func testConsentExplainsEncryptionBeforeEnablingSync() throws {
         let app = XCUIApplication()
         app.launch()
-        let library = app.tabBars.buttons["Library"]
+        // By label, not `tabBars`: the default Compact Tab Bar is a plain
+        // SwiftUI control, and the system bar's button matches too.
+        let library = app.buttons["Library"].firstMatch
         XCTAssertTrue(library.waitForExistence(timeout: 10))
         library.tap()
         let settings = app.buttons["Settings"].firstMatch
