@@ -19,6 +19,8 @@ struct EmbeddedPlayerControls: View {
     @State private var hideToken = 0
     @State private var skipFlash: SkipFlash?
     @State private var holdingFastForward = false
+    /// Buffering that has lasted long enough to be worth a spinner.
+    @State private var showsBufferingSpinner = false
     /// Drive the rotate symbol effect on the skip glyphs (overlay and bar).
     @State private var backSkips = 0
     @State private var forwardSkips = 0
@@ -270,22 +272,38 @@ struct EmbeddedPlayerControls: View {
             hideToken += 1
         } label: {
             ZStack {
-                if state.isBuffering {
+                // Always mounted, so the glyph swap runs as a symbol replace
+                // instead of a remove/insert fade.
+                Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: isFullscreen ? 44 : 36, weight: .semibold))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .controlShadow()
+                    .opacity(showsBufferingSpinner ? 0 : 1)
+                if showsBufferingSpinner {
                     ProgressView()
                         .controlSize(.large)
                         .tint(.white)
-                } else {
-                    Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: isFullscreen ? 44 : 36, weight: .semibold))
-                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-                        .controlShadow()
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: state.isPlaying)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showsBufferingSpinner)
             .frame(width: 72, height: 72)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(state.isPlaying ? "Pause" : "Play")
+        // Only a sustained wait shows the spinner. AVPlayer reports a brief
+        // "waiting" on every play() while it evaluates buffering; swapping
+        // the glyph for a spinner during that flash made resuming stutter.
+        .task(id: state.isBuffering) {
+            guard state.isBuffering else {
+                showsBufferingSpinner = false
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            showsBufferingSpinner = true
+        }
     }
 
     private var bottomBar: some View {
