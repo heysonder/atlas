@@ -7,8 +7,6 @@ import SwiftUI
 /// (`VideoPlayerPresenter`) is untouched and remains the default.
 struct EmbeddedPlayerView: View {
     @State private var model: EmbeddedPlayerModel
-    /// Live offset of the swipe-down-to-dismiss drag on the video area.
-    @State private var dragOffset: CGFloat = 0
     /// Set by the full-screen button; rotating to landscape also fills the
     /// screen without this (see `isFullscreen`).
     @State private var fullscreenRequested = false
@@ -60,27 +58,23 @@ struct EmbeddedPlayerView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isFullscreen {
-                    fullscreenLayout
-                } else {
-                    inlineLayout
+            layout
+                // No navigation bar on the root: the video pins to the top of the
+                // safe area instead of sitting under a mostly-empty bar. Pushed
+                // destinations (channel pages) still get their own bar.
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: String.self) { id in
+                    ChannelDetailView(channelID: id)
                 }
-            }
-            // No navigation bar on the root: the video pins to the top of the
-            // safe area instead of sitting under a mostly-empty bar. Pushed
-            // destinations (channel pages) still get their own bar.
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: String.self) { id in
-                ChannelDetailView(channelID: id)
-            }
         }
         .onGeometryChange(for: CGSize.self) {
             $0.size
         } action: {
             containerSize = $0
         }
-        .offset(y: dragOffset)
+        // The swipe-down offset lives in this modifier, not in this view's
+        // state, so dragging doesn't rebuild the player and watch page.
+        .embeddedDismissOffset()
         .statusBarHidden(isFullscreen)
         .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: isFullscreen)
@@ -128,45 +122,58 @@ struct EmbeddedPlayerView: View {
         }
     }
 
-    // MARK: Layouts
+    // MARK: Layout
 
-    private var inlineLayout: some View {
-        let rounded = app.embeddedRoundedCorners
+    /// One tree for both inline and full screen, with the video's frame
+    /// driven by `isFullscreen` rather than two layouts swapped in an
+    /// `if`: swapping re-parented the single player layer and, mid-rotation,
+    /// cross-faded the inline page laid out at landscape width over the
+    /// full-screen video. Here the same view animates its frame and only the
+    /// page beneath comes and goes.
+    private var layout: some View {
+        let rounded = !isFullscreen && app.embeddedRoundedCorners
         let shape = RoundedRectangle(cornerRadius: rounded ? Self.cardCornerRadius : 0, style: .continuous)
-        return VStack(spacing: 0) {
-            videoArea(fillsScreen: false)
-                .aspectRatio(inlineAspectRatio, contentMode: .fit)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: inlineAspectRatio)
-                .frame(maxWidth: .infinity)
-                .clipShape(shape)
-                // Wins the height negotiation against the scroll view below,
-                // so the video doesn't resize as the page's content changes.
-                .layoutPriority(1)
-                .simultaneousGesture(dismissDrag)
-                // Same lift as the feed's thumbnail cards. The shadow sits on
-                // a background shape: the video itself is a UIKit layer, which
-                // SwiftUI's shadow can't trace.
-                .background {
-                    // Page-coloured so nothing shows at the corners; only
-                    // the shadows it casts are visible: the card's crisp one
-                    // plus a wider, very faint blur beneath the video.
-                    shape
-                        .fill(Color(.systemBackground))
-                        .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
-                        .shadow(color: .black.opacity(0.07), radius: 18, x: 0, y: 8)
+        return ZStack {
+            if isFullscreen {
+                Color.black.ignoresSafeArea()
+            }
+            VStack(spacing: 0) {
+                videoArea(fillsScreen: isFullscreen)
+                    // Full screen: the window's own shape, so the surface
+                    // fills it; inline: the video's.
+                    .aspectRatio(isFullscreen ? containerAspectRatio : inlineAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(shape)
+                    // Wins the height negotiation against the scroll view
+                    // below, so the video doesn't resize as the page's
+                    // content changes.
+                    .layoutPriority(1)
+                    .embeddedDismissDrag(enabled: !isFullscreen, model: model, onDismiss: closePlayer)
+                    // Same lift as the feed's thumbnail cards. The shadow sits
+                    // on a background shape: the video itself is a UIKit
+                    // layer, which SwiftUI's shadow can't trace.
+                    .background {
+                        // Page-coloured so nothing shows at the corners; only
+                        // the shadows it casts are visible: the card's crisp
+                        // one plus a wider, very faint blur beneath the video.
+                        shape
+                            .fill(Color(.systemBackground))
+                            .shadow(color: .black.opacity(rounded ? 0.16 : 0), radius: 5, x: 0, y: 2)
+                            .shadow(color: .black.opacity(rounded ? 0.07 : 0), radius: 18, x: 0, y: 8)
+                    }
+                    .padding(.horizontal, rounded ? Self.cardInset : 0)
+                    .padding(.top, rounded ? 8 : 0)
+                    .zIndex(1)
+                if !isFullscreen {
+                    infoArea
                 }
-                .padding(.horizontal, rounded ? Self.cardInset : 0)
-                .padding(.top, rounded ? 8 : 0)
-                .zIndex(1)
-            infoArea
+            }
         }
     }
 
-    private var fullscreenLayout: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            videoArea(fillsScreen: true)
-        }
+    private var containerAspectRatio: Double {
+        guard containerSize.width > 0, containerSize.height > 0 else { return 16.0 / 9.0 }
+        return containerSize.width / containerSize.height
     }
 
     // MARK: Video
@@ -196,10 +203,10 @@ struct EmbeddedPlayerView: View {
                     onToggleFullscreen: toggleFullscreen)
                 // SponsorBlock's Skip pill, above the transport bar's trailing
                 // end; it stays up whether or not the controls are showing.
-                SkipSponsorButton(model: model.sponsorModel)
+                EmbeddedSkipSponsorButton(model: model.sponsorModel)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(.trailing, fillsScreen ? 20 : 12)
-                    .padding(.bottom, fillsScreen ? 64 : 52)
+                    .padding(.bottom, fillsScreen ? 60 : 48)
             }
 
             if app.statsForNerdsEnabled {
@@ -259,32 +266,6 @@ struct EmbeddedPlayerView: View {
         } else {
             lock.unlock(rotatingTo: .portrait)
         }
-    }
-
-    /// Drag the video down to dismiss the player, YouTube-style. Attached with
-    /// `simultaneousGesture` and a 20pt threshold so the controls keep working;
-    /// only predominantly vertical drags move the view, and never while the
-    /// scrubber is being dragged.
-    private var dismissDrag: some Gesture {
-        DragGesture(minimumDistance: 20)
-            .onChanged { value in
-                guard !model.playbackState.isScrubbing else { return }
-                let dy = value.translation.height
-                guard dy > 0, dy > abs(value.translation.width) else { return }
-                dragOffset = dy
-            }
-            .onEnded { value in
-                guard dragOffset > 0 else { return }
-                if value.translation.height > 140
-                    || value.predictedEndTranslation.height > 320
-                {
-                    closePlayer()
-                } else if reduceMotion {
-                    dragOffset = 0
-                } else {
-                    withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
-                }
-            }
     }
 
     // MARK: Info
