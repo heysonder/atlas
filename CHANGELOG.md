@@ -30,11 +30,10 @@ Atlas has not published a tagged release yet.
   from live through stalls. SponsorBlock's Skip pill works here too
   (`EmbeddedPlayerModel+SponsorBlock`), and a subtitles menu in the top
   bar lists the item's caption tracks with Off as the default
-  (`EmbeddedPlayerModel+Captions`). In full screen, a video within
-  10% of the screen's shape fills it (a 2:1 upload on a 19.5:9 phone loses
-  ~4% top and bottom rather than showing pillar bars) and anything further
-  off letterboxes; pinch out or in overrides for the rest of the video.
-  Inline, the box takes the decoded item's own aspect ratio once known.
+  (`EmbeddedPlayerModel+Captions`). In full screen the video is
+  letterboxed; pinch out crops it to the screen and pinch in letterboxes
+  it again, remembered for the rest of that video. Inline, the box takes
+  the decoded item's own aspect ratio once known.
   The full-screen player is unchanged.
   `Atlas/Features/Player/Embedded/`.
 - **Embedded watch page.** Beneath the video: `EmbeddedTitleBlock` (title,

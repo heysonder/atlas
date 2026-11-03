@@ -102,11 +102,14 @@ struct EmbeddedPlayerView: View {
             // player; the button state would otherwise pin it there.
             if old == .compact, new == .regular { fullscreenRequested = false }
         }
-        // Fill vs. letterbox is decided from the window's and the video's
-        // shapes, both of which can arrive after full screen begins.
-        .onChange(of: isFullscreen) { _, _ in refreshFullscreenFill() }
-        .onChange(of: containerSize) { _, _ in refreshFullscreenFill() }
-        .onChange(of: model.playbackState.videoSize) { _, _ in refreshFullscreenFill() }
+        .onChange(of: isFullscreen) { _, fullscreen in
+            // Pinch-to-fill is a full-screen choice; inline always letterboxes.
+            if fullscreen {
+                model.applyFullscreenFill()
+            } else {
+                model.setVideoFillsScreen(false)
+            }
+        }
         .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             // Once the phone is physically upright again the portrait lock
@@ -236,14 +239,6 @@ struct EmbeddedPlayerView: View {
     private func closePlayer() {
         model.handOffToPictureInPicture()
         dismiss()
-    }
-
-    private func refreshFullscreenFill() {
-        if isFullscreen {
-            model.applyFullscreenFill(containerSize: containerSize)
-        } else {
-            model.setVideoFillsScreen(false)
-        }
     }
 
     /// iPhone only: iPad keeps its current orientation (multitasking ignores
