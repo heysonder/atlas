@@ -28,7 +28,9 @@ Atlas has not published a tagged release yet.
   at the live edge, scrub across their DVR window, show a LIVE badge that
   dims behind the edge and jumps back when tapped, and keep their offset
   from live through stalls. SponsorBlock's Skip pill works here too
-  (`EmbeddedPlayerModel+SponsorBlock`). In full screen, a video within
+  (`EmbeddedPlayerModel+SponsorBlock`), and a subtitles menu in the top
+  bar lists the item's caption tracks with Off as the default
+  (`EmbeddedPlayerModel+Captions`). In full screen, a video within
   10% of the screen's shape fills it (a 2:1 upload on a 19.5:9 phone loses
   ~4% top and bottom rather than showing pillar bars) and anything further
   off letterboxes; pinch out or in overrides for the rest of the video.
@@ -226,9 +228,11 @@ Atlas has not published a tagged release yet.
   gets a fresh view and model.
 - **Live streams don't resume from a saved position.** A saved position
   landed somewhere arbitrary inside the DVR window. Resume is skipped when
-  the detail says live or the loaded asset reports an indefinite duration,
-  and stall fallback or quality upgrade on a live item rejoins at the live
-  edge instead of seeking to the failed item's clock.
+  the stream is live right now (`isCurrentlyLive`, not Piped's raw
+  `livestream` flag, which archived broadcasts keep) or the loaded asset
+  reports an indefinite duration, and stall fallback or quality upgrade on
+  a live item rejoins at the live edge instead of seeking to the failed
+  item's clock.
 - **Lock-screen position after a seek.** Now Playing's elapsed time is
   refreshed when a seek completes rather than drifting until the next
   play/pause.

@@ -174,7 +174,10 @@ struct EmbeddedPlayerView: View {
         ZStack {
             EmbeddedPlayerSurface(
                 layerView: model.layerView,
-                onPiPController: { [model] in model.adoptPiPController($0) }
+                // Weak: the layer view stores this closure and the model owns
+                // the layer view, so a strong capture would never release
+                // the model, player, or layer after the cover closes.
+                onPiPController: { [weak model] in model?.adoptPiPController($0) }
             )
             .ignoresSafeArea(edges: fillsScreen ? .all : [])
 
