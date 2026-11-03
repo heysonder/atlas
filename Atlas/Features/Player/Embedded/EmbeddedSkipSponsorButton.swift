@@ -12,10 +12,10 @@ struct EmbeddedSkipSponsorButton: View {
             if let prompt = model.prompt {
                 Button(action: model.onSkip) {
                     Label("Skip \(prompt.noun)", systemImage: "forward.end.fill")
-                        .font(.footnote.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
                         .background(.black.opacity(0.55), in: Capsule())
                         .contentShape(Capsule())
                 }
