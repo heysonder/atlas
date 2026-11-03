@@ -195,15 +195,26 @@ extension EmbeddedPlayerModel {
     func pipDidStop() {
         playbackState.isPiPActive = false
         setPiPActive(false)
-        Self.pipRetainer = nil
+        // Only drop the retainer if it's still us: another video may have
+        // started its own PiP in the meantime.
+        if Self.pipRetainer === self { Self.pipRetainer = nil }
     }
 
-    /// PiP's "return to app" button. Re-presents the embedded cover for this
-    /// request — `EmbeddedPlayerView` adopts this model (and its running
-    /// player) instead of starting over — then tells AVKit the UI is back.
+    /// AVKit asks for the interface back whenever PiP stops other than by
+    /// its ✕: the user's "return to app", or `stopPictureInPicture()` called
+    /// because a different video is taking the player. Only the first
+    /// re-presents this cover (`EmbeddedPlayerView` adopts this model and its
+    /// running player instead of starting over). In the second case the new
+    /// video's cover is already up and must be left alone; re-presenting this
+    /// one re-keyed the cover back to the old video and the new one never
+    /// started.
     func restoreInterfaceFromPiP(completion: @escaping @Sendable (Bool) -> Void) {
+        if let current = app.nowPlaying, current.videoID != request.videoID {
+            completion(true)
+            return
+        }
         cancelDeferredTeardown()
-        if app.nowPlaying?.videoID != request.videoID || app.playerStyle != .embedded {
+        if app.nowPlaying == nil || app.playerStyle != .embedded {
             app.playerStyle = .embedded
             app.nowPlaying = request
         }
