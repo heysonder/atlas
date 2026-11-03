@@ -30,7 +30,6 @@ struct ContinueWatchingShelf: View {
 }
 
 private struct ContinueWatchingCard: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let entry: HistoryEntry
     let onPlay: () -> Void
 
@@ -65,11 +64,8 @@ private struct ContinueWatchingCard: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .imageEdge(RoundedRectangle(cornerRadius: 12, style: .continuous), url: entry.thumbnailURL)
-                Text(entry.title)
+                MarqueeTitle(entry.title)
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
                 Text(remainingText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
