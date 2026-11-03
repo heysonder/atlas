@@ -85,6 +85,9 @@ final class EmbeddedPlayerModel {
     private var teardownDeferredForPiP = false
     var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
+    /// A pinch in full screen fixes fill vs. letterbox for the rest of the
+    /// video; `nil` leaves it to `applyFullscreenFill`.
+    @ObservationIgnored var fullscreenFillChoice: Bool?
     /// SponsorBlock (see `EmbeddedPlayerModel+SponsorBlock`).
     let sponsorModel = SponsorSkipModel()
     @ObservationIgnored var sponsorSegments: [SponsorSegment] = []

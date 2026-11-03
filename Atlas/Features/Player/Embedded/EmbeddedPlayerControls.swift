@@ -74,9 +74,9 @@ struct EmbeddedPlayerControls: View {
             .onEnded { value in
                 guard isFullscreen else { return }
                 if value.magnification > 1.1 {
-                    model.setVideoFillsScreen(true)
+                    model.chooseVideoFill(true)
                 } else if value.magnification < 0.9 {
-                    model.setVideoFillsScreen(false)
+                    model.chooseVideoFill(false)
                 }
             }
     }

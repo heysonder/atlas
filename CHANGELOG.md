@@ -28,10 +28,12 @@ Atlas has not published a tagged release yet.
   at the live edge, scrub across their DVR window, show a LIVE badge that
   dims behind the edge and jumps back when tapped, and keep their offset
   from live through stalls. SponsorBlock's Skip pill works here too
-  (`EmbeddedPlayerModel+SponsorBlock`). In full screen, pinch out crops
-  the video to the screen and pinch in letterboxes it again; inline, the
-  box takes the decoded item's own aspect ratio rather than trusting the
-  first stream Piped lists. The full-screen player is unchanged.
+  (`EmbeddedPlayerModel+SponsorBlock`). In full screen, a video within
+  10% of the screen's shape fills it (a 2:1 upload on a 19.5:9 phone loses
+  ~4% top and bottom rather than showing pillar bars) and anything further
+  off letterboxes; pinch out or in overrides for the rest of the video.
+  Inline, the box takes the decoded item's own aspect ratio once known.
+  The full-screen player is unchanged.
   `Atlas/Features/Player/Embedded/`.
 - **Embedded watch page.** Beneath the video: `EmbeddedTitleBlock` (title,
   views/age or live meta line, collapsible description with tappable
