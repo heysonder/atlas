@@ -31,6 +31,10 @@ final class EmbeddedPlaybackState {
     var videoSize: CGSize = .zero
     /// Full screen only: the layer crops to fill instead of letterboxing.
     var videoFillsScreen = false
+    /// The current item's subtitle tracks; empty when it has none.
+    var captionOptions: [EmbeddedCaptionOption] = []
+    /// `nil` is off, which is also the default for every new item.
+    var selectedCaptionID: Int?
 
     var hasDuration: Bool { duration.isFinite && duration > 0 }
     var hasSeekableWindow: Bool { seekableEnd - seekableStart > 1 }

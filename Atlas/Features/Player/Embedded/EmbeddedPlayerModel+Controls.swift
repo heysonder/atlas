@@ -113,11 +113,13 @@ extension EmbeddedPlayerModel {
     func installControls() {
         playbackState.attach(to: player)
         nowPlaying.attach(to: player, model: self)
+        installCaptionTracking()
     }
 
     func removeControls() {
         playbackState.detach()
         nowPlaying.detach()
+        removeCaptionTracking()
     }
 
     // MARK: Full-screen fill

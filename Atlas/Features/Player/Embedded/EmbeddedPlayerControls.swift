@@ -257,6 +257,9 @@ struct EmbeddedPlayerControls: View {
                     .padding(.leading, 4)
             }
             Spacer(minLength: 8)
+            if !state.captionOptions.isEmpty {
+                captionsMenu
+            }
             if state.isPiPPossible {
                 EmbeddedControlButton(
                     state.isPiPActive ? "pip.exit" : "pip.enter",
@@ -265,6 +268,35 @@ struct EmbeddedPlayerControls: View {
                     model.togglePictureInPicture()
                 }
             }
+        }
+    }
+
+    /// The item's subtitle tracks plus Off, as the native player's menu has.
+    private var captionsMenu: some View {
+        Menu {
+            Picker("Subtitles", selection: captionSelection) {
+                Text("Off").tag(Int?.none)
+                ForEach(state.captionOptions) { option in
+                    Text(option.title).tag(Optional(option.id))
+                }
+            }
+        } label: {
+            Image(systemName: state.selectedCaptionID == nil ? "captions.bubble" : "captions.bubble.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .controlShadow()
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Subtitles")
+    }
+
+    private var captionSelection: Binding<Int?> {
+        Binding {
+            state.selectedCaptionID
+        } set: { id in
+            model.selectCaption(state.captionOptions.first { $0.id == id })
+            hideToken += 1
         }
     }
 

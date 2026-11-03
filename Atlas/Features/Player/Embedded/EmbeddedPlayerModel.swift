@@ -88,6 +88,9 @@ final class EmbeddedPlayerModel {
     /// A pinch in full screen fixes fill vs. letterbox for the rest of the
     /// video; `nil` leaves it to `applyFullscreenFill`.
     @ObservationIgnored var fullscreenFillChoice: Bool?
+    /// Subtitle tracks (see `EmbeddedPlayerModel+Captions`).
+    @ObservationIgnored var captionItemObservation: NSKeyValueObservation?
+    @ObservationIgnored var captionLoadTask: Task<Void, Never>?
     /// SponsorBlock (see `EmbeddedPlayerModel+SponsorBlock`).
     let sponsorModel = SponsorSkipModel()
     @ObservationIgnored var sponsorSegments: [SponsorSegment] = []
@@ -159,7 +162,7 @@ final class EmbeddedPlayerModel {
             let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
             initialItem.externalMetadata = baseMetadata
             playbackState.isLive = detail.isCurrentlyLive
-            Self.configureLiveEdge(initialItem, live: detail.livestream == true)
+            Self.configureLiveEdge(initialItem, live: detail.isCurrentlyLive)
             player.replaceCurrentItem(with: initialItem)
             PlayerCaptionSelection.keepOffByDefault(for: initialItem)
             installEndObserver(for: initialItem)
@@ -207,7 +210,7 @@ final class EmbeddedPlayerModel {
                 artist: detail.uploader ?? request.uploader,
                 artworkURL: detail.thumbnailURL ?? request.thumbnail,
                 client: httpClient,
-                isLive: detail.livestream == true)
+                isLive: detail.isCurrentlyLive)
             // A start that never becomes playback (buffering that never
             // completes) fires no stall notification and no failure, so
             // watch for it explicitly.
@@ -247,7 +250,7 @@ final class EmbeddedPlayerModel {
     /// indefinite duration once loaded (an HLS live playlist). Loading the
     /// duration waits on the same manifest fetch playback needs anyway.
     private func isResumable(_ item: AVPlayerItem, detail: VideoDetail) async -> Bool {
-        if detail.livestream == true {
+        if detail.isCurrentlyLive {
             playbackState.isLive = true
             PlaybackDiagnostics.message("resume-skipped-live-flag", videoID: request.videoID)
             return false
