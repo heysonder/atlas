@@ -31,7 +31,11 @@ Important keys:
 - `atlas.hideShorts` - Hide Shorts toggle.
 - `atlas.shortsLayout` - Home Shorts layout.
 - `atlas.playerStyle` - fullscreen or embedded player.
+- `atlas.player.embedded.roundedCorners` - inset, rounded embedded video.
+- `atlas.player.embedded.hidesRelated` - hide related videos on the embedded watch page.
 - `atlas.player.statsForNerds` - diagnostics overlay.
+- `atlas.compactTabBar` - compact glass tab bar instead of the system bar (default on).
+- `atlas.scrollingTitles` - single-line scrolling titles instead of a two-line wrap (default on).
 - `atlas.sponsorBlock.enabled` - SponsorBlock master switch.
 - `atlas.sponsorBlock.categories` - enabled SponsorBlock categories.
 - `atlas.collaborators.resolveViaYouTube` - direct YouTube collaborator lookup opt-in.

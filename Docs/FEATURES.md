@@ -2,6 +2,13 @@
 
 Atlas is organized around three tabs: Home, Library, and Search. Most online features require a configured Piped API instance. Local library features such as history, playlists, and completed downloads use SwiftData and local files.
 
+## Tab bar and titles
+
+Two display options live in Library -> Settings -> Content and default to on:
+
+- Compact Tab Bar replaces the system tab bar with a slim clear-glass pill (`CompactTabBar`) holding Home, Library, and Search. It slides away while the keyboard is up. With it on, Search hosts its field in the navigation bar drawer instead of a system search tab. Off restores the standard tab bar and search tab.
+- Scrolling Titles renders video titles on a single line that pauses, then loops like the Now Playing title (`MarqueeTitle`). Off restores the two-line wrap. Titles stay still under Reduce Motion and VoiceOver, while off-screen, and while the scene is inactive. Feed rows, Shorts posters, Continue Watching, Downloads, Playlists, History, and the player queue use it.
+
 ## Optional iCloud sync
 
 Library → Settings → iCloud Sync offers an explicit merge of subscriptions, watch and search history, playback progress, playlists and Favorites, recommendation feedback and activity, and portable display/playback preferences. Sync is off by default; the local library works offline. Downloads, Piped instances, privacy permissions, diagnostics, and the current player queue stay on the device.
@@ -48,7 +55,7 @@ Search supports:
 
 Successful searches are recorded locally and become signals for the personalized For You feed. Failed searches are not recorded.
 
-Re-tapping the Search tab clears the current field and refocuses search input.
+Re-tapping the Search tab pops any pushed channel page and refocuses the search field. The current query and results are kept; the field's clear button starts over.
 
 ## Channels
 
@@ -62,27 +69,46 @@ The subscribe button writes a `SubscribedChannel` row locally. There is no Piped
 
 ## Player
 
-Playback has two user-selectable styles:
+Playback has two user-selectable styles, chosen in Library -> Settings -> Playback -> Player:
 
 - Fullscreen - the default native `AVPlayerViewController` flow.
-- Embedded - an inline video at the top of a scrolling info page.
+- Embedded - a video surface pinned to the top of the screen with the watch page scrolling beneath it.
 
 Both player styles support:
 
 - Streaming through the selected Piped instance.
 - Offline playback for completed downloads.
-- Resume from saved watch position.
+- Resume from saved watch position (skipped for live streams).
 - Progress tracking into History.
-- AVKit system controls, Picture in Picture, AirPlay, and background audio.
+- Picture in Picture, AirPlay, background audio, and Lock Screen / Control Center controls.
 - Queue advancement.
 - Captions kept off by default.
 - Preferred audio-track selection.
 - Runtime fallback when a selected stream fails.
 - Optional Stats for Nerds diagnostics.
 
-The fullscreen player adds an Info button over the video. The Info sheet shows title, creator row, subscribe, playlist actions, feedback where applicable, description, comments, chapters, and queue.
+The fullscreen player uses AVKit's own controls and adds an Info button over the video. The Info sheet shows title, creator row, subscribe, playlist actions, feedback where applicable, description, comments, chapters, and queue.
 
-The embedded player shows the same info content below the inline player. Comments are expanded in place rather than pushed to a separate comments page.
+The embedded player draws its own controls over a bare `AVPlayerLayer`:
+
+- Tap to show or hide the controls; they auto-hide while playing.
+- Double-tap the left or right half to skip 10 seconds; press and hold to play at 2× until release.
+- Centre play/pause with a buffering spinner, and ±10s buttons.
+- A scrubber with a buffered band and chapter markers; the chapter under the finger is named while dragging.
+- A full-screen button. On iPhone it rotates to landscape, and rotating the device also enters or leaves full screen. iPad fills the window without rotating.
+- Picture in Picture from a button over the video. PiP keeps playing after the player is closed, and Return to App reopens the same video without reloading.
+- Live streams open at the live edge, scrub across the DVR window, and show a LIVE badge that dims when behind the edge and jumps back to live when tapped.
+- Swipe down on the video, or tap the chevron, to leave. A playing video continues in Picture in Picture over the screen the player was opened from, and PiP's return button brings the embedded player back; a paused video simply closes.
+
+Beneath the embedded video (`EmbeddedWatchPage`):
+
+- Title, views and age (or live viewers and start time), and a collapsible description with tappable timestamps and chapters.
+- The channel row with avatar cluster, a glass subscribe button, and a "…" menu for Suggest More / Suggest Less and playlists.
+- A comments card showing the timestamp-matched, pinned, or first comment; tapping slides the full comment list up over the page.
+- A live chat card on live streams that opens the transcript the same way; instances without chat fall back to the comments card.
+- The upcoming queue and related videos, shown as the Home feed's cards.
+
+Two options apply only to the embedded player: Rounded Corners insets the video like a feed card, and Hide Related Videos removes the related list.
 
 ## Info Sheet
 
@@ -173,8 +199,10 @@ Settings include:
 - Home feed mode.
 - Hide Shorts.
 - Shorts layout.
+- Scrolling Titles.
+- Compact Tab Bar.
 - Resolve collaborators via YouTube.
-- Player style.
+- Player style, with Rounded Corners and Hide Related Videos for the embedded player.
 - Stats for Nerds.
 - Piped instance.
 - SponsorBlock.

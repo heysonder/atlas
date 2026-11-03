@@ -45,6 +45,8 @@ If the persistent SwiftData store cannot open, Atlas creates a temporary in-memo
 - Library -> `ProfileView`.
 - Search -> `SearchView`.
 
+With Compact Tab Bar on (the default), the system tab bar is hidden on every tab and `CompactTabBar` is drawn as a bottom safe-area inset; it hides while the keyboard is up. Off, the standard `TabView` bar and search-role tab are used.
+
 It also attaches the selected player surface:
 
 - Fullscreen style uses `VideoPlayerPresenter` in the background.
@@ -61,8 +63,9 @@ It owns:
 - `instanceURLString` for the selected Piped API instance.
 - `nowPlaying` for the current `PlayRequest`.
 - `queuedVideos` for the transient playback queue.
-- `playerStyle`.
+- `playerStyle`, `embeddedRoundedCorners`, and `embeddedHidesRelated`.
 - `statsForNerdsEnabled`.
+- `compactTabBarEnabled` and `scrollingTitlesEnabled`.
 - `hideShorts`.
 - `shortsLayout`.
 - SponsorBlock settings.
@@ -130,7 +133,7 @@ The app imports `PipedKit` for network models and client calls, but playback-spe
 - `Feed` - Home feed loading, personalization entrypoint, subscriptions aggregation.
 - `Search` - search UI, suggestions, pagination, search history.
 - `Channels` - channel list and detail pages.
-- `Player` - fullscreen and embedded players, stream builder, info sheet, comments, SponsorBlock, captions, diagnostics.
+- `Player` - fullscreen player, stream builder, info sheet, comments, SponsorBlock, captions, diagnostics. `Player/Embedded/` holds the embedded player: its model, playback state, custom controls, Now Playing publisher, and watch page.
 - `Downloads` - offline media storage and UI.
 - `Playlists` - local playlist management.
 - `Profile` - Library, settings, instance, backup, SponsorBlock, history.
@@ -148,6 +151,7 @@ The app imports `PipedKit` for network models and client calls, but playback-spe
 - Creator controls.
 - Layout helpers.
 - Error and empty states.
+- The compact tab bar and the scrolling title.
 
 `Atlas/Support/` contains non-UI or lightly UI-adjacent helpers:
 
@@ -155,6 +159,7 @@ The app imports `PipedKit` for network models and client calls, but playback-spe
 - Load phases.
 - Thumbnail prefetching.
 - Optional collaborator lookup.
+- The interface orientation lock used by the embedded player's full-screen toggle.
 
 ## Generated project rule
 

@@ -23,7 +23,7 @@ Atlas is a native iOS YouTube client built on Piped. This docs folder explains w
 - Platform: iOS 26, Swift 6, SwiftUI, SwiftData, AVKit.
 - Project generator: XcodeGen. `project.yml` is the source of truth.
 - App target: `Atlas`.
-- Test target: `AtlasTests`.
+- Test targets: `AtlasTests` (unit) and `AtlasUITests` (UI).
 - Local package: `PipedKit`.
 - Bundle identifier: `sh.cmf.atlas`.
 - Runtime requirement: the user must configure a Piped API instance in Library -> Settings -> Instance. Atlas does not ship with a default instance.
@@ -37,6 +37,7 @@ Atlas is a native iOS YouTube client built on Piped. This docs folder explains w
 - `Atlas/Support/` - non-UI helpers such as formatting, loading state, thumbnail prefetching, and collaborator lookup.
 - `PipedKit/` - Piped API client, network destination policy, Codable response models, stream helpers, ID parsing, and HTML text cleanup.
 - `AtlasTests/` - app-level behavior tests.
+- `AtlasUITests/` - XCUITest flows (currently iCloud Sync settings).
 - `Docs/Screenshots/` - screenshots used by README/docs.
 
 ## Working rule
