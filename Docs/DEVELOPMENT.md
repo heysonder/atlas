@@ -4,7 +4,7 @@ Atlas is a Swift 6, SwiftUI, SwiftData, iOS 26 app generated with XcodeGen.
 
 ## Requirements
 
-- Xcode with iOS 26 SDK support.
+- Xcode 27 with the iOS 27 SDK (the deployment target remains iOS 26).
 - XcodeGen.
 - Swift Package Manager.
 - An iOS simulator such as iPhone 17 for tests.
@@ -26,8 +26,8 @@ Open the project:
 open Atlas.xcodeproj
 ```
 
-The repository does not pin a personal Apple development team. Simulator builds
-need no signing. For a device build, select your own team and use app and test
+The project includes the maintainer's Apple development team. Simulator builds
+need no signing. For a device build, select your own team locally and use app and test
 bundle identifiers registered to that team; the canonical `sh.cmf.atlas` IDs
 are maintainer-owned. Do not commit personal team IDs or signing material.
 
@@ -92,6 +92,7 @@ Atlas/
   Resources/
   Support/
 AtlasTests/
+AtlasUITests/
 PipedKit/
 Docs/
 ```
@@ -117,7 +118,7 @@ Xcode's bundled formatter rather than installing a separate formatter version:
 xcrun swift-format format --in-place --configuration .swift-format <files>
 xcrun swift-format lint --recursive --parallel --strict \
   --configuration .swift-format \
-  Atlas AtlasTests PipedKit/Sources PipedKit/Tests PipedKit/Package.swift
+  Atlas AtlasTests AtlasUITests PipedKit/Sources PipedKit/Tests PipedKit/Package.swift
 ```
 
 ## Piped instance behavior

@@ -14,8 +14,8 @@ xcodegen generate
 ```
 
 `project.yml` is the source of truth. Do not hand-edit generated Xcode project
-files. The repository does not pin an Apple development team; select your own
-team and bundle identifiers locally for device builds, and never commit signing
+files. The project includes the maintainer's Apple development team; select your
+own team and bundle identifiers locally for device builds, and never commit signing
 material. The canonical `sh.cmf.atlas` identifiers are maintainer-owned.
 
 ## Before opening a pull request
@@ -50,7 +50,7 @@ Lint the full Swift tree:
 ```sh
 xcrun swift-format lint --recursive --parallel --strict \
   --configuration .swift-format \
-  Atlas AtlasTests PipedKit/Sources PipedKit/Tests PipedKit/Package.swift
+  Atlas AtlasTests AtlasUITests PipedKit/Sources PipedKit/Tests PipedKit/Package.swift
 ```
 
 Please avoid committing credentials, `.env` files, signing identities,
