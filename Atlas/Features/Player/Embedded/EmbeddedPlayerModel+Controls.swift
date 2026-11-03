@@ -120,9 +120,35 @@ extension EmbeddedPlayerModel {
         nowPlaying.detach()
     }
 
-    /// Full screen: pinching out crops the video to fill the screen (what a
-    /// double-tap does in AVKit); pinching in letterboxes it again. The
-    /// inline layout always letterboxes.
+    // MARK: Full-screen fill
+
+    /// How far a video's shape may differ from the screen's and still fill it
+    /// by default. A 2:1 video on a 19.5:9 phone is 8% off: filling crops
+    /// about 4% from the top and bottom instead of leaving pillar bars, while
+    /// 16:9 on the same phone (22% off) and anything on an iPad letterboxes.
+    static let autoFillTolerance = 0.1
+
+    /// Entering full screen, or the window or video shape changing while in
+    /// it: a pinch choice wins; otherwise near-fit videos fill.
+    func applyFullscreenFill(containerSize: CGSize) {
+        if let fullscreenFillChoice {
+            setVideoFillsScreen(fullscreenFillChoice)
+            return
+        }
+        let video = playbackState.videoSize
+        guard video.width > 0, video.height > 0, containerSize.width > 0, containerSize.height > 0 else { return }
+        let mismatch = abs((video.width / video.height) / (containerSize.width / containerSize.height) - 1)
+        setVideoFillsScreen(mismatch <= Self.autoFillTolerance)
+    }
+
+    /// Pinch out crops the video to the screen (what a double-tap does in
+    /// AVKit); pinch in letterboxes it again. Remembered for this video.
+    func chooseVideoFill(_ fills: Bool) {
+        fullscreenFillChoice = fills
+        setVideoFillsScreen(fills)
+    }
+
+    /// The inline layout always letterboxes.
     func setVideoFillsScreen(_ fills: Bool) {
         guard playbackState.videoFillsScreen != fills else { return }
         playbackState.videoFillsScreen = fills
