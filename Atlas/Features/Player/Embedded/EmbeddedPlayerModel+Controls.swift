@@ -120,6 +120,15 @@ extension EmbeddedPlayerModel {
         nowPlaying.detach()
     }
 
+    /// Full screen: pinching out crops the video to fill the screen (what a
+    /// double-tap does in AVKit); pinching in letterboxes it again. The
+    /// inline layout always letterboxes.
+    func setVideoFillsScreen(_ fills: Bool) {
+        guard playbackState.videoFillsScreen != fills else { return }
+        playbackState.videoFillsScreen = fills
+        layerView.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+    }
+
     // MARK: Picture in Picture
 
     /// The surface view hands over its controller once the layer exists.

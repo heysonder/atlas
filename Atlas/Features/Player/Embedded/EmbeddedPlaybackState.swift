@@ -27,7 +27,10 @@ final class EmbeddedPlaybackState {
     var hasItem = false
     var isPiPPossible = false
     var isPiPActive = false
+    /// The item's decoded dimensions, once known; `.zero` until then.
     var videoSize: CGSize = .zero
+    /// Full screen only: the layer crops to fill instead of letterboxing.
+    var videoFillsScreen = false
 
     var hasDuration: Bool { duration.isFinite && duration > 0 }
     var hasSeekableWindow: Bool { seekableEnd - seekableStart > 1 }

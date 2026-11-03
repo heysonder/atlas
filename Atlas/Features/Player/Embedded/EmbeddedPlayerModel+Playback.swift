@@ -166,6 +166,7 @@ extension EmbeddedPlayerModel {
         timeObserver = nil
         removeEndObserver()
         removeItemDiagnostics()
+        clearSponsorSegments()
         statusObservation?.invalidate()
         statusObservation = nil
         timeControlObservation?.invalidate()
@@ -216,6 +217,7 @@ extension EmbeddedPlayerModel {
         guard seconds.isFinite else { return }
         debugModel.update(player: player, source: activePlaybackSource)
         currentPlaybackSeconds = seconds
+        updateSponsorPrompt(at: seconds)
         guard seconds >= PlaybackHistoryStore.minWatchSeconds else { return }
         if lastProgressSaveSeconds == nil
             || abs(seconds - (lastProgressSaveSeconds ?? 0)) >= PlaybackHistoryStore.minWatchSeconds
