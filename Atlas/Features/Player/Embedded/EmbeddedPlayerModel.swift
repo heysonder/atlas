@@ -1,5 +1,6 @@
 import AVKit
 import CoreMedia
+import MediaPlayer
 import Observation
 import PipedKit
 import SwiftData
@@ -21,6 +22,31 @@ final class EmbeddedPlayerModel {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         return player
     }()
+    /// Transport state for the custom controls overlay (see
+    /// `EmbeddedPlayerModel+Controls`).
+    let playbackState = EmbeddedPlaybackState()
+    /// The `AVPlayerLayer` host. Owned by the model rather than the SwiftUI
+    /// representable so it survives the cover being dismissed during PiP and
+    /// can be re-parented between the inline and full-screen layouts.
+    @ObservationIgnored private(set) lazy var layerView: EmbeddedPlayerLayerView = {
+        let view = EmbeddedPlayerLayerView()
+        view.playerLayer.player = player
+        return view
+    }()
+    /// Lock-screen / Control Center metadata and remote commands.
+    @ObservationIgnored let nowPlaying = EmbeddedNowPlaying()
+    @ObservationIgnored var pipController: AVPictureInPictureController?
+    @ObservationIgnored lazy var pipDelegate: EmbeddedPiPDelegate = {
+        let delegate = EmbeddedPiPDelegate()
+        delegate.model = self
+        return delegate
+    }()
+    @ObservationIgnored var pipPossibleObservation: NSKeyValueObservation?
+    @ObservationIgnored var scrubSeekInFlight = false
+    @ObservationIgnored var wasPlayingBeforeScrub = false
+    /// Keeps the model (and with it the player, layer, and PiP controller)
+    /// alive while PiP outlives the dismissed cover.
+    @ObservationIgnored static var pipRetainer: EmbeddedPlayerModel?
     var request: PlayRequest
     var historySession: PlaybackHistorySession?
     var detail: VideoDetail?
@@ -71,6 +97,7 @@ final class EmbeddedPlayerModel {
     func start() {
         guard !started else { return }
         started = true
+        installControls()
         historySession = PlaybackHistoryStore.beginSession(
             videoID: request.videoID, in: modelContext)
         updateFavoritesCommand(for: request)
@@ -124,6 +151,8 @@ final class EmbeddedPlayerModel {
             }
             let baseMetadata = PlayerNowPlayingMetadata.streaming(detail, request: request)
             initialItem.externalMetadata = baseMetadata
+            playbackState.isLive = detail.isCurrentlyLive
+            Self.configureLiveEdge(initialItem, live: detail.livestream == true)
             player.replaceCurrentItem(with: initialItem)
             PlayerCaptionSelection.keepOffByDefault(for: initialItem)
             installEndObserver(for: initialItem)
@@ -152,8 +181,13 @@ final class EmbeddedPlayerModel {
             self.detail = detail
             plainDescription = HTMLText.plain(detail.description ?? "")
             detailLoadedAt = app.streamResolvedAt(request.videoID) ?? Date()
+            // A live stream starts at the live edge; a saved position would
+            // land somewhere arbitrary inside the DVR window. Piped's flag
+            // isn't always set for a running stream, so the asset's own
+            // (indefinite) duration is the deciding check.
             if let resume = savedPosition(for: request.videoID),
-                resume >= PlaybackHistoryStore.minWatchSeconds
+                resume >= PlaybackHistoryStore.minWatchSeconds,
+                await isResumable(initialItem, detail: detail)
             {
                 await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             }
@@ -161,6 +195,12 @@ final class EmbeddedPlayerModel {
             // don't resume audio or install observers afterwards.
             guard !Task.isCancelled else { return }
             player.play()
+            nowPlaying.publish(
+                title: detail.title ?? request.title,
+                artist: detail.uploader ?? request.uploader,
+                artworkURL: detail.thumbnailURL ?? request.thumbnail,
+                client: httpClient,
+                isLive: detail.livestream == true)
             // A start that never becomes playback (buffering that never
             // completes) fires no stall notification and no failure, so
             // watch for it explicitly.
@@ -186,6 +226,37 @@ final class EmbeddedPlayerModel {
             guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Live items catch back up after a stall: AVFoundation restores the
+    /// offset from the live edge the playhead had before buffering, so a
+    /// hiccup doesn't leave the stream permanently behind.
+    static func configureLiveEdge(_ item: AVPlayerItem, live: Bool) {
+        item.automaticallyPreservesTimeOffsetFromLive = live
+    }
+
+    /// False for anything live: the detail says so, or the asset reports an
+    /// indefinite duration once loaded (an HLS live playlist). Loading the
+    /// duration waits on the same manifest fetch playback needs anyway.
+    private func isResumable(_ item: AVPlayerItem, detail: VideoDetail) async -> Bool {
+        if detail.livestream == true {
+            playbackState.isLive = true
+            PlaybackDiagnostics.message("resume-skipped-live-flag", videoID: request.videoID)
+            return false
+        }
+        guard let duration = try? await item.asset.load(.duration) else {
+            PlaybackDiagnostics.message("resume-skipped-no-duration", videoID: request.videoID)
+            return false
+        }
+        guard !Task.isCancelled else { return false }
+        if duration.isIndefinite || !duration.isNumeric {
+            playbackState.isLive = true
+            PlaybackDiagnostics.message("resume-skipped-indefinite", videoID: request.videoID)
+            return false
+        }
+        PlaybackDiagnostics.message(
+            "resume-allowed-duration-\(Int(duration.seconds))", videoID: request.videoID)
+        return duration.seconds > 0
     }
 
     func loadLocal(_ fileURL: URL) {
@@ -217,6 +288,12 @@ final class EmbeddedPlayerModel {
             }
             guard !Task.isCancelled else { return }
             player.play()
+            nowPlaying.publish(
+                title: request.title,
+                artist: request.uploader,
+                artworkURL: request.thumbnail,
+                client: AppModel.publicHTTPClient,
+                isLive: false)
             installProgressTracking()
         }
     }
@@ -232,12 +309,38 @@ final class EmbeddedPlayerModel {
         }
     }
 
+    /// The cover is coming back (PiP's "return to app"): the teardown that
+    /// was queued when it was dismissed must not fire when PiP now stops.
+    func cancelDeferredTeardown() {
+        teardownDeferredForPiP = false
+    }
+
     func setPiPActive(_ active: Bool) {
         pipActive = active
         if !active, teardownDeferredForPiP {
             teardownDeferredForPiP = false
             teardown()
         }
+    }
+
+    /// Closing the cover while the video is playing hands it to Picture in
+    /// Picture over whatever screen was beneath, rather than stopping it.
+    /// Returns false when PiP can't take it (no controller yet, not possible,
+    /// or paused), in which case the caller just dismisses and playback ends.
+    ///
+    /// `pipActive` and the retainer are set up front: the delegate's did-start
+    /// arrives after the cover has already disappeared, and `viewDisappeared`
+    /// must not tear the player down in between. A start that fails reports
+    /// through `pipDidStop`, which runs the deferred teardown then.
+    @discardableResult
+    func handOffToPictureInPicture() -> Bool {
+        guard let pipController, pipController.isPictureInPicturePossible else { return false }
+        if pipController.isPictureInPictureActive { return true }
+        guard playbackState.isPlaying else { return false }
+        pipActive = true
+        Self.pipRetainer = self
+        pipController.startPictureInPicture()
+        return true
     }
 
     func teardown() {
@@ -268,6 +371,7 @@ final class EmbeddedPlayerModel {
         lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
+        removeControls()
         if app.nowPlaying == nil || app.nowPlaying?.videoID == request.videoID {
             updateFavoritesCommand(for: nil)
         }
