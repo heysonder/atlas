@@ -1,29 +1,59 @@
 import SwiftData
 import SwiftUI
 
-/// The "Embedded" player (opt-in via Settings): plays the video inline at the
-/// top of a scrolling page, with the shared `PlayerInfoContent` — channel row,
-/// description, and comments — beneath it. The native full-screen player
+/// The "Embedded" player (opt-in via Settings): a custom-controlled video
+/// surface pinned to the top with the watch page — title, channel, comments
+/// card, related videos — scrolling beneath it. The native full-screen player
 /// (`VideoPlayerPresenter`) is untouched and remains the default.
 struct EmbeddedPlayerView: View {
     @State private var model: EmbeddedPlayerModel
     /// Live offset of the swipe-down-to-dismiss drag on the video area.
     @State private var dragOffset: CGFloat = 0
+    /// Set by the full-screen button; rotating to landscape also fills the
+    /// screen without this (see `isFullscreen`).
+    @State private var fullscreenRequested = false
+    /// Measured window shape: the inline layout must never be laid out in a
+    /// wide window (mid-rotation, or when a portrait request is still
+    /// settling), so a landscape-shaped container counts as full screen too.
+    @State private var containerSize: CGSize = .zero
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
-        _model = State(
-            initialValue: EmbeddedPlayerModel(
-                request: request, app: app, modelContext: modelContext))
+        // Returning from PiP: the model that kept playing in the PiP window
+        // is adopted as-is, so playback carries on instead of reloading.
+        if let live = EmbeddedPlayerModel.pipRetainer, live.request.videoID == request.videoID {
+            _model = State(initialValue: live)
+        } else {
+            _model = State(
+                initialValue: EmbeddedPlayerModel(
+                    request: request, app: app, modelContext: modelContext))
+        }
+    }
+
+    private var isFullscreen: Bool {
+        fullscreenRequested || verticalSizeClass == .compact
+            || (containerSize.width > containerSize.height && containerSize.height > 0)
+    }
+
+    /// The feed's card geometry, for the "Rounded Corners" option.
+    private static let cardCornerRadius: CGFloat = 14
+    private static let cardInset: CGFloat = 16
+
+    private var title: String {
+        model.detail?.title ?? model.request.title
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                videoArea
-                infoArea
+            Group {
+                if isFullscreen {
+                    fullscreenLayout
+                } else {
+                    inlineLayout
+                }
             }
             // No navigation bar on the root: the video pins to the top of the
             // safe area instead of sitting under a mostly-empty bar. Pushed
@@ -33,9 +63,44 @@ struct EmbeddedPlayerView: View {
                 ChannelDetailView(channelID: id)
             }
         }
+        .onGeometryChange(for: CGSize.self) {
+            $0.size
+        } action: {
+            containerSize = $0
+        }
         .offset(y: dragOffset)
-        .task { model.start() }
+        .statusBarHidden(isFullscreen)
+        .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: isFullscreen)
+        .task {
+            // The app is showing the player again, so a PiP window has no
+            // reason to stay up: the same video folds back inline, and a
+            // different video ends the old one's PiP (and its playback).
+            if let other = EmbeddedPlayerModel.pipRetainer, other !== model {
+                other.pipController?.stopPictureInPicture()
+            }
+            model.cancelDeferredTeardown()
+            if model.playbackState.isPiPActive {
+                model.pipController?.stopPictureInPicture()
+            }
+            model.start()
+        }
+        .onChange(of: verticalSizeClass) { old, new in
+            // Rotating back to portrait leaves full screen, like the system
+            // player; the button state would otherwise pin it there.
+            if old == .compact, new == .regular { fullscreenRequested = false }
+        }
+        .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            // Once the phone is physically upright again the portrait lock
+            // from "exit full screen" has done its job; let it rotate freely.
+            if UIDevice.current.orientation.isPortrait, InterfaceOrientationLock.shared.mask == .portrait {
+                InterfaceOrientationLock.shared.unlock()
+            }
+        }
         .onDisappear {
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            InterfaceOrientationLock.shared.unlock()
             // Keeps the player alive while PiP is running (mirrors the
             // fullscreen presenter's `pipActive` guard); teardown happens
             // when PiP ends instead.
@@ -43,27 +108,87 @@ struct EmbeddedPlayerView: View {
         }
     }
 
+    // MARK: Layouts
+
+    private var inlineLayout: some View {
+        let rounded = app.embeddedRoundedCorners
+        let shape = RoundedRectangle(cornerRadius: rounded ? Self.cardCornerRadius : 0, style: .continuous)
+        return VStack(spacing: 0) {
+            videoArea(fillsScreen: false)
+                // Portrait videos are capped at a square so the page beneath
+                // stays reachable; the surface letterboxes inside it.
+                .aspectRatio(max(model.detail?.aspectRatio ?? 16.0 / 9.0, 1), contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .clipShape(shape)
+                // Wins the height negotiation against the scroll view below,
+                // so the video doesn't resize as the page's content changes.
+                .layoutPriority(1)
+                .simultaneousGesture(dismissDrag)
+                // Same lift as the feed's thumbnail cards. The shadow sits on
+                // a background shape: the video itself is a UIKit layer, which
+                // SwiftUI's shadow can't trace.
+                .background {
+                    // Page-coloured so nothing shows at the corners; only
+                    // the shadows it casts are visible: the card's crisp one
+                    // plus a wider, very faint blur beneath the video.
+                    shape
+                        .fill(Color(.systemBackground))
+                        .shadow(color: .black.opacity(0.16), radius: 5, x: 0, y: 2)
+                        .shadow(color: .black.opacity(0.07), radius: 18, x: 0, y: 8)
+                }
+                .padding(.horizontal, rounded ? Self.cardInset : 0)
+                .padding(.top, rounded ? 8 : 0)
+                .zIndex(1)
+            infoArea
+        }
+    }
+
+    private var fullscreenLayout: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            videoArea(fillsScreen: true)
+        }
+    }
+
     // MARK: Video
 
-    /// The inline player, sized to the video's aspect ratio and pinned to the
-    /// top. The native controls include an "expand" button for true full screen
-    /// (landscape) and PiP — so nothing is lost versus the full-screen player.
-    private var videoArea: some View {
-        InlineVideoPlayer(
-            player: model.player,
-            isReady: model.isReady,
-            onPiPActiveChanged: { [model] in model.setPiPActive($0) }
-        )
-        .aspectRatio(model.detail?.aspectRatio ?? 16.0 / 9.0, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-        .background(Color.black)
-        .overlay {
+    /// The player surface plus everything layered over it: poster while the
+    /// stream resolves, the custom controls, and the stats overlay.
+    private func videoArea(fillsScreen: Bool) -> some View {
+        ZStack {
+            EmbeddedPlayerSurface(
+                layerView: model.layerView,
+                onPiPController: { [model] in model.adoptPiPController($0) }
+            )
+            .ignoresSafeArea(edges: fillsScreen ? .all : [])
+
+            if !model.isReady {
+                loadingPoster
+            } else {
+                EmbeddedPlayerControls(
+                    model: model,
+                    title: title,
+                    chapters: model.detail?.chapters ?? [],
+                    isFullscreen: isFullscreen,
+                    onDismiss: closePlayer,
+                    onToggleFullscreen: toggleFullscreen)
+            }
+
             if app.statsForNerdsEnabled {
                 PlayerDebugOverlay(model: model.debugModel)
+                    .allowsHitTesting(false)
             }
         }
-        .overlay {
-            if !model.isReady && model.errorMessage == nil {
+        .background(Color.black)
+    }
+
+    /// Thumbnail + spinner until the item is attached, with a way out if the
+    /// stream resolution is slow or fails.
+    private var loadingPoster: some View {
+        ZStack {
+            Thumbnail(url: model.request.thumbnail, networkScope: .selectedInstance)
+                .opacity(0.6)
+            if model.errorMessage == nil {
                 ProgressView()
                     .controlSize(.large)
                     .tint(.white)
@@ -71,44 +196,61 @@ struct EmbeddedPlayerView: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            dismissButton.padding(10)
+            EmbeddedControlButton(isFullscreen ? "chevron.left" : "chevron.down", label: "Close") {
+                if isFullscreen { toggleFullscreen() } else { closePlayer() }
+            }
+            .foregroundStyle(.white)
+            .padding(isFullscreen ? 20 : 12)
         }
-        .simultaneousGesture(dismissDrag)
     }
 
-    /// Floating dismiss control over the video's top-left corner. Injecting an
-    /// ✕ into AVKit's private transport-control hierarchy stopped working on
-    /// iOS 27, so closing the player is this button plus the swipe-down drag.
-    private var dismissButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+    /// Swipe down or the chevron. A playing video carries on in Picture in
+    /// Picture over the screen the player was opened from, and PiP's return
+    /// button re-presents this player (see `restoreInterfaceFromPiP`); a
+    /// paused video simply closes.
+    private func closePlayer() {
+        model.handOffToPictureInPicture()
+        dismiss()
+    }
+
+    /// iPhone only: iPad keeps its current orientation (multitasking ignores
+    /// geometry requests anyway) and simply fills the window.
+    private func toggleFullscreen() {
+        let entering = !isFullscreen
+        fullscreenRequested = entering
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        let lock = InterfaceOrientationLock.shared
+        if entering {
+            lock.unlock(rotatingTo: .landscape)
+        } else if verticalSizeClass == .compact {
+            // Leaving full screen while the phone is held sideways: hold
+            // portrait until the phone is upright, or the system flips the
+            // interface straight back to landscape and the inline layout
+            // ends up inside a landscape window.
+            lock.lock(.portrait)
+        } else {
+            lock.unlock(rotatingTo: .portrait)
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
-        .accessibilityLabel("Close")
     }
 
     /// Drag the video down to dismiss the player, YouTube-style. Attached with
-    /// `simultaneousGesture` and a 20pt threshold so the native tap-to-show
-    /// controls and the transport bar keep working; only predominantly
-    /// vertical drags move the view.
+    /// `simultaneousGesture` and a 20pt threshold so the controls keep working;
+    /// only predominantly vertical drags move the view, and never while the
+    /// scrubber is being dragged.
     private var dismissDrag: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
+                guard !model.playbackState.isScrubbing else { return }
                 let dy = value.translation.height
                 guard dy > 0, dy > abs(value.translation.width) else { return }
                 dragOffset = dy
             }
             .onEnded { value in
+                guard dragOffset > 0 else { return }
                 if value.translation.height > 140
                     || value.predictedEndTranslation.height > 320
                 {
-                    dismiss()
+                    closePlayer()
                 } else if reduceMotion {
                     dragOffset = 0
                 } else {
@@ -122,44 +264,7 @@ struct EmbeddedPlayerView: View {
     @ViewBuilder private var infoArea: some View {
         if let detail = model.detail {
             if let client = model.client {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        PlayerInfoContent(
-                            title: detail.title ?? model.request.title,
-                            uploader: detail.uploader ?? model.request.uploader,
-                            uploaderDisplayName: model.request.uploader ?? detail.uploader,
-                            uploaderAvatar: detail.uploaderAvatar,
-                            channelID: detail.channelID,
-                            creators: detail.creators ?? [],
-                            subscriberCount: detail.uploaderSubscriberCount,
-                            uploaderVerified: detail.uploaderVerified ?? false,
-                            thumbnail: detail.thumbnailURL ?? model.request.thumbnail,
-                            duration: detail.duration,
-                            description: model.plainDescription,
-                            chapters: detail.chapters ?? [],
-                            canSubscribe: detail.channelID != nil,
-                            isSubscribed: model.isSubscribed(detail.channelID),
-                            onToggleSubscribe: { model.setSubscription($0, detail: detail) },
-                            showFeedback: FeedMode.current.isPersonalized,
-                            feedback: model.currentFeedbackSignal(),
-                            onFeedback: { model.setFeedback($0, detail: detail) },
-                            onQueuedVideoPlay: { model.playQueued($0) },
-                            client: client,
-                            videoID: model.request.videoID,
-                            currentPlaybackSeconds: model.currentPlaybackSeconds,
-                            onTimestampTap: { model.seek(to: $0) },
-                            inline: true)
-
-                        if let related = detail.relatedStreams, !related.isEmpty {
-                            Divider()
-                            PlayerRelatedSection(
-                                related: related,
-                                currentVideoID: model.request.videoID,
-                                onPlay: { model.playRelated($0) })
-                        }
-                    }
-                    .padding()
-                }
+                EmbeddedWatchPage(model: model, detail: detail, client: client)
             } else {
                 MissingInstanceView()
                     .padding()

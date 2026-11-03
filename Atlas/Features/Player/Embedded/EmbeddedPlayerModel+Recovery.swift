@@ -120,6 +120,7 @@ extension EmbeddedPlayerModel {
             await PlayerAudioSelection.selectPreferredAudio(for: fallbackItem)
             guard player.currentItem === item else { return }
         }
+        Self.configureLiveEdge(fallbackItem, live: detail.livestream == true)
         player.replaceCurrentItem(with: fallbackItem)
         PlayerCaptionSelection.keepOffByDefault(for: fallbackItem)
         installEndObserver(for: fallbackItem)
@@ -128,7 +129,12 @@ extension EmbeddedPlayerModel {
             videoID: request.videoID,
             source: fallbackPlayback.sourceName)
         debugModel.configure(detail: detail, composed: fallbackPlayback.composed, allowAV1: Self.supportsAV1)
-        await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
+        // A live stream rejoins at the live edge: seeking the fresh item to
+        // the failed one's clock asks for segments that may already have
+        // slid out of the window, which stalls it all over again.
+        if detail.livestream != true {
+            await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         // `defaultRate` carries the user's selected playback speed.
         if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
     }
@@ -178,6 +184,7 @@ extension EmbeddedPlayerModel {
             // state — leave it alone.
             guard player.currentItem === item else { return }
         }
+        Self.configureLiveEdge(upgradeItem, live: detail.livestream == true)
         player.replaceCurrentItem(with: upgradeItem)
         PlayerCaptionSelection.keepOffByDefault(for: upgradeItem)
         installEndObserver(for: upgradeItem)
@@ -195,7 +202,9 @@ extension EmbeddedPlayerModel {
                 fallback: playback.failureFallback,
                 stallFallbackDelay: playback.stallFallbackDelay)
         }
-        await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
+        if detail.livestream != true {
+            await player.seek(to: resume, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         if wasPlaying { player.playImmediately(atRate: player.defaultRate) }
     }
 

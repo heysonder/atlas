@@ -6,6 +6,14 @@ import UIKit
 final class AtlasApplicationDelegate: NSObject, UIApplicationDelegate {
     static weak var cloudSync: CloudSyncCoordinator?
 
+    /// Info.plist's set, unless `InterfaceOrientationLock` has narrowed it.
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        InterfaceOrientationLock.shared.effectiveMask
+    }
+
     func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],

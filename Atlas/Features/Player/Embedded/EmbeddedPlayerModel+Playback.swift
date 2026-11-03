@@ -231,7 +231,10 @@ extension EmbeddedPlayerModel {
         player.seek(
             to: CMTime(seconds: Double(target), preferredTimescale: 600),
             toleranceBefore: .zero,
-            toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+            toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.nowPlaying.refresh() }
+        }
         player.play()
     }
 
