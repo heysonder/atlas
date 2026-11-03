@@ -11,8 +11,9 @@ Simple rule: **be as native as possible.**
 ## Components
 
 - Use Apple's components. `NavigationStack`, `List`, `TabView`, `.searchable`, `.sheet`, `AVPlayerViewController`, SF Symbols, system materials, system colors.
-- Don't rebuild a control that already ships with the OS. No custom tab bars, custom sliders, custom nav bars, custom scroll views, custom video transport rows.
+- Don't rebuild a control that already ships with the OS. No custom nav bars, custom scroll views, custom sliders.
 - Build something custom only when the platform genuinely has no answer — and when you do, keep it small and make it look and behave like the system control it sits next to.
+- Atlas ships two such exceptions, both deliberate: the embedded player's transport controls (AVKit's inline chrome can't be extended with the close, full-screen, and live behaviour the watch page needs, and injecting into it broke on iOS 27), and the opt-in Compact Tab Bar. In both cases the system version remains available and is one setting away: the full-screen `AVPlayerViewController` player, and the standard tab bar.
 
 ## Look and feel
 

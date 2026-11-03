@@ -36,15 +36,20 @@ The fullscreen player:
 
 ### Embedded
 
-`EmbeddedPlayerView` shows an inline `AVPlayerViewController` above the shared player info content.
+`EmbeddedPlayerView` (in `Atlas/Features/Player/Embedded/`) hosts a bare `AVPlayerLayer` (`EmbeddedPlayerSurface`) with SwiftUI controls layered over it, and `EmbeddedWatchPage` scrolling beneath.
 
 The embedded player:
 
-- Uses a dedicated `EmbeddedPlayerModel`.
-- Shows title, channel, description, comments, chapters, and queue under the video.
-- Expands comments in place.
-- Includes a custom close control beside native player controls.
+- Uses a dedicated `EmbeddedPlayerModel`, which owns the `AVPlayer`, the layer view, the PiP controller, and `EmbeddedNowPlaying`.
+- Keeps transport state in `EmbeddedPlaybackState` (position, duration, buffered range, seekable window, live flag, PiP state) so 10 Hz scrubber ticks re-render only the control overlay.
+- Draws `EmbeddedPlayerControls`: tap to toggle, double-tap to skip, hold for 2×, centre play/pause, and `EmbeddedTransportBar` with `EmbeddedScrubber`, chapter markers, remaining time or a LIVE badge, and the full-screen toggle.
+- Enters full screen by request or when the window turns landscape; `InterfaceOrientationLock` holds portrait briefly after leaving full screen while the phone is still sideways.
+- Publishes Now Playing metadata and play/pause/skip/seek remote commands itself through `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`, since no `AVPlayerViewController` does it.
+- Runs Picture in Picture through `AVPictureInPictureController(playerLayer:)`. Dismissing the cover while playing calls `handOffToPictureInPicture()` first, the model is retained statically while PiP outlives the cover, and Return to App re-presents the same model.
+- Treats live streams specially: no resume seek, `automaticallyPreservesTimeOffsetFromLive` on, fallback and upgrade items rejoin at the live edge, and the scrubber maps onto `seekableTimeRanges`.
 - Defers teardown while Picture in Picture is active.
+
+The cover is keyed by video ID so a new `nowPlaying` request always gets a fresh view and model.
 
 ## Online stream flow
 

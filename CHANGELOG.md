@@ -9,6 +9,51 @@ Atlas has not published a tagged release yet.
 ## Unreleased
 
 ### Added
+- **Embedded player with its own controls.** The embedded style
+  (Settings → Playback → Player) is now a bare `AVPlayerLayer` under a
+  SwiftUI control overlay instead of an inline `AVPlayerViewController`:
+  tap to show or hide, double-tap either half to skip 10s, press and hold
+  for 2× until release, centre play/pause with a buffering spinner, and a
+  scrubber with a buffered band, chapter markers, and the chapter name
+  while dragging. A full-screen button rotates iPhone to landscape (and
+  rotating the device does the same; rotating back returns inline), with a
+  short portrait lock so "exit full screen" while held sideways doesn't
+  snap straight back. Picture in Picture is wired to the layer: swiping
+  down or tapping the chevron on a playing video hands it to PiP over the
+  screen the player was opened from, PiP survives the dismissed cover, and
+  "Return to App" re-presents the same running model (a paused video just
+  closes). Now Playing (title, channel, artwork, position) and the
+  remote play/pause/skip/seek commands are published explicitly through
+  `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`. Live streams open
+  at the live edge, scrub across their DVR window, show a LIVE badge that
+  dims behind the edge and jumps back when tapped, and keep their offset
+  from live through stalls. The full-screen player is unchanged.
+  `Atlas/Features/Player/Embedded/`.
+- **Embedded watch page.** Beneath the video: `EmbeddedTitleBlock` (title,
+  views/age or live meta line, collapsible description with tappable
+  timestamps and chapters), `EmbeddedChannelRow` (avatar cluster, glass
+  subscribe button, and a "…" menu for Suggest More/Less and playlists),
+  a comments card showing the timestamp-matched, pinned, or first comment
+  that slides the full list up in an `EmbeddedSlidePane`, a live chat card
+  on live streams, the queue, and related videos as the Home feed's cards.
+  Related titles only start scrolling once the page has been scrolled.
+  Two embedded-only options: **Rounded Corners** insets the video like a
+  feed card and **Hide Related Videos** drops the related list
+  (`atlas.player.embedded.roundedCorners`,
+  `atlas.player.embedded.hidesRelated`).
+- **Compact Tab Bar.** On by default (`atlas.compactTabBar`): a slim
+  clear-glass pill with Home, Library, and Search replaces the system tab
+  bar, slides away while the keyboard is up, and Search moves its field
+  into the navigation bar drawer. Off restores the standard bar with the
+  system search tab. `CompactTabBar` in `Atlas/Components/`.
+- **Scrolling Titles.** On by default (`atlas.scrollingTitles`): video
+  titles in feed rows, Shorts posters, Continue Watching, Downloads,
+  Playlists, History, and the queue render on one line that pauses, then
+  loops like the Now Playing title. Off restores the two-line wrap. Titles
+  hold still under Reduce Motion and VoiceOver, when off-screen, and when
+  the scene is inactive. `MarqueeTitle` in `Atlas/Components/`.
+- **Playback settings are visible again.** The Player picker and Stats
+  for Nerds are back in Settings → Playback (`showsPlayerOptions`).
 - **Chat button in the player.** A Liquid Glass "Chat" button sits beside
   Info (only when the video is live, or a chat replay was found by a
   one-page probe). Portrait opens a glass sheet with just the chat — first
@@ -104,6 +149,16 @@ Atlas has not published a tagged release yet.
   endpoints with `Comment` / `CommentsPage` models.
 
 ### Changed
+- **Re-tapping Search pops back to results.** With a channel page pushed
+  from search, tapping the Search tab again returns to the results and
+  focuses the field; the query is kept.
+- **Player folder layout.** Everything embedded-player-specific lives in
+  `Atlas/Features/Player/Embedded/`. `InlineVideoPlayer` and
+  `PlayerRelatedSection` were removed with nothing left using them, and
+  the stray `Atlas/AtlasRelease.entitlements` is gone (the age-range
+  entitlement is declared in `project.yml` and
+  `Atlas/Resources/Atlas.entitlements`).
+- **CI lints `AtlasUITests`** alongside the app and package sources.
 - **Live rows say what they mean.** A stream that's live now reads
   "9.7K watching · Started 2 hours ago" instead of "9.7K views · 1 minute
   ago" — the list `views` of a live row is YouTube's concurrent-viewer
@@ -159,6 +214,18 @@ Atlas has not published a tagged release yet.
   opens at the medium detent and reveals comments as you drag it up.
 
 ### Fixed
+- **A new video in the open embedded player.** Starting another video
+  while the embedded cover was up tore down the old model and never
+  started the new one; the cover is now keyed by video ID so each video
+  gets a fresh view and model.
+- **Live streams don't resume from a saved position.** A saved position
+  landed somewhere arbitrary inside the DVR window. Resume is skipped when
+  the detail says live or the loaded asset reports an indefinite duration,
+  and stall fallback or quality upgrade on a live item rejoins at the live
+  edge instead of seeking to the failed item's clock.
+- **Lock-screen position after a seek.** Now Playing's elapsed time is
+  refreshed when a seek completes rather than drifting until the next
+  play/pause.
 - **Ended broadcasts no longer show a LIVE badge.** Piped keeps
   `livestream: true` on past streams in search and channel rows; `isLive`
   now also requires the live duration sentinel.
