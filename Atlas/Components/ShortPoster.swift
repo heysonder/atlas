@@ -30,12 +30,9 @@ struct ShortPoster: View {
                         startPoint: .center, endPoint: .bottom)
                 }
                 .overlay(alignment: .bottomLeading) {
-                    Text(item.displayTitle)
+                    MarqueeTitle(item.displayTitle)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .multilineTextAlignment(.leading)
                         .shadow(radius: 3)
                         .padding(10)
                 }

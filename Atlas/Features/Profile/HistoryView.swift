@@ -145,9 +145,8 @@ private struct HistoryRow: View {
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(entry.title)
+            MarqueeTitle(entry.title)
                 .font(.subheadline.weight(.medium))
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
             if let uploader = entry.uploader {
                 Text(uploader)
                     .font(.caption)

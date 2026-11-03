@@ -59,6 +59,30 @@ final class AppModel {
     }
     static let statsForNerdsKey = "atlas.player.statsForNerds"
 
+    /// The slim floating pill instead of the system tab bar.
+    var compactTabBarEnabled: Bool {
+        didSet { UserDefaults.standard.set(compactTabBarEnabled, forKey: Self.compactTabBarKey) }
+    }
+    static let compactTabBarKey = "atlas.compactTabBar"
+
+    /// Long titles scroll like Now Playing; off restores the two-line wrap.
+    var scrollingTitlesEnabled: Bool {
+        didSet { UserDefaults.standard.set(scrollingTitlesEnabled, forKey: Self.scrollingTitlesKey) }
+    }
+    static let scrollingTitlesKey = "atlas.scrollingTitles"
+
+    /// Embedded player: inset the video and round it like the feed's cards.
+    var embeddedRoundedCorners: Bool {
+        didSet { UserDefaults.standard.set(embeddedRoundedCorners, forKey: Self.embeddedRoundedCornersKey) }
+    }
+    static let embeddedRoundedCornersKey = "atlas.player.embedded.roundedCorners"
+
+    /// Embedded player: drop the related list and show comments inline.
+    var embeddedHidesRelated: Bool {
+        didSet { UserDefaults.standard.set(embeddedHidesRelated, forKey: Self.embeddedHidesRelatedKey) }
+    }
+    static let embeddedHidesRelatedKey = "atlas.player.embedded.hidesRelated"
+
     /// When on, YouTube Shorts are hidden from the feed, search, and channels.
     var hideShorts: Bool {
         didSet {
@@ -178,6 +202,14 @@ final class AppModel {
             defaults.string(forKey: Self.playerStyleKey)
             .flatMap(PlayerStyle.init(rawValue:)) ?? .fullscreen
         statsForNerdsEnabled = defaults.bool(forKey: Self.statsForNerdsKey)
+        compactTabBarEnabled =
+            defaults.object(forKey: Self.compactTabBarKey) == nil
+            ? true : defaults.bool(forKey: Self.compactTabBarKey)
+        scrollingTitlesEnabled =
+            defaults.object(forKey: Self.scrollingTitlesKey) == nil
+            ? true : defaults.bool(forKey: Self.scrollingTitlesKey)
+        embeddedRoundedCorners = defaults.bool(forKey: Self.embeddedRoundedCornersKey)
+        embeddedHidesRelated = defaults.bool(forKey: Self.embeddedHidesRelatedKey)
         // SponsorBlock defaults to on; absent key means a fresh install.
         sponsorBlockEnabled =
             defaults.object(forKey: Self.sponsorBlockKey) == nil

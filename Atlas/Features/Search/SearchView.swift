@@ -6,6 +6,8 @@ struct SearchView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Pushed channel pages; re-tapping the Search tab pops back to the root.
+    @State private var path = NavigationPath()
     /// Only the recent-search projection is loaded; thousands of retained queries
     /// stay on disk for recommendations and sync.
     @Query(Self.recentSearches) private var searchHistory: [SearchEntry]
@@ -55,47 +57,30 @@ struct SearchView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("Search")
-                // At regular width the search tab already puts the field and an
-                // inline title in the bar; a large title on top duplicated it
-                // (and drew flush to the window edge in a resized iPad window).
-                .navigationBarTitleDisplayMode(horizontalSizeClass == .regular ? .inline : .large)
-                .navigationDestination(for: String.self) { id in
-                    ChannelDetailView(channelID: id)
-                }
-        }
-        .searchable(text: $query, placement: .automatic, prompt: "Search YouTube")
+        let compactBar = app.compactTabBarEnabled
+        attachingSearch(
+            NavigationStack(path: $path) {
+                // With the compact tab bar there is no search-role tab to
+                // host the field, so it lives in the navigation bar instead.
+                // Inside the stack, iOS 26 would dock the field into the
+                // (hidden) bottom bar; pin it under the title instead.
+                attachingSearch(
+                    content
+                        .navigationTitle("Search")
+                        // At regular width the search tab already puts the field and an
+                        // inline title in the bar; a large title on top duplicated it
+                        // (and drew flush to the window edge in a resized iPad window).
+                        .navigationBarTitleDisplayMode(horizontalSizeClass == .regular ? .inline : .large)
+                        .navigationDestination(for: String.self) { id in
+                            ChannelDetailView(channelID: id)
+                        },
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    when: compactBar)
+            },
+            placement: .automatic,
+            when: !compactBar
+        )
         .onAppear { SearchHistoryStore.prune(in: modelContext) }
-        .searchFocused($searchFocused)
-        .searchSuggestions {
-            // Only while the field is focused. The system keeps the suggestion
-            // list over the content whenever this builder is non-empty and
-            // search is active — and recording a successful search into history
-            // makes `historySuggestions` match the just-submitted query, which
-            // re-presented the list on top of the results (feeling like the
-            // search never ran). Gating on focus guarantees results are visible
-            // the moment the keyboard drops.
-            if searchFocused {
-                ForEach(historySuggestions) { entry in
-                    Button {
-                        selectSearchHistory(entry)
-                    } label: {
-                        Label(entry.displayTitle, systemImage: "clock.arrow.circlepath")
-                    }
-                    .buttonStyle(.plain)
-                }
-                ForEach(remoteSuggestions, id: \.self) { suggestion in
-                    Button {
-                        selectSuggestion(suggestion)
-                    } label: {
-                        Label(suggestion, systemImage: "magnifyingglass")
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
         .onChange(of: query) { _, newValue in
             if suppressSuggestionsOnce {
                 suppressSuggestionsOnce = false
@@ -108,6 +93,49 @@ struct SearchView: View {
         .onChange(of: app.instanceGeneration) { _, _ in resetForInstanceChange() }
         .onAppear { applyPendingSearch() }
         .onChange(of: app.pendingSearchQuery) { _, _ in applyPendingSearch() }
+    }
+
+    /// The search field, focus binding, and suggestions — attached either to
+    /// the tab (system search tab) or inside the stack (compact tab bar).
+    @ViewBuilder private func attachingSearch<V: View>(
+        _ view: V, placement: SearchFieldPlacement, when enabled: Bool
+    ) -> some View {
+        if enabled {
+            view
+                .searchable(text: $query, placement: placement, prompt: "Search YouTube")
+                .searchFocused($searchFocused)
+                .searchSuggestions { suggestionList }
+        } else {
+            view
+        }
+    }
+
+    /// Only while the field is focused. The system keeps the suggestion
+    /// list over the content whenever this builder is non-empty and
+    /// search is active — and recording a successful search into history
+    /// makes `historySuggestions` match the just-submitted query, which
+    /// re-presented the list on top of the results (feeling like the
+    /// search never ran). Gating on focus guarantees results are visible
+    /// the moment the keyboard drops.
+    @ViewBuilder private var suggestionList: some View {
+        if searchFocused {
+            ForEach(historySuggestions) { entry in
+                Button {
+                    selectSearchHistory(entry)
+                } label: {
+                    Label(entry.displayTitle, systemImage: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(remoteSuggestions, id: \.self) { suggestion in
+                Button {
+                    selectSuggestion(suggestion)
+                } label: {
+                    Label(suggestion, systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     /// Runs a query handed to us by Siri / the "Search Atlas" intent: fill the
@@ -129,6 +157,7 @@ struct SearchView: View {
     /// clearing the query/results here nuked in-progress searches and forced
     /// the user to retype them. The field's clear button covers "start over".
     private func focusForFreshSearch() {
+        if !path.isEmpty { path = NavigationPath() }
         searchFocused = true
     }
 

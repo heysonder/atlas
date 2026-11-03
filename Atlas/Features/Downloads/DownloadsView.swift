@@ -146,9 +146,8 @@ private struct DownloadedVideoRow: View {
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(video.title)
+            MarqueeTitle(video.title)
                 .font(.subheadline.weight(.medium))
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
             if let uploader = video.uploader {
                 Text(uploader)
                     .font(.caption)
@@ -192,16 +191,15 @@ private struct ActiveDownloadRow: View {
                     Spacer(minLength: 0)
                     trailingControl
                 }
-                Text(item.title)
+                MarqueeTitle(item.title)
                     .font(.subheadline.weight(.medium))
-                    .fixedSize(horizontal: false, vertical: true)
                 statusLine
             }
         } else {
             HStack(spacing: 12) {
                 thumbnail
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                    MarqueeTitle(item.title).font(.subheadline.weight(.medium))
                     statusLine
                 }
                 Spacer(minLength: 0)

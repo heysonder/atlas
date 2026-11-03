@@ -90,10 +90,8 @@ struct VideoRow: View {
 
     private var title: some View {
         Button(action: onPlay) {
-            Text(item.displayTitle)
+            MarqueeTitle(item.displayTitle)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)

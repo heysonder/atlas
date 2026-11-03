@@ -20,7 +20,7 @@ enum SettingsRoute: Hashable {
 /// pages with a summary value shown on the row.
 struct SettingsView: View {
     /// Player style + Stats for Nerds are developer knobs; hidden for now.
-    private static let showsPlayerOptions = false
+    private static let showsPlayerOptions = true
 
     @Environment(AppModel.self) private var app
     @Environment(CloudSyncCoordinator.self) private var sync
@@ -109,6 +109,8 @@ struct SettingsView: View {
                         ForEach(ShortsLayout.allCases) { Text($0.label).tag($0) }
                     }
                 }
+                Toggle("Scrolling Titles", isOn: $app.scrollingTitlesEnabled)
+                Toggle("Compact Tab Bar", isOn: $app.compactTabBarEnabled)
             } header: {
                 Text("Content")
             } footer: {
@@ -147,6 +149,10 @@ struct SettingsView: View {
                 Section {
                     Picker("Player", selection: $app.playerStyle) {
                         ForEach(PlayerStyle.allCases) { Text($0.label).tag($0) }
+                    }
+                    if app.playerStyle == .embedded {
+                        Toggle("Rounded Corners", isOn: $app.embeddedRoundedCorners)
+                        Toggle("Hide Related Videos", isOn: $app.embeddedHidesRelated)
                     }
                     Toggle("Stats for Nerds", isOn: $app.statsForNerdsEnabled)
                 } header: {

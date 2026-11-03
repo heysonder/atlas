@@ -54,10 +54,8 @@ struct PlayerInfoQueueSection: View {
                 queueThumbnail(queued, position: position)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(queued.request.title)
+                    MarqueeTitle(queued.request.title)
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 6) {
                         if let uploader = queued.request.uploader, !uploader.isEmpty {

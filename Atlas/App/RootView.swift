@@ -6,19 +6,57 @@ struct RootView: View {
     @Environment(AppModel.self) private var app
     @Environment(DownloadManager.self) private var downloads
     @Environment(\.modelContext) private var modelContext
+    @State private var keyboardVisible = false
+
+    private var tabBarVisibility: Visibility {
+        app.compactTabBarEnabled ? .hidden : .automatic
+    }
 
     var body: some View {
         @Bindable var app = app
         TabView(selection: searchAwareSelection) {
-            Tab("Home", systemImage: "house.fill", value: AppModel.TabSelection.feed) {
+            // With the compact bar on, the system bar is hidden on every tab
+            // and `CompactTabBar` below draws the slim pill in its place.
+            Tab(value: AppModel.TabSelection.feed) {
                 FeedView()
+                    .toolbarVisibility(tabBarVisibility, for: .tabBar)
+            } label: {
+                Label("Home", systemImage: "house.fill")
             }
-            Tab("Library", systemImage: "square.stack.fill", value: AppModel.TabSelection.profile) {
+            Tab(value: AppModel.TabSelection.profile) {
                 ProfileView()
+                    .toolbarVisibility(tabBarVisibility, for: .tabBar)
+            } label: {
+                Label("Library", systemImage: "square.stack.fill")
             }
-            Tab(value: AppModel.TabSelection.search, role: .search) {
-                SearchView()
+            if app.compactTabBarEnabled {
+                Tab(value: AppModel.TabSelection.search) {
+                    SearchView()
+                        .toolbarVisibility(.hidden, for: .tabBar)
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+            } else {
+                Tab(value: AppModel.TabSelection.search, role: .search) {
+                    SearchView()
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Gone while the keyboard is up, rather than riding above it.
+            if app.compactTabBarEnabled, !keyboardVisible {
+                CompactTabBar(selection: searchAwareSelection)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: keyboardVisible)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardVisible = false
         }
         .background {
             // The default full-screen player handles playback unless the user
@@ -35,6 +73,10 @@ struct RootView: View {
         }
         .fullScreenCover(item: embeddedRequest) { request in
             EmbeddedPlayerView(request: request, app: app, modelContext: modelContext)
+                // A new video must get a fresh view and model: without the
+                // id, SwiftUI keeps the cover's state across the item change,
+                // so the old model was torn down and nothing started the new one.
+                .id(request.videoID)
         }
         // Siri / App Intents routing. `.task` catches an action set during a cold
         // launch (before onChange is attached); onChange catches the warm case.
