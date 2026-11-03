@@ -46,6 +46,18 @@ struct EmbeddedPlayerView: View {
         model.detail?.title ?? model.request.title
     }
 
+    /// The decoded video's own shape once the item reports it; Piped's
+    /// stream dimensions stand in until then. Portrait videos are capped at
+    /// a square so the page beneath stays reachable.
+    private var inlineAspectRatio: Double {
+        let size = model.playbackState.videoSize
+        let ratio =
+            size.width > 0 && size.height > 0
+            ? size.width / size.height
+            : model.detail?.aspectRatio ?? 16.0 / 9.0
+        return max(ratio, 1)
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -90,6 +102,10 @@ struct EmbeddedPlayerView: View {
             // player; the button state would otherwise pin it there.
             if old == .compact, new == .regular { fullscreenRequested = false }
         }
+        .onChange(of: isFullscreen) { _, fullscreen in
+            // Pinch-to-fill is a full-screen choice; inline always letterboxes.
+            if !fullscreen { model.setVideoFillsScreen(false) }
+        }
         .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             // Once the phone is physically upright again the portrait lock
@@ -115,9 +131,8 @@ struct EmbeddedPlayerView: View {
         let shape = RoundedRectangle(cornerRadius: rounded ? Self.cardCornerRadius : 0, style: .continuous)
         return VStack(spacing: 0) {
             videoArea(fillsScreen: false)
-                // Portrait videos are capped at a square so the page beneath
-                // stays reachable; the surface letterboxes inside it.
-                .aspectRatio(max(model.detail?.aspectRatio ?? 16.0 / 9.0, 1), contentMode: .fit)
+                .aspectRatio(inlineAspectRatio, contentMode: .fit)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: inlineAspectRatio)
                 .frame(maxWidth: .infinity)
                 .clipShape(shape)
                 // Wins the height negotiation against the scroll view below,
@@ -172,6 +187,12 @@ struct EmbeddedPlayerView: View {
                     isFullscreen: isFullscreen,
                     onDismiss: closePlayer,
                     onToggleFullscreen: toggleFullscreen)
+                // SponsorBlock's Skip pill, above the transport bar's trailing
+                // end; it stays up whether or not the controls are showing.
+                SkipSponsorButton(model: model.sponsorModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, fillsScreen ? 20 : 12)
+                    .padding(.bottom, fillsScreen ? 64 : 52)
             }
 
             if app.statsForNerdsEnabled {

@@ -85,6 +85,10 @@ final class EmbeddedPlayerModel {
     private var teardownDeferredForPiP = false
     var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
+    /// SponsorBlock (see `EmbeddedPlayerModel+SponsorBlock`).
+    let sponsorModel = SponsorSkipModel()
+    @ObservationIgnored var sponsorSegments: [SponsorSegment] = []
+    @ObservationIgnored var sponsorTask: Task<Void, Never>?
 
     static let supportsAV1 = StreamPlaybackBuilder.deviceSupportsAV1
 
@@ -219,6 +223,7 @@ final class EmbeddedPlayerModel {
                     client: httpClient)
             }
             installProgressTracking()
+            loadSponsorSegments(client: client)
             recordHistory(detail)
         } catch is CancellationError {
             return
@@ -358,6 +363,7 @@ final class EmbeddedPlayerModel {
         }
         removeEndObserver()
         removeItemDiagnostics()
+        clearSponsorSegments()
         statusObservation?.invalidate()
         statusObservation = nil
         timeControlObservation?.invalidate()

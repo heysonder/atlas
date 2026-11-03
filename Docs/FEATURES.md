@@ -95,7 +95,8 @@ The embedded player draws its own controls over a bare `AVPlayerLayer`:
 - Double-tap the left or right half to skip 10 seconds; press and hold to play at 2× until release.
 - Centre play/pause with a buffering spinner, and ±10s buttons.
 - A scrubber with a buffered band and chapter markers; the chapter under the finger is named while dragging.
-- A full-screen button. On iPhone it rotates to landscape, and rotating the device also enters or leaves full screen. iPad fills the window without rotating.
+- A full-screen button. On iPhone it rotates to landscape, and rotating the device also enters or leaves full screen. iPad fills the window without rotating. In full screen, pinch out to crop the video to the screen and pinch in to letterbox it again; inline, the video box takes the decoded video's own shape.
+- SponsorBlock's Skip button, the same as the full-screen player: shown while inside an enabled segment, never skipped automatically.
 - Picture in Picture from a button over the video. PiP keeps playing after the player is closed, and Return to App reopens the same video without reloading.
 - Live streams open at the live edge, scrub across the DVR window, and show a LIVE badge that dims when behind the edge and jumps back to live when tapped.
 - Swipe down on the video, or tap the chevron, to leave. A playing video continues in Picture in Picture over the screen the player was opened from, and PiP's return button brings the embedded player back; a paused video simply closes.

@@ -32,7 +32,9 @@ struct EmbeddedPlayerControls: View {
         ZStack {
             tapLayer
             if visible {
-                controls
+                scrim
+                    .transition(.opacity)
+                chrome
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
             }
             if let skipFlash {
@@ -62,6 +64,21 @@ struct EmbeddedPlayerControls: View {
         }
         .contentShape(Rectangle())
         .gesture(holdToFastForward)
+        .simultaneousGesture(pinchToFill)
+    }
+
+    /// Full screen only: pinch out to crop the video to the screen, pinch in
+    /// to letterbox it again, the way AVKit's double-tap zoom works.
+    private var pinchToFill: some Gesture {
+        MagnifyGesture(minimumScaleDelta: 0.05)
+            .onEnded { value in
+                guard isFullscreen else { return }
+                if value.magnification > 1.1 {
+                    model.setVideoFillsScreen(true)
+                } else if value.magnification < 0.9 {
+                    model.setVideoFillsScreen(false)
+                }
+            }
     }
 
     /// Press and hold: 2× while the finger stays down, normal speed on
@@ -192,22 +209,29 @@ struct EmbeddedPlayerControls: View {
 
     // MARK: Controls
 
-    private var controls: some View {
+    /// A light, even dim with a touch more weight behind the bar; it reaches
+    /// the screen edges only in full screen. Faded on its own and never
+    /// scaled: the scale transition the chrome uses pulled this full-bleed
+    /// layer in from the clip edge and flickered a border while animating.
+    private var scrim: some View {
         ZStack {
-            // A light, even dim with a touch more weight behind the bar;
-            // the scrim reaches the screen edges only in full screen.
-            ZStack {
-                Color.black.opacity(0.22)
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0.55),
-                        .init(color: .black.opacity(0.28), location: 1),
-                    ],
-                    startPoint: .top, endPoint: .bottom)
-            }
-            .ignoresSafeArea(edges: isFullscreen ? .all : [])
-            .allowsHitTesting(false)
+            Color.black.opacity(0.22)
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.55),
+                    .init(color: .black.opacity(0.28), location: 1),
+                ],
+                startPoint: .top, endPoint: .bottom)
+        }
+        .ignoresSafeArea(edges: isFullscreen ? .all : [])
+        .allowsHitTesting(false)
+    }
 
+    /// The bars and the centre cluster. Nothing here claims the empty space
+    /// between buttons, so those taps reach `tapLayer` and toggle or skip
+    /// exactly as they do with the controls hidden.
+    private var chrome: some View {
+        ZStack {
             VStack {
                 topBar
                 Spacer()
@@ -219,8 +243,6 @@ struct EmbeddedPlayerControls: View {
             centerCluster
         }
         .foregroundStyle(.white)
-        .onTapGesture { toggleVisible() }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: visible)
     }
 
     private var topBar: some View {
