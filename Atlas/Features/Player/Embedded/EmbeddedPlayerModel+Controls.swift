@@ -140,6 +140,7 @@ extension EmbeddedPlayerModel {
     /// The inline layout always letterboxes.
     func setVideoFillsScreen(_ fills: Bool) {
         guard playbackState.videoFillsScreen != fills else { return }
+        cancelPinchZoom()
         playbackState.videoFillsScreen = fills
         layerView.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
     }
@@ -173,13 +174,24 @@ extension EmbeddedPlayerModel {
         }
     }
 
+    /// PiP that started by itself because the app was left belongs to the
+    /// player still on screen: once the app is active again it folds back
+    /// inline. PiP started from the button, or by closing the player, stays.
+    func endAutomaticPictureInPicture() {
+        guard pipStartedAutomatically, let pipController, pipController.isPictureInPictureActive
+        else { return }
+        pipController.stopPictureInPicture()
+    }
+
     func pipDidStart() {
+        pipStartedAutomatically = UIApplication.shared.applicationState != .active
         playbackState.isPiPActive = true
         Self.pipRetainer = self
         setPiPActive(true)
     }
 
     func pipDidStop() {
+        pipStartedAutomatically = false
         playbackState.isPiPActive = false
         setPiPActive(false)
         // Only drop the retainer if it's still us: another video may have
@@ -200,10 +212,15 @@ extension EmbeddedPlayerModel {
             completion(true)
             return
         }
-        cancelDeferredTeardown()
+        let coverWasDismissed = cancelDeferredTeardown()
         if app.nowPlaying == nil || app.playerStyle != .embedded {
             app.playerStyle = .embedded
             app.nowPlaying = request
+        } else if !coverWasDismissed {
+            // The player never left the screen (PiP folding back in on
+            // returning to the app): nothing to wait for.
+            completion(true)
+            return
         }
         Task {
             // Let the cover's presentation land before PiP collapses into it.

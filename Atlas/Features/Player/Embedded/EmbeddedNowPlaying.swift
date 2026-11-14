@@ -112,8 +112,7 @@ final class EmbeddedNowPlaying {
             guard !Task.isCancelled, let image, let self else { return }
             // MediaPlayer calls this provider on its own queue; it must not
             // be main-actor isolated.
-            nonisolated(unsafe) let provided = image
-            let artwork = MPMediaItemArtwork(boundsSize: image.size) { @Sendable _ in provided }
+            let artwork = MPMediaItemArtwork(boundsSize: image.size) { @Sendable _ in image }
             self.info[MPMediaItemPropertyArtwork] = artwork
             self.refresh()
         }

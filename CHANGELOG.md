@@ -48,6 +48,21 @@ Atlas has not published a tagged release yet.
   feed card and **Hide Related Videos** drops the related list
   (`atlas.player.embedded.roundedCorners`,
   `atlas.player.embedded.hidesRelated`).
+- **Embedded player gestures with momentum.** In full screen the video
+  follows a pinch between letterboxed and cropped-to-fill, eased once per
+  display frame, then springs to whichever end the pinch was heading for at
+  the fingers' speed (`EmbeddedPlayerModel+PinchZoom`; the `AVPlayerLayer`
+  now sits in its own subview so a transform can scale it). Swipe-down
+  decides on speed first: a hard flick dismisses however short it was, a
+  slow drag needs distance, and releasing while moving back up cancels.
+  The cover keeps travelling at the finger's speed as it dismisses.
+  `CADisableMinimumFrameDurationOnPhone` is set so Core Animation runs
+  above 60 Hz on ProMotion iPhones.
+- **Embedded loading skeleton.** While the stream resolves, the watch page
+  shows the title and channel the feed already knew over placeholder
+  shapes (`EmbeddedWatchPageSkeleton`) instead of sitting empty.
+- **Blur under the embedded video.** A short fading material strip softens
+  the watch page where it scrolls beneath the player.
 - **Compact Tab Bar.** On by default (`atlas.compactTabBar`): a slim
   clear-glass pill with Home, Library, and Search replaces the system tab
   bar, slides away while the keyboard is up, and Search moves its field
@@ -221,6 +236,20 @@ Atlas has not published a tagged release yet.
   opens at the medium detent and reveals comments as you drag it up.
 
 ### Fixed
+- **Embedded full screen reaches every edge.** The video was fitted to the
+  window's shape inside the safe area and then clipped to it, leaving a
+  black strip over the home indicator and bars that pinch-to-fill could
+  not remove. Full screen now takes the whole area and only the inline
+  layout clips (`EmbeddedVideoFrame`, `EmbeddedVideoClip`).
+- **Comments and live chat panes drag smoothly.** The drag was measured in
+  the moving pane's own space, rebuilt the list on every finger movement,
+  and re-rendered the shadow from the list while scrolling. The same
+  local-space measurement made swipe-to-dismiss on the video shudder and
+  pull back up; both are measured in global space now.
+- **Returning to the app ends automatic Picture in Picture.** PiP that
+  started because the app was left with the embedded player up folds back
+  into the player on return. PiP started from the button or by closing
+  the player stays.
 - **A new video in the open embedded player.** Starting another video
   while the embedded cover was up tore down the old model and never
   started the new one; the cover is now keyed by video ID so each video
