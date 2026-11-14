@@ -36,6 +36,9 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [audio, remote-notification]
+        # Lets Core Animation and display links run above 60 Hz on ProMotion
+        # iPhones (the player's pinch-to-fill settle); SwiftUI does so anyway.
+        CADisableMinimumFrameDurationOnPhone: true
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
           NSAllowsLocalNetworking: true

@@ -12,7 +12,10 @@ struct EmbeddedSlidePane<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dragOffset: CGFloat = 0
+    /// The live drag offset sits in an observable box read only by
+    /// `EmbeddedSlidePaneOffset`, so a drag moves the pane without re-running
+    /// this body and rebuilding the comment list on every finger movement.
+    @State private var drag = EmbeddedSlidePaneDrag()
     @State private var contentAtTop = true
     @State private var pullingContent = false
 
@@ -30,12 +33,24 @@ struct EmbeddedSlidePane<Content: View>: View {
                 .scrollDisabled(pullingContent)
                 .simultaneousGesture(contentPullDrag)
         }
-        .background(Color(.systemBackground))
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 14, y: -4)
-        .offset(y: dragOffset)
+        .clipShape(Self.shape)
+        // The shadow is cast by the background shape alone; on the clipped
+        // pane it was re-rendered from the whole list on every scroll frame.
+        .background {
+            Self.shape
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.18), radius: 14, y: -4)
+        }
+        .modifier(EmbeddedSlidePaneOffset(drag: drag))
         .ignoresSafeArea(edges: .bottom)
     }
+
+    private static var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20, style: .continuous)
+    }
+
+    private static var headerDragDistance: CGFloat { 4 }
+    private static var contentPullDistance: CGFloat { 12 }
 
     private var header: some View {
         VStack(spacing: 10) {
@@ -69,11 +84,15 @@ struct EmbeddedSlidePane<Content: View>: View {
         .contentShape(Rectangle())
     }
 
-    /// Dragging the header always moves the pane.
+    /// Dragging the header always moves the pane. Both drags are measured
+    /// in global space: the pane moves under the finger, so a local
+    /// translation shifts with it and the offset oscillates. They also start
+    /// from the recognition threshold, so the pane leaves from rest instead
+    /// of hopping by that distance.
     private var dismissDrag: some Gesture {
-        DragGesture(minimumDistance: 4)
+        DragGesture(minimumDistance: Self.headerDragDistance, coordinateSpace: .global)
             .onChanged { value in
-                dragOffset = max(value.translation.height, 0)
+                drag.offset = max(value.translation.height - Self.headerDragDistance, 0)
             }
             .onEnded { value in finishDrag(value) }
     }
@@ -82,14 +101,14 @@ struct EmbeddedSlidePane<Content: View>: View {
     /// view and moves the pane instead, so "swipe down to go back" works
     /// from anywhere in the list.
     private var contentPullDrag: some Gesture {
-        DragGesture(minimumDistance: 12)
+        DragGesture(minimumDistance: Self.contentPullDistance, coordinateSpace: .global)
             .onChanged { value in
                 let dy = value.translation.height
                 if !pullingContent {
                     guard contentAtTop, dy > 0, dy > abs(value.translation.width) else { return }
                     pullingContent = true
                 }
-                dragOffset = max(dy, 0)
+                drag.offset = max(dy - Self.contentPullDistance, 0)
             }
             .onEnded { value in
                 guard pullingContent else { return }
@@ -102,9 +121,24 @@ struct EmbeddedSlidePane<Content: View>: View {
         if value.translation.height > 120 || value.predictedEndTranslation.height > 300 {
             onClose()
         } else if reduceMotion {
-            dragOffset = 0
+            drag.offset = 0
         } else {
-            withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
+            withAnimation(.snappy(duration: 0.3)) { drag.offset = 0 }
         }
+    }
+}
+
+@Observable
+final class EmbeddedSlidePaneDrag {
+    var offset: CGFloat = 0
+}
+
+/// The only reader of the drag offset: just this modifier re-evaluates while
+/// the finger moves.
+private struct EmbeddedSlidePaneOffset: ViewModifier {
+    let drag: EmbeddedSlidePaneDrag
+
+    func body(content: Content) -> some View {
+        content.offset(y: drag.offset)
     }
 }

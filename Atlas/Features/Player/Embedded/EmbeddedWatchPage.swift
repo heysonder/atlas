@@ -25,6 +25,9 @@ struct EmbeddedWatchPage: View {
     @State private var showingLiveChat = false
     /// Related titles only start scrolling once the reader has scrolled.
     @State private var hasScrolled = false
+    /// The page is scrolled off its top edge, so content sits under the
+    /// player and the edge blur shows.
+    @State private var hasLeftTop = false
     @State private var isSubscribed = false
     @State private var feedback = 0
     @State private var fallbackCollaborators: [CreatorChannel] = []
@@ -181,6 +184,26 @@ struct EmbeddedWatchPage: View {
             if scrolled { hasScrolled = true }
         }
         .environment(\.marqueeTitlesEnabled, hasScrolled)
+        // A slight progressive blur under the player's bottom edge, so the
+        // page softens as it scrolls beneath the video instead of being cut
+        // off by it.
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask {
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                }
+                .frame(height: 20)
+                .opacity(hasLeftTop ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: hasLeftTop)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .onScrollGeometryChange(for: Bool.self) {
+            $0.contentOffset.y > 1
+        } action: { _, left in
+            hasLeftTop = left
+        }
     }
 
     @ViewBuilder private var relatedSection: some View {

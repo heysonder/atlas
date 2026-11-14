@@ -18,6 +18,7 @@ struct EmbeddedPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     init(request: PlayRequest, app: AppModel, modelContext: ModelContext) {
         // Returning from PiP: the model that kept playing in the PiP window
@@ -91,6 +92,11 @@ struct EmbeddedPlayerView: View {
             }
             model.start()
         }
+        .onChange(of: scenePhase) { _, phase in
+            // Leaving the app with this player up starts PiP automatically;
+            // coming back folds it into the player that is still on screen.
+            if phase == .active { model.endAutomaticPictureInPicture() }
+        }
         .onChange(of: verticalSizeClass) { old, new in
             // Rotating back to portrait leaves full screen, like the system
             // player; the button state would otherwise pin it there.
@@ -101,6 +107,8 @@ struct EmbeddedPlayerView: View {
             if fullscreen {
                 model.applyFullscreenFill()
             } else {
+                // A pinch still down when full screen ends never reports back.
+                model.cancelPinchZoom()
                 model.setVideoFillsScreen(false)
             }
         }
@@ -133,47 +141,48 @@ struct EmbeddedPlayerView: View {
     private var layout: some View {
         let rounded = !isFullscreen && app.embeddedRoundedCorners
         let shape = RoundedRectangle(cornerRadius: rounded ? Self.cardCornerRadius : 0, style: .continuous)
+        // The shadow's shape below; the video's clip is `EmbeddedVideoClip`.
         return ZStack {
             if isFullscreen {
                 Color.black.ignoresSafeArea()
             }
             VStack(spacing: 0) {
-                videoArea(fillsScreen: isFullscreen)
-                    // Full screen: the window's own shape, so the surface
-                    // fills it; inline: the video's.
-                    .aspectRatio(isFullscreen ? containerAspectRatio : inlineAspectRatio, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(shape)
-                    // Wins the height negotiation against the scroll view
-                    // below, so the video doesn't resize as the page's
-                    // content changes.
-                    .layoutPriority(1)
-                    .embeddedDismissDrag(enabled: !isFullscreen, model: model, onDismiss: closePlayer)
-                    // Same lift as the feed's thumbnail cards. The shadow sits
-                    // on a background shape: the video itself is a UIKit
-                    // layer, which SwiftUI's shadow can't trace.
-                    .background {
-                        // Page-coloured so nothing shows at the corners; only
-                        // the shadows it casts are visible: the card's crisp
-                        // one plus a wider, very faint blur beneath the video.
-                        shape
-                            .fill(Color(.systemBackground))
-                            .shadow(color: .black.opacity(rounded ? 0.16 : 0), radius: 5, x: 0, y: 2)
-                            .shadow(color: .black.opacity(rounded ? 0.07 : 0), radius: 18, x: 0, y: 8)
-                    }
-                    .padding(.horizontal, rounded ? Self.cardInset : 0)
-                    .padding(.top, rounded ? 8 : 0)
-                    .zIndex(1)
+                // Full screen: everything it is offered, so the surface
+                // reaches every edge; inline: the video's own shape. Fitting
+                // the window's aspect ratio inside the safe area instead left
+                // the video short of the bottom edge in landscape.
+                EmbeddedVideoFrame(aspectRatio: isFullscreen ? nil : inlineAspectRatio) {
+                    videoArea(fillsScreen: isFullscreen)
+                }
+                // Inline only: clipping in full screen would cut the surface
+                // back to the safe area it deliberately extends past, leaving
+                // a black strip over the home indicator.
+                .clipShape(EmbeddedVideoClip(cornerRadius: rounded ? Self.cardCornerRadius : 0, clips: !isFullscreen))
+                // Wins the height negotiation against the scroll view
+                // below, so the video doesn't resize as the page's
+                // content changes.
+                .layoutPriority(1)
+                .embeddedDismissDrag(enabled: !isFullscreen, model: model, onDismiss: closePlayer)
+                // Same lift as the feed's thumbnail cards. The shadow sits
+                // on a background shape: the video itself is a UIKit
+                // layer, which SwiftUI's shadow can't trace.
+                .background {
+                    // Page-coloured so nothing shows at the corners; only
+                    // the shadows it casts are visible: the card's crisp
+                    // one plus a wider, very faint blur beneath the video.
+                    shape
+                        .fill(Color(.systemBackground))
+                        .shadow(color: .black.opacity(rounded ? 0.16 : 0), radius: 5, x: 0, y: 2)
+                        .shadow(color: .black.opacity(rounded ? 0.07 : 0), radius: 18, x: 0, y: 8)
+                }
+                .padding(.horizontal, rounded ? Self.cardInset : 0)
+                .padding(.top, rounded ? 8 : 0)
+                .zIndex(1)
                 if !isFullscreen {
                     infoArea
                 }
             }
         }
-    }
-
-    private var containerAspectRatio: Double {
-        guard containerSize.width > 0, containerSize.height > 0 else { return 16.0 / 9.0 }
-        return containerSize.width / containerSize.height
     }
 
     // MARK: Video
@@ -271,13 +280,8 @@ struct EmbeddedPlayerView: View {
     // MARK: Info
 
     @ViewBuilder private var infoArea: some View {
-        if let detail = model.detail {
-            if let client = model.client {
-                EmbeddedWatchPage(model: model, detail: detail, client: client)
-            } else {
-                MissingInstanceView()
-                    .padding()
-            }
+        if let detail = model.detail, let client = model.client {
+            EmbeddedWatchPage(model: model, detail: detail, client: client)
         } else if let message = model.errorMessage {
             Spacer()
             ErrorState(message: message) { model.retry() }
@@ -286,7 +290,7 @@ struct EmbeddedPlayerView: View {
             ScrollView { offlineInfo.padding() }
         } else {
             // Stream still resolving — the spinner sits over the video above.
-            Spacer()
+            EmbeddedWatchPageSkeleton(title: model.request.title, uploader: model.request.uploader)
         }
     }
 
@@ -307,5 +311,38 @@ struct EmbeddedPlayerView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Sizes the video: the full width at a fixed aspect ratio inline, or the
+/// whole proposal in full screen. One layout for both, so the player view
+/// keeps its identity and its frame animates between the two.
+private struct EmbeddedVideoFrame: Layout {
+    /// `nil` fills whatever is offered.
+    var aspectRatio: Double?
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let offered = proposal.replacingUnspecifiedDimensions()
+        guard let aspectRatio, aspectRatio > 0 else { return offered }
+        let height = min(offered.width / aspectRatio, offered.height)
+        return CGSize(width: offered.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+        }
+    }
+}
+
+/// The inline video's rounded clip. In full screen it stops clipping (its
+/// path reaches far past the frame) without changing the view's identity.
+nonisolated private struct EmbeddedVideoClip: Shape {
+    var cornerRadius: CGFloat
+    var clips: Bool
+
+    func path(in rect: CGRect) -> Path {
+        guard clips else { return Path(rect.insetBy(dx: -2000, dy: -2000)) }
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).path(in: rect)
     }
 }

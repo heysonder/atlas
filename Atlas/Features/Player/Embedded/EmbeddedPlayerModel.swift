@@ -83,11 +83,21 @@ final class EmbeddedPlayerModel {
     /// `viewDisappeared()` defers teardown until PiP ends.
     private var pipActive = false
     private var teardownDeferredForPiP = false
+    /// PiP began while the app was not active (the system's automatic start
+    /// on leaving the app), rather than from the button or closing the player.
+    @ObservationIgnored var pipStartedAutomatically = false
     var lastProgressSaveSeconds: Double?
     let debugModel = PlayerDebugModel()
     /// A pinch in full screen fixes fill vs. letterbox for the rest of the
     /// video; `nil` leaves it to `applyFullscreenFill`.
     @ObservationIgnored var fullscreenFillChoice: Bool?
+    /// A pinch in progress (see `EmbeddedPlayerModel+PinchZoom`): the scale
+    /// the video had when the fingers landed, and a counter that lets a new
+    /// pinch cancel the previous one's settle.
+    @ObservationIgnored var pinchBaseScale: CGFloat?
+    @ObservationIgnored var pinchGeneration = 0
+    @ObservationIgnored var pinchFirstMagnification: CGFloat?
+    @ObservationIgnored var pinchSmoother: EmbeddedPinchSmoother?
     /// Subtitle tracks (see `EmbeddedPlayerModel+Captions`).
     @ObservationIgnored var captionItemObservation: NSKeyValueObservation?
     @ObservationIgnored var captionLoadTask: Task<Void, Never>?
@@ -120,12 +130,6 @@ final class EmbeddedPlayerModel {
 
     func retry() {
         teardown()
-        detail = nil
-        plainDescription = ""
-        detailLoadedAt = nil
-        errorMessage = nil
-        isReady = false
-        started = false
         start()
     }
 
@@ -322,8 +326,11 @@ final class EmbeddedPlayerModel {
 
     /// The cover is coming back (PiP's "return to app"): the teardown that
     /// was queued when it was dismissed must not fire when PiP now stops.
-    func cancelDeferredTeardown() {
-        teardownDeferredForPiP = false
+    /// Returns whether one was queued, i.e. the cover had gone away.
+    @discardableResult
+    func cancelDeferredTeardown() -> Bool {
+        defer { teardownDeferredForPiP = false }
+        return teardownDeferredForPiP
     }
 
     func setPiPActive(_ active: Bool) {
@@ -354,7 +361,14 @@ final class EmbeddedPlayerModel {
         return true
     }
 
+    /// Stops playback and returns the model to its never-started state, so a
+    /// view that shows it again simply calls `start()` and reloads. The cover
+    /// is dismissed and re-presented when a related or queued video takes
+    /// over, and SwiftUI can hand the re-presented cover the same model whose
+    /// view just disappeared; leaving `detail` behind with `client` cleared
+    /// made the page render as "no Piped instance" over a player with no item.
     func teardown() {
+        started = false
         loadTask?.cancel()
         loadTask = nil
         fallbackCheckTask?.cancel()
@@ -380,6 +394,11 @@ final class EmbeddedPlayerModel {
         currentPlaybackSeconds = nil
         client = nil
         httpClient = nil
+        detail = nil
+        plainDescription = ""
+        detailLoadedAt = nil
+        errorMessage = nil
+        isReady = false
         lastProgressSaveSeconds = nil
         player.pause()
         player.replaceCurrentItem(with: nil)

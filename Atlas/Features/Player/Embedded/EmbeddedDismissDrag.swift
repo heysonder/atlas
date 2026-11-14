@@ -33,16 +33,27 @@ struct EmbeddedDismissDragGesture: ViewModifier {
     @State private var tracking = false
     @State private var rejected = false
 
-    private static let minimumDistance: CGFloat = 20
-    private static let dismissDistance: CGFloat = 140
-    private static let dismissProjection: CGFloat = 320
+    private static let minimumDistance: CGFloat = 12
+    /// A release this fast downward dismisses however short the swipe was.
+    private static let flickSpeed: CGFloat = 600
+    /// A slow drag has to come this far…
+    private static let dismissDistance: CGFloat = 110
+    /// …or be heading this far when let go.
+    private static let dismissProjection: CGFloat = 260
+    /// Moving back up faster than this on release means "never mind".
+    private static let cancelSpeed: CGFloat = -150
+    /// How far past the release point a dismissed cover keeps sliding.
+    private static let dismissTravel: CGFloat = 900
 
     func body(content: Content) -> some View {
         content.simultaneousGesture(drag)
     }
 
     private var drag: some Gesture {
-        DragGesture(minimumDistance: Self.minimumDistance)
+        // Global space: the video this gesture sits on moves with the offset
+        // it drives, so a local translation shrinks as the view follows the
+        // finger and the cover shudders and pulls back up.
+        DragGesture(minimumDistance: Self.minimumDistance, coordinateSpace: .global)
             .onChanged { value in
                 guard !rejected else { return }
                 if !tracking {
@@ -65,16 +76,44 @@ struct EmbeddedDismissDragGesture: ViewModifier {
                     rejected = false
                 }
                 guard tracking else { return }
-                if value.translation.height > Self.dismissDistance
-                    || value.predictedEndTranslation.height > Self.dismissProjection
-                {
+                let current = offset.wrappedValue
+                let speed = value.velocity.height
+                if shouldDismiss(value) {
+                    // Keep travelling at the finger's speed while the cover
+                    // dismisses, instead of stalling where it was released.
+                    if !reduceMotion {
+                        settle(to: current + Self.dismissTravel, from: current, speed: max(speed, 0))
+                    }
                     onDismiss()
                 } else if reduceMotion {
                     offset.wrappedValue = 0
                 } else {
-                    withAnimation(.spring(duration: 0.3)) { offset.wrappedValue = 0 }
+                    settle(to: 0, from: current, speed: speed)
                 }
             }
+    }
+
+    /// The system's own rule for interactive dismissals: speed decides first,
+    /// distance second. A hard flick dismisses even after a short travel, a
+    /// slow drag needs real distance, and letting go while moving back up
+    /// always cancels.
+    private func shouldDismiss(_ value: DragGesture.Value) -> Bool {
+        let speed = value.velocity.height
+        if speed < Self.cancelSpeed { return false }
+        if speed > Self.flickSpeed { return true }
+        return value.translation.height > Self.dismissDistance
+            || value.predictedEndTranslation.height > Self.dismissProjection
+    }
+
+    /// Springs the offset to `target`, starting at the speed the finger
+    /// left with. A spring's initial velocity is a fraction of the distance
+    /// to cover per second.
+    private func settle(to target: CGFloat, from current: CGFloat, speed: CGFloat) {
+        let distance = target - current
+        let relative = abs(distance) > 1 ? speed / distance : 0
+        let spring = Animation.interpolatingSpring(
+            duration: 0.35, bounce: 0, initialVelocity: min(max(relative, -30), 30))
+        withAnimation(spring) { offset.wrappedValue = target }
     }
 }
 

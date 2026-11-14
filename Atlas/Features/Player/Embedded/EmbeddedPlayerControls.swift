@@ -67,17 +67,18 @@ struct EmbeddedPlayerControls: View {
         .simultaneousGesture(pinchToFill)
     }
 
-    /// Full screen only: pinch out to crop the video to the screen, pinch in
-    /// to letterbox it again, the way AVKit's double-tap zoom works.
+    /// Full screen only: the video follows the pinch between letterboxed and
+    /// cropped-to-fill, then settles on one of them carrying the fingers'
+    /// speed (see `EmbeddedPlayerModel+PinchZoom`).
     private var pinchToFill: some Gesture {
-        MagnifyGesture(minimumScaleDelta: 0.05)
+        MagnifyGesture(minimumScaleDelta: 0.02)
+            .onChanged { value in
+                guard isFullscreen else { return }
+                model.pinchZoomChanged(magnification: value.magnification)
+            }
             .onEnded { value in
                 guard isFullscreen else { return }
-                if value.magnification > 1.1 {
-                    model.chooseVideoFill(true)
-                } else if value.magnification < 0.9 {
-                    model.chooseVideoFill(false)
-                }
+                model.pinchZoomEnded(magnification: value.magnification, velocity: value.velocity)
             }
     }
 
