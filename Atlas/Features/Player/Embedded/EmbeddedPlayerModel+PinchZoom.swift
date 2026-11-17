@@ -192,6 +192,11 @@ final class EmbeddedPinchSmoother: NSObject {
     }
 
     @objc private func step(_ link: CADisplayLink) {
+        // Nothing left to drive: don't keep the run loop calling back.
+        guard view != nil else {
+            stop()
+            return
+        }
         let elapsed = link.targetTimestamp - link.timestamp
         displayed += (target - displayed) * (1 - exp(-elapsed / Self.smoothing))
         CATransaction.begin()
