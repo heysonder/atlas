@@ -184,20 +184,24 @@ struct EmbeddedWatchPage: View {
             if scrolled { hasScrolled = true }
         }
         .environment(\.marqueeTitlesEnabled, hasScrolled)
-        // A slight progressive blur under the player's bottom edge, so the
+        // A short progressive blur under the player's bottom edge, so the
         // page softens as it scrolls beneath the video instead of being cut
         // off by it.
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask {
-                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                }
-                .frame(height: 20)
-                .opacity(hasLeftTop ? 1 : 0)
-                .animation(.easeOut(duration: 0.2), value: hasLeftTop)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if app.embeddedEdgeBlur {
+                EmbeddedPlayerEdgeBlur(isVisible: hasLeftTop)
+                    // The video's own bottom-edge colors, bleeding faintly
+                    // into the blurred band so the two blend.
+                    .overlay(alignment: .top) {
+                        EmbeddedVideoEdgeBlur(
+                            layerView: model.layerView,
+                            isVisible: hasLeftTop,
+                            isPiPActive: model.playbackState.isPiPActive
+                        )
+                        .padding(.horizontal, app.embeddedRoundedCorners ? 16 : 0)
+                        .opacity(0.6)
+                    }
+            }
         }
         .onScrollGeometryChange(for: Bool.self) {
             $0.contentOffset.y > 1
