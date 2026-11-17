@@ -83,6 +83,12 @@ final class AppModel {
     }
     static let embeddedHidesRelatedKey = "atlas.player.embedded.hidesRelated"
 
+    /// Embedded player: softly blur the page where it scrolls under the video.
+    var embeddedEdgeBlur: Bool {
+        didSet { UserDefaults.standard.set(embeddedEdgeBlur, forKey: Self.embeddedEdgeBlurKey) }
+    }
+    static let embeddedEdgeBlurKey = "atlas.player.embedded.edgeBlur"
+
     /// When on, YouTube Shorts are hidden from the feed, search, and channels.
     var hideShorts: Bool {
         didSet {
@@ -210,6 +216,9 @@ final class AppModel {
             ? true : defaults.bool(forKey: Self.scrollingTitlesKey)
         embeddedRoundedCorners = defaults.bool(forKey: Self.embeddedRoundedCornersKey)
         embeddedHidesRelated = defaults.bool(forKey: Self.embeddedHidesRelatedKey)
+        embeddedEdgeBlur =
+            defaults.object(forKey: Self.embeddedEdgeBlurKey) == nil
+            ? true : defaults.bool(forKey: Self.embeddedEdgeBlurKey)
         // SponsorBlock defaults to on; absent key means a fresh install.
         sponsorBlockEnabled =
             defaults.object(forKey: Self.sponsorBlockKey) == nil

@@ -153,6 +153,7 @@ struct SettingsView: View {
                     if app.playerStyle == .embedded {
                         Toggle("Rounded Corners", isOn: $app.embeddedRoundedCorners)
                         Toggle("Hide Related Videos", isOn: $app.embeddedHidesRelated)
+                        Toggle("Blur Under Player", isOn: $app.embeddedEdgeBlur)
                     }
                     Toggle("Stats for Nerds", isOn: $app.statsForNerdsEnabled)
                 } header: {
