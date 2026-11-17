@@ -375,6 +375,11 @@ final class EmbeddedPlayerModel {
         fallbackCheckTask = nil
         upgradeTask?.cancel()
         upgradeTask = nil
+        // A pinch still down when the cover is replaced never reports its
+        // end, which would leave the smoother's display link running.
+        cancelPinchZoom()
+        layerView.playerLayer.videoGravity =
+            playbackState.videoFillsScreen ? .resizeAspectFill : .resizeAspect
         let t = player.currentTime().seconds
         if t.isFinite { savePosition(t, flush: true) }
         if let timeObserver {
